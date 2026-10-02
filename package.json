@@ -1,0 +1,9 @@
+{
+  "name": "tagmails",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lab": "node apps/mock-inbox/server.mjs",
+    "test": "node --test"
+  }
+}

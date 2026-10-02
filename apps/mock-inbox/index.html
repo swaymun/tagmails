@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
+  <title>Inbox - Gmail (TagMails lab)</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <svg class="svg-defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7M8 12h13"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 1-2.3-5.7M20 4v5h-5"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="12" cy="19" r="1.3"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M9.8 2.7h4.4l.7 2.3 2 .9 2.1-1.1 3.1 3.1-1.1 2.1.9 2 .3.1v4.4l-2.3.7-.9 2 1.1 2.1-3.1 3.1-2.1-1.1-2 .9-.7 2.3H9.8l-.7-2.3-2-.9-2.1 1.1-3.1-3.1L3 17.2l-.9-2-.3-.1v-4.4l2.3-.7.9-2L3.9 5.9 7 2.8 9.1 3.9l.7-.3Z" transform="translate(0 -1) scale(.92)"/><circle cx="12" cy="12" r="3.1"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><circle cx="5" cy="5" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="19" cy="5" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="19" r="1"/><circle cx="12" cy="19" r="1"/><circle cx="19" cy="19" r="1"/></symbol>
+    <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 4h16v12l-2 4H6l-2-4V4Z"/><path d="M4 14h5l1.5 2h3L15 14h5"/></symbol>
+    <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 2 3.1 6.3 7 .9-5.1 5 .9 7-5.9-3.3-5.9 3.3.9-7-5.1-5 7-.9L12 2Z"/></symbol>
+    <symbol id="i-snooze" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 6v6l4 2"/></symbol>
+    <symbol id="i-sent" viewBox="0 0 24 24"><path d="m2 11 20-9-7 20-3.5-8L2 11Z"/><path d="M11.5 14 22 2"/></symbol>
+    <symbol id="i-draft" viewBox="0 0 24 24"><path d="M3 6h18v14H3zM3 6l9 7 9-7"/></symbol>
+    <symbol id="i-label" viewBox="0 0 24 24"><path d="M2 5h13l7 7-7 7H2V5Z"/><circle cx="6.5" cy="12" r="1"/></symbol>
+    <symbol id="i-mail" viewBox="0 0 24 24"><path d="M3 5h18v14H3zM3 6l9 7 9-7"/></symbol>
+    <symbol id="i-archive" viewBox="0 0 24 24"><path d="M3 4h18v4H3zM5 8v12h14V8M12 10v7m-3-3 3 3 3-3"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 6h16M9 6V3h6v3m-9 0 1 15h10l1-15M10 10v7m4-7v7"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M5 5 19 19M19 5 5 19"/></symbol>
+    <symbol id="i-reply" viewBox="0 0 24 24"><path d="m9 5-7 7 7 7M2 12h12c5 0 8 2 8 7"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 3v18M3 12h18"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 10v7M12 6.5v.5"/></symbol>
+    <symbol id="i-forum" viewBox="0 0 24 24"><path d="M3 4h15v11H8l-5 4V4ZM9 17h10l2 3V8h-2"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m4 12 5 5L20 6"/></symbol>
+  </svg>
+
+  <header class="topbar">
+    <button class="icon-button menu-button" id="menuButton" aria-label="Toggle navigation"><svg><use href="#i-menu"/></svg></button>
+    <div class="brand" aria-label="Gmail, internal test inbox">
+      <svg class="gmail-mark" viewBox="0 0 36 28" aria-hidden="true"><path fill="#4285f4" d="M2 25V5l5 3v17z"/><path fill="#34a853" d="M29 25V8l5-3v20z"/><path fill="#ea4335" d="M2 5 7 2l11 9L29 2l5 3-16 13z"/><path fill="#fbbc04" d="M29 2 34 5l-5 3z"/></svg>
+      <span>Gmail</span>
+    </div>
+    <label class="search-box"><svg><use href="#i-search"/></svg><input id="search" type="search" placeholder="Search mail" aria-label="Search mail"><svg class="search-caret"><use href="#i-chevron"/></svg></label>
+    <span class="top-spacer"></span>
+    <button class="icon-button top-utility" id="settingsButton" aria-label="Open lab controls" title="Lab controls"><svg><use href="#i-settings"/></svg></button>
+    <button class="icon-button top-utility" aria-label="Google apps (visual only)" title="Visual only"><svg><use href="#i-grid"/></svg></button>
+    <button class="avatar" aria-label="Synthetic account: owner@gmail.com" title="Synthetic account">O</button>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar" aria-label="Mail folders">
+      <button class="compose-trigger" id="composeButton" aria-label="Compose"><svg><use href="#i-plus"/></svg><span>Compose</span></button>
+      <nav class="folder-nav">
+        <button class="folder active" data-folder="Inbox" aria-label="Inbox"><svg><use href="#i-inbox"/></svg><span>Inbox</span><span class="folder-count" id="inboxCount"></span></button>
+        <button class="folder" data-folder="Starred" aria-label="Starred"><svg><use href="#i-star"/></svg><span>Starred</span></button>
+        <button class="folder" data-folder="Snoozed" aria-label="Snoozed"><svg><use href="#i-snooze"/></svg><span>Snoozed</span></button>
+        <button class="folder" data-folder="Sent" aria-label="Sent"><svg><use href="#i-sent"/></svg><span>Sent</span></button>
+        <button class="folder" data-folder="Drafts" aria-label="Drafts"><svg><use href="#i-draft"/></svg><span>Drafts</span></button>
+        <button class="folder" data-folder="Categories" aria-label="Categories"><svg><use href="#i-label"/></svg><span>Categories</span></button>
+        <button class="folder" data-folder="More" aria-label="More"><svg><use href="#i-chevron"/></svg><span>More</span></button>
+      </nav>
+      <div class="sidebar-label">Labels <button class="icon-button small-icon" aria-label="Add label (visual only)" title="Visual only"><svg><use href="#i-plus"/></svg></button></div>
+      <button class="lab-launch" id="labButton"><span class="lab-dot"></span>Internal test controls</button>
+    </aside>
+
+    <main class="mail-main">
+      <div class="mail-toolbar">
+        <div class="inbox-tools" id="inboxTools">
+          <label class="select-all" title="Select all (visual only)"><input type="checkbox" aria-label="Select all mail"><span></span></label>
+          <button class="icon-button" id="refreshButton" aria-label="Refresh inbox"><svg><use href="#i-refresh"/></svg></button>
+          <button class="icon-button" aria-label="More actions (visual only)" title="Visual only"><svg><use href="#i-more"/></svg></button>
+        </div>
+        <div class="thread-tools" id="threadTools" hidden>
+          <button class="icon-button" id="backButton" aria-label="Back to inbox"><svg><use href="#i-back"/></svg></button>
+          <button class="icon-button" aria-label="Archive (visual only)" title="Visual only"><svg><use href="#i-archive"/></svg></button>
+          <button class="icon-button" aria-label="Delete (visual only)" title="Visual only"><svg><use href="#i-trash"/></svg></button>
+        </div>
+        <span class="toolbar-spacer"></span>
+        <span class="mail-range" id="mailRange"></span>
+        <button class="icon-button nav-arrow" aria-label="Previous page (visual only)" title="Visual only"><svg class="flip"><use href="#i-chevron"/></svg></button>
+        <button class="icon-button nav-arrow" aria-label="Next page (visual only)" title="Visual only"><svg><use href="#i-chevron"/></svg></button>
+      </div>
+
+      <section class="inbox-view" id="inboxView" aria-label="Inbox">
+        <div class="category-tabs" role="tablist" aria-label="Inbox categories">
+          <button class="category active" role="tab" aria-controls="threadList" aria-selected="true" data-category="Primary"><svg class="cat-primary"><use href="#i-inbox"/></svg><span>Primary</span></button>
+          <button class="category" role="tab" aria-controls="threadList" aria-selected="false" data-category="Promotions"><svg class="cat-promo"><use href="#i-label"/></svg><span>Promotions</span></button>
+          <button class="category" role="tab" aria-controls="threadList" aria-selected="false" data-category="Updates"><svg class="cat-updates"><use href="#i-info"/></svg><span>Updates</span></button>
+          <button class="category" role="tab" aria-controls="threadList" aria-selected="false" data-category="Forums"><svg class="cat-forums"><use href="#i-forum"/></svg><span>Forums</span></button>
+        </div>
+        <div class="message-list" id="threadList" role="tabpanel" aria-label="Inbox messages"></div>
+        <div class="empty-state" id="emptyState" hidden><strong>No conversations here</strong><p>Try a different folder or compose a synthetic task.</p></div>
+      </section>
+
+      <section class="thread-view" id="threadView" aria-label="Email conversation" hidden></section>
+    </main>
+
+    <aside class="google-strip" aria-label="Side panel visual reference">
+      <span class="strip-icon calendar" title="Calendar visual only"></span>
+      <span class="strip-icon keep" title="Keep visual only"></span>
+      <span class="strip-icon tasks" title="Tasks visual only"><svg><use href="#i-check"/></svg></span>
+      <span class="strip-divider"></span>
+      <button class="icon-button" id="stripLabButton" aria-label="Open internal test controls" title="Internal test controls"><svg><use href="#i-plus"/></svg></button>
+    </aside>
+  </div>
+
+  <section class="compose-window" id="composeWindow" role="dialog" aria-modal="false" aria-label="Compose synthetic email" hidden>
+    <div class="compose-head"><span id="composeTitle">New Message</span><button class="icon-button close-light" id="closeCompose" aria-label="Close compose"><svg><use href="#i-close"/></svg></button></div>
+    <form id="composeForm">
+      <label class="compose-line"><span>From</span><input id="fromField" name="from" type="email" value="owner@gmail.com" required></label>
+      <label class="compose-line"><span>To</span><input id="toField" name="to" type="email" value="agent@wonder.test" readonly></label>
+      <label class="compose-line"><span>Cc</span><input id="ccField" name="cc" type="text" placeholder="Optional guest address"></label>
+      <label class="compose-line subject-line"><span class="sr-only">Subject</span><input id="subjectField" name="subject" type="text" placeholder="Subject" required></label>
+      <label class="compose-body"><span class="sr-only">Message</span><textarea id="bodyField" name="body" placeholder="Write a task for your agent…" required></textarea></label>
+      <div class="compose-footer"><button class="send-button" type="submit">Send <svg><use href="#i-chevron"/></svg></button><span>Synthetic mail · local only</span></div>
+    </form>
+  </section>
+
+  <aside class="lab-drawer" id="labDrawer" role="dialog" aria-modal="false" aria-label="Internal test controls" hidden>
+    <div class="lab-heading"><div><strong>Internal test controls</strong><span>Only on this computer · no real email</span></div><button class="icon-button" id="closeLab" aria-label="Close lab controls"><svg><use href="#i-close"/></svg></button></div>
+    <div class="lab-content">
+      <div class="lab-status"><span class="lab-indicator" id="daemonIndicator"></span><div><strong id="daemonStatus">Mock daemon offline</strong><small id="jobStatus">0 queued</small></div></div>
+      <div class="lab-actions"><button id="toggleDaemon" class="lab-primary">Connect mock daemon</button><button id="processNext" class="lab-secondary">Process next email</button></div>
+      <a class="landing-link" href="/landing/">View TagMails landing page prototype ↗</a>
+      <h2>Load an example</h2><p>These drafts model the kind of work you can delegate from a conversation.</p>
+      <div class="scenario-list">
+        <button data-scenario="catchup"><strong>Catch me up</strong><span>Decisions and open questions</span></button>
+        <button data-scenario="incident"><strong>Investigate a bug</strong><span>Turn a report into a draft fix</span></button>
+        <button data-scenario="metrics"><strong>Pull the numbers</strong><span>Show a synthetic weekly snapshot</span></button>
+        <button data-scenario="callprep"><strong>Prepare for a call</strong><span>Briefing from shared context</span></button>
+        <button data-scenario="approval"><strong>Need a decision</strong><span>Pause before a sensitive action</span></button>
+        <button data-scenario="failure"><strong>Show a failure</strong><span>Inspect a stopped run</span></button>
+        <button data-scenario="cc"><strong>Invite a teammate</strong><span>CC does not grant access yet</span></button>
+      </div>
+      <div id="guestControls"></div>
+      <div id="approvalControls"></div>
+      <h2>Recent events</h2><ol class="event-list" id="eventList"></ol>
+      <button class="reset-button" id="resetButton">Reset synthetic inbox</button>
+    </div>
+  </aside>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

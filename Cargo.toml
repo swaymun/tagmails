@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/tagmails-daemon"]
+resolver = "2"
