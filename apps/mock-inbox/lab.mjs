@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { escapeHtml, makeMime, readGeneratedMime, renderResult } from './mail.mjs';
+import { parseInbound } from './inbound.mjs';
 
 const OWNER = 'owner@gmail.com';
 const AGENT = 'agent@wonder.test';
@@ -10,6 +11,9 @@ function now() { return new Date().toISOString(); }
 function cleanAddress(value) { return String(value ?? '').trim().toLowerCase(); }
 function validAddress(value) { return /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(value); }
 function short(value, max) { return String(value ?? '').trim().slice(0, max); }
+function recipientList(value) {
+  return [...new Set((Array.isArray(value) ? value : String(value ?? '').split(',')).map(cleanAddress).filter(Boolean))];
+}
 
 function chooseModel(body) {
   const requested = body.match(/^Model:\s*(.+)$/im)?.[1]?.trim().toLowerCase();
@@ -88,7 +92,10 @@ export class Lab {
   snapshot() {
     const threads = this.state.threads.map((thread) => ({
       ...thread,
-      messages: thread.messages.map(({ mime, ...message }) => message),
+      messages: thread.messages.map(({ mime, attachments, ...message }) => ({
+        ...message,
+        attachments: (attachments ?? []).map(({ data, ...attachment }) => attachment),
+      })),
     })).sort((a, b) => {
       const order = (message) => Number(String(message.order ?? '0').replace(/^order-/, '')) || 0;
       return order(b.messages.at(-1)) - order(a.messages.at(-1)) || b.messages.at(-1).at.localeCompare(a.messages.at(-1).at);
@@ -105,24 +112,55 @@ export class Lab {
     return null;
   }
 
+  attachment(messageId, attachmentId) {
+    const item = this.findMessage(messageId)?.message.attachments?.find((attachment) => attachment.id === attachmentId);
+    return item ? { ...item, bytes: Buffer.from(item.data, 'base64') } : null;
+  }
+
+  async importMime(raw) {
+    const parsed = await parseInbound(raw, AGENT);
+    if (parsed.reaction) return this.react({ from: parsed.from, messageId: parsed.messageId, targetId: parsed.reactionTargetId, emoji: parsed.reaction });
+    const parent = parsed.parentIds.findLast((id) => this.findMessage(id));
+    const result = this.send({
+      from: parsed.from,
+      to: parsed.to,
+      cc: parsed.cc,
+      bcc: parsed.bcc,
+      subject: parsed.subject,
+      body: parsed.body,
+      messageId: parsed.messageId,
+      replyTo: parent,
+    });
+    if (result.accepted && !result.duplicate) {
+      const message = this.findMessage(parsed.messageId).message;
+      message.attachments = parsed.attachments.map((attachment) => ({ id: this.next('attachment'), ...attachment }));
+      this.event('attachment', `Imported ${message.attachments.length} attachment(s) from the .eml file.`, result.threadId, result.jobId);
+      this.save();
+    }
+    return result;
+  }
+
   send(input) {
     const from = cleanAddress(input.from);
     if (!validAddress(from)) throw new Error('Enter a valid sender address');
     const subject = short(input.subject || '(no subject)', 180);
     const body = short(input.body, 12000);
     if (!body) throw new Error('Write a task before sending');
-    const cc = [...new Set((Array.isArray(input.cc) ? input.cc : String(input.cc ?? '').split(',')).map(cleanAddress).filter(Boolean))];
-    if (cc.some((address) => !validAddress(address))) throw new Error('A CC address is invalid');
+    const to = recipientList(input.to ?? AGENT);
+    const cc = recipientList(input.cc);
+    const bcc = recipientList(input.bcc);
+    if ([...to, ...cc, ...bcc].some((address) => !validAddress(address))) throw new Error('A recipient address is invalid');
+    if (![...to, ...cc, ...bcc].includes(AGENT)) throw new Error(`Include ${AGENT} as a recipient`);
     const parentId = input.replyTo ? String(input.replyTo) : null;
     const parent = parentId ? this.findMessage(parentId) : null;
     if (parentId && !parent) throw new Error('The reply target is not in this lab');
     const thread = parent?.thread;
     if (from !== OWNER) {
       const invite = thread?.guests[from];
-      if (!invite || !invite.verified || !invite.approved) {
+      if (!invite || !(invite.authorized ?? (invite.verified && invite.approved))) {
         this.event('rejected', `${from} cannot instruct the agent on this thread yet.`, thread?.id);
         this.save();
-        return { accepted: false, reason: 'Sender does not have verified, owner-approved access to this thread.' };
+        return { accepted: false, reason: 'The owner has not included this sender on this thread, or has revoked access.' };
       }
     }
     const id = input.messageId ? String(input.messageId) : `<${this.next('mail')}@wonder.test>`;
@@ -132,15 +170,15 @@ export class Lab {
     const target = thread ?? { id: this.next('thread'), subject, guests: {}, messages: [] };
     if (!thread) this.state.threads.push(target);
     if (from === OWNER) {
-      for (const address of cc) {
-        if (address !== OWNER && address !== AGENT && !target.guests[address]) {
-          target.guests[address] = { verified: false, approved: false };
-          this.event('invite', `CC invitation pending for ${address}.`, target.id);
-        }
+      for (const address of [...to, ...cc, ...bcc]) {
+        if (address === OWNER || address === AGENT) continue;
+        const hidden = bcc.includes(address) && !to.includes(address) && !cc.includes(address);
+        target.guests[address] = { authorized: true, hidden };
+        this.event('invite', `Owner included ${address} on this thread${hidden ? ' as a Bcc recipient' : ''}.`, target.id);
       }
     }
     const references = [...(parent?.message.references ?? []), ...(parent ? [parent.message.id] : [])];
-    target.messages.push({ id, direction: 'inbound', from, to: AGENT, cc, subject, text: body, at: now(), order: ++this.state.counter, references, replyTo: parentId });
+    target.messages.push({ id, direction: 'inbound', from, to: to.join(', '), cc, bcc, subject, text: body, at: now(), order: ++this.state.counter, references, replyTo: parentId });
     const model = chooseModel(body);
     const fixture = ['catchup', 'incident', 'metrics', 'callprep'].includes(input.fixture) ? input.fixture : null;
     const job = { id: this.next('job'), threadId: target.id, requestMessageId: id, state: 'queued', model, fixture, approved: false, createdAt: now() };
@@ -182,7 +220,17 @@ export class Lab {
     job.claimId = this.next('claim');
     this.event('running', `Rust mock daemon claimed the task for ${job.model.id ?? 'unresolved model'}.`, thread.id, job.id);
     this.save();
-    return { claimed: true, jobId: job.id, claimId: job.claimId, threadId: thread.id, model: job.model, fixture: job.fixture, approved: job.approved, request: { from: request.from, subject: request.subject, body: request.text } };
+    return {
+      claimed: true, jobId: job.id, claimId: job.claimId, threadId: thread.id,
+      model: job.model, fixture: job.fixture, approved: job.approved,
+      request: {
+        from: request.from, subject: request.subject, body: request.text,
+        attachments: (request.attachments ?? []).map(({ id, name, mimeType, size }) => ({
+          name, mimeType, size,
+          path: `/api/attachment?messageId=${encodeURIComponent(request.id)}&attachmentId=${encodeURIComponent(id)}`,
+        })),
+      },
+    };
   }
 
   completeClaim(jobId, claimId, input) {
@@ -216,12 +264,37 @@ export class Lab {
     const address = cleanAddress(email);
     const invite = thread?.guests[address];
     if (!invite) throw new Error('No CC invitation exists for this address and thread');
-    if (action === 'verify') invite.verified = true;
-    else if (action === 'approve') invite.approved = true;
+    if (action === 'revoke') invite.authorized = false;
     else throw new Error('Unknown invitation action');
-    this.event('invite', `${address}: ${action === 'verify' ? 'email verified' : 'owner approved'} for this thread.`, threadId);
+    this.event('invite', `${address}: owner revoked access to this thread.`, threadId);
     this.save();
     return invite;
+  }
+
+  react({ from, messageId, targetId, emoji }) {
+    const address = cleanAddress(from);
+    const target = this.findMessage(targetId);
+    if (!target || target.message.direction !== 'outbound') throw new Error('The reaction target must be an agent reply in this lab');
+    const visibleRecipients = [target.message.to, ...target.message.cc].flatMap(recipientList);
+    const invited = address === OWNER || (target.thread.guests[address]?.authorized ?? (target.thread.guests[address]?.verified && target.thread.guests[address]?.approved));
+    if (!invited || !visibleRecipients.includes(address)) {
+      this.event('rejected', `${address} cannot react to this agent message.`, target.thread.id);
+      this.save();
+      return { accepted: false, reason: 'Sender cannot react to this agent message.' };
+    }
+    if (typeof emoji !== 'string' || [...new Intl.Segmenter().segment(emoji)].length !== 1 || !/\p{Extended_Pictographic}|\p{Emoji_Presentation}|\uFE0F/u.test(emoji)) throw new Error('Choose one emoji');
+    const id = messageId ?? `<${this.next('reaction')}@wonder.test>`;
+    if (!MESSAGE_ID.test(id)) throw new Error('Reaction Message-ID is invalid');
+    for (const thread of this.state.threads) {
+      for (const message of thread.messages) {
+        if (message.reactions?.some((reaction) => reaction.id === id)) return { accepted: true, duplicate: true, threadId: thread.id };
+      }
+    }
+    target.message.reactions ??= [];
+    target.message.reactions.push({ id, from: address, emoji, at: now() });
+    this.event('reaction', `${address} reacted ${emoji} to an agent reply.`, target.thread.id);
+    this.save();
+    return { accepted: true, duplicate: false, threadId: target.thread.id };
   }
 
   approveJob(jobId) {
@@ -275,9 +348,19 @@ export class Lab {
     const references = [...request.references, request.id];
     const id = `<${this.next('mail')}@wonder.test>`;
     const subject = /^re:/i.test(thread.subject) ? thread.subject : `Re: ${thread.subject}`;
-    const mime = makeMime({ from: AGENT, to: request.from, subject, messageId: id, inReplyTo: request.id, references, text, html });
+    const visible = [...recipientList(request.to), ...request.cc];
+    const approvedVisible = (address) => address !== AGENT && address !== request.from && (address === OWNER || (thread.guests[address]?.authorized && !thread.guests[address]?.hidden));
+    const ownerWasVisible = visible.includes(OWNER);
+    const senderWasHidden = thread.guests[request.from]?.hidden;
+    const cc = request.from === OWNER
+      ? visible.filter((address) => address !== OWNER && address !== AGENT && thread.guests[address]?.authorized)
+      : [...(senderWasHidden && !ownerWasVisible ? [] : [OWNER]), ...visible.filter(approvedVisible)];
+    const recipients = [...new Set(cc)].filter((address) => address !== request.from);
+    const bcc = request.from === OWNER ? (request.bcc ?? []).filter((address) => address !== AGENT && address !== OWNER && !recipients.includes(address) && thread.guests[address]?.authorized) : [];
+    const envelopeRecipients = [...new Set([request.from, ...recipients, ...bcc])];
+    const mime = makeMime({ from: AGENT, to: request.from, cc: recipients, subject, messageId: id, inReplyTo: request.id, references, text, html });
     const rendered = readGeneratedMime(mime);
-    thread.messages.push({ id, direction: 'outbound', from: AGENT, to: request.from, cc: request.cc, subject, text: rendered.text, at: now(), order: ++this.state.counter, references, replyTo: request.id, jobId: job.id, mime, after: last.id });
+    thread.messages.push({ id, direction: 'outbound', from: AGENT, to: request.from, cc: recipients, bcc, envelopeRecipients, subject, text: rendered.text, at: now(), order: ++this.state.counter, references, replyTo: request.id, jobId: job.id, mime, after: last.id });
   }
 
   preview(messageId) {

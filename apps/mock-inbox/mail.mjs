@@ -50,11 +50,12 @@ export function renderResult(result) {
   return { html, text };
 }
 
-export function makeMime({ from, to, subject, messageId, inReplyTo, references = [], text, html }) {
+export function makeMime({ from, to, cc = [], subject, messageId, inReplyTo, references = [], text, html }) {
   const boundary = `wonder-email-${createHash('sha256').update(messageId).digest('hex').slice(0, 20)}`;
   const headers = [
     `From: ${header(from)}`,
     `To: ${header(to)}`,
+    ...(cc.length ? [`Cc: ${cc.map(header).join(', ')}`] : []),
     `Subject: ${encodedSubject(subject)}`,
     `Message-ID: ${header(messageId)}`,
     `Date: ${new Date().toUTCString()}`,

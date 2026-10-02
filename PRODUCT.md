@@ -31,7 +31,8 @@ The first beta uses Google sign-in with a verified Gmail address. Customers inst
 - Both the daemon and server are intended to be open source and self-hostable.
 - Codex and Claude Code are the first agent runtimes. The local subscription-backed path comes before managed API credits.
 - Explicit model choices take precedence over defaults. Laya means ConvAI Innovations' decision model; it is only a possible future classifier, not a required implementation component.
-- An email address is not permission by itself. CC participants require verified, owner-approved thread access. Sensitive actions retain local approval gates.
+- The owner grants thread-scoped participation by including an address in To, Cc, or Bcc on an email to the agent. Participants can reply within that thread but cannot add others; the owner can revoke access. Production must verify inbound mail provenance before trusting the sender address. Bcc identities stay private in visible reply headers. Sensitive actions retain local approval gates.
+- Gmail users can react to an agent reply with a native emoji where Gmail offers the control. Inbound reaction mail is feedback on that message and does not start a task. Bcc recipients cannot react to the original Bcc message in Gmail.
 - Completion emails include a concise outcome, real checks and limitations, links and small previews where supported, and an accessible full trace.
 - The internal test site uses synthetic messages and must identify simulated work clearly.
 - TagMails is the chosen public brand; Wonder Email remains the internal project name. Domain acquisition, license, final pricing, and retention policy are open decisions.

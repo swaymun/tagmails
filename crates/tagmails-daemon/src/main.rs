@@ -14,7 +14,41 @@ fn post(client: &Client, base: &str, path: &str, body: Value) -> Result<Value, B
     Ok(response.json()?)
 }
 
-fn mock_result(claim: &Value) -> Value {
+fn attachment_evidence(
+    client: &Client,
+    base: &str,
+    claim: &Value,
+) -> Result<Vec<String>, Box<dyn Error>> {
+    let mut evidence = Vec::new();
+    if let Some(attachments) = claim["request"]["attachments"].as_array() {
+        for attachment in attachments {
+            let path = attachment["path"]
+                .as_str()
+                .ok_or("Attachment has no path")?;
+            if !path.starts_with("/api/attachment?") {
+                return Err("Attachment path is outside the local lab".into());
+            }
+            let bytes = client
+                .get(format!("{base}{path}"))
+                .send()?
+                .error_for_status()?
+                .bytes()?;
+            let expected = attachment["size"]
+                .as_u64()
+                .ok_or("Attachment has no size")?;
+            if bytes.len() as u64 != expected {
+                return Err("Downloaded attachment size did not match the claim".into());
+            }
+            let name = attachment["name"].as_str().unwrap_or("attachment");
+            evidence.push(format!(
+                "Read {name} ({expected} bytes) from the local lab."
+            ));
+        }
+    }
+    Ok(evidence)
+}
+
+fn mock_result(claim: &Value, attachment_evidence: Vec<String>) -> Value {
     let body = claim["request"]["body"].as_str().unwrap_or("");
     let model = claim["model"]["id"].as_str().unwrap_or("unresolved model");
     let effort = claim["model"]["effort"]
@@ -48,10 +82,16 @@ fn mock_result(claim: &Value) -> Value {
     } else {
         format!("Synthetic response to: {short_request}")
     };
+    let mut details = vec![
+        format!("Selected route: {model} ({effort})."),
+        "The local Rust process claimed this queued email and returned a structured result."
+            .to_string(),
+    ];
+    details.extend(attachment_evidence);
     json!({
         "state": "completed",
         "summary": summary,
-        "details": [format!("Selected route: {model} ({effort})."), "The local Rust process claimed this queued email and returned a structured result."],
+        "details": details,
         "checks": ["No model was called and no files changed in this prototype."]
     })
 }
@@ -68,7 +108,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     loop {
         match post(&client, &base, "/api/claim", json!({})) {
             Ok(claim) if claim["claimed"] == true => {
-                let result = mock_result(&claim);
+                let result = match attachment_evidence(&client, &base, &claim) {
+                    Ok(evidence) => mock_result(&claim, evidence),
+                    Err(error) => {
+                        eprintln!("Could not read mock attachment: {error}");
+                        json!({"state":"failed","summary":"The local worker could not read an attached file.","checks":["No model was called and no files changed."]})
+                    }
+                };
                 let id = claim["jobId"].as_str().ok_or("Claim has no job ID")?;
                 let claim_id = claim["claimId"].as_str().ok_or("Claim has no lease ID")?;
                 let completion = post(

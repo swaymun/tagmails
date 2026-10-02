@@ -17,6 +17,7 @@ const staticFiles = new Map([
   ['/landing/', ['../landing/index.html', 'text/html; charset=utf-8']],
   ['/landing/style.css', ['../landing/style.css', 'text/css; charset=utf-8']],
   ['/landing/app.js', ['../landing/app.js', 'text/javascript; charset=utf-8']],
+  ['/samples/image-email.eml', ['fixtures/image-email.eml', 'message/rfc822']],
 ]);
 
 function response(res, status, content, type = 'text/plain; charset=utf-8', extra = {}) {
@@ -43,6 +44,17 @@ async function readJson(req) {
   catch { throw new Error('Request body is not valid JSON'); }
 }
 
+async function readEmail(req) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > 5 * 1024 * 1024) throw new Error('The .eml file is larger than 5 MB');
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
 function tracePage(id) {
   const job = lab.state.jobs.find((item) => item.id === id);
   if (!job) return null;
@@ -67,6 +79,16 @@ const server = http.createServer(async (req, res) => {
       response(res, found?.message.mime ? 200 : 404, found?.message.mime ?? 'Raw MIME is available for generated replies only', 'text/plain; charset=utf-8');
       return;
     }
+    if (req.method === 'GET' && url.pathname === '/api/attachment') {
+      const item = lab.attachment(url.searchParams.get('messageId'), url.searchParams.get('attachmentId'));
+      if (!item) { response(res, 404, 'Attachment not found'); return; }
+      const disposition = item.previewable ? 'inline' : 'attachment';
+      response(res, 200, item.bytes, item.previewable ? item.mimeType : 'application/octet-stream', {
+        'Content-Disposition': `${disposition}; filename*=UTF-8''${encodeURIComponent(item.name)}`,
+        'Content-Security-Policy': "default-src 'none'; base-uri 'none'; form-action 'none'",
+      });
+      return;
+    }
     if (req.method === 'GET' && url.pathname === '/preview') {
       const content = lab.preview(url.searchParams.get('messageId'));
       response(res, content ? 200 : 404, content ?? 'Message not found', 'text/html; charset=utf-8', { 'Content-Security-Policy': "sandbox allow-same-origin allow-popups allow-popups-to-escape-sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data: https:; base-uri 'none'; form-action 'none'" });
@@ -80,6 +102,11 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname.startsWith('/api/')) {
       const expectedOrigin = `http://127.0.0.1:${port}`;
       if (req.headers.origin && req.headers.origin !== expectedOrigin) { json(res, 403, { error: 'This lab only accepts actions from its own page' }); return; }
+      if (url.pathname === '/api/import') {
+        if (req.headers['content-type'] !== 'message/rfc822') { json(res, 415, { error: 'Expected a raw .eml file' }); return; }
+        json(res, 200, await lab.importMime(await readEmail(req)));
+        return;
+      }
       if (!req.headers['content-type']?.startsWith('application/json')) { json(res, 415, { error: 'Expected a JSON request' }); return; }
       const data = await readJson(req);
       let result;
@@ -91,6 +118,7 @@ const server = http.createServer(async (req, res) => {
         case '/api/claim': result = lab.claimNext(); break;
         case '/api/complete': result = lab.completeClaim(data.jobId, data.claimId, data.result); break;
         case '/api/guest': result = lab.guestAction(data.threadId, data.email, data.action); break;
+        case '/api/react': result = lab.react(data); break;
         case '/api/approve': lab.approveJob(data.jobId); result = { approved: true }; break;
         case '/api/reset': lab.reset(); result = { reset: true }; break;
         default: json(res, 404, { error: 'Unknown lab action' }); return;

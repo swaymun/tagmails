@@ -33,6 +33,7 @@
     <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 10v7M12 6.5v.5"/></symbol>
     <symbol id="i-forum" viewBox="0 0 24 24"><path d="M3 4h15v11H8l-5 4V4ZM9 17h10l2 3V8h-2"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="m4 12 5 5L20 6"/></symbol>
+    <symbol id="i-attachment" viewBox="0 0 24 24"><path d="M20 11.5 12.5 19a6 6 0 0 1-8.5-8.5L13 1.5a4 4 0 0 1 5.7 5.7L9.8 16a2 2 0 0 1-2.8-2.8l8-8"/></symbol>
   </svg>
 
   <header class="topbar">
@@ -109,8 +110,9 @@
     <div class="compose-head"><span id="composeTitle">New Message</span><button class="icon-button close-light" id="closeCompose" aria-label="Close compose"><svg><use href="#i-close"/></svg></button></div>
     <form id="composeForm">
       <label class="compose-line"><span>From</span><input id="fromField" name="from" type="email" value="owner@gmail.com" required></label>
-      <label class="compose-line"><span>To</span><input id="toField" name="to" type="email" value="agent@wonder.test" readonly></label>
-      <label class="compose-line"><span>Cc</span><input id="ccField" name="cc" type="text" placeholder="Optional guest address"></label>
+      <label class="compose-line"><span>To</span><input id="toField" name="to" type="text" value="agent@wonder.test" required></label>
+      <label class="compose-line"><span>Cc</span><input id="ccField" name="cc" type="text" placeholder="Optional addresses"></label>
+      <label class="compose-line"><span>Bcc</span><input id="bccField" name="bcc" type="text" placeholder="Private recipients"></label>
       <label class="compose-line subject-line"><span class="sr-only">Subject</span><input id="subjectField" name="subject" type="text" placeholder="Subject" required></label>
       <label class="compose-body"><span class="sr-only">Message</span><textarea id="bodyField" name="body" placeholder="Write a task for your agent…" required></textarea></label>
       <div class="compose-footer"><button class="send-button" type="submit">Send <svg><use href="#i-chevron"/></svg></button><span>Synthetic mail · local only</span></div>
@@ -123,6 +125,9 @@
       <div class="lab-status"><span class="lab-indicator" id="daemonIndicator"></span><div><strong id="daemonStatus">Mock daemon offline</strong><small id="jobStatus">0 queued</small></div></div>
       <div class="lab-actions"><button id="toggleDaemon" class="lab-primary">Connect mock daemon</button><button id="processNext" class="lab-secondary">Process next email</button></div>
       <a class="landing-link" href="/landing/">View TagMails landing page prototype ↗</a>
+      <h2>Import a test email</h2><p>Import a raw .eml with agent@wonder.test in To, Cc, or Bcc. It stays on this computer; sender identity is simulated.</p>
+      <form id="importForm" class="import-form"><label for="emlFile">Choose an .eml file</label><input id="emlFile" type="file" accept=".eml,message/rfc822"><button type="submit">Import email</button></form>
+      <button id="importSample" class="sample-button" type="button">Import sample email with image</button>
       <h2>Load an example</h2><p>These drafts model the kind of work you can delegate from a conversation.</p>
       <div class="scenario-list">
         <button data-scenario="catchup"><strong>Catch me up</strong><span>Decisions and open questions</span></button>
@@ -131,7 +136,7 @@
         <button data-scenario="callprep"><strong>Prepare for a call</strong><span>Briefing from shared context</span></button>
         <button data-scenario="approval"><strong>Need a decision</strong><span>Pause before a sensitive action</span></button>
         <button data-scenario="failure"><strong>Show a failure</strong><span>Inspect a stopped run</span></button>
-        <button data-scenario="cc"><strong>Invite a teammate</strong><span>CC does not grant access yet</span></button>
+        <button data-scenario="cc"><strong>Invite a teammate</strong><span>The owner includes them on the email</span></button>
       </div>
       <div id="guestControls"></div>
       <div id="approvalControls"></div>

@@ -92,7 +92,14 @@ function renderThread(thread) {
     const preview = outgoing
       ? `<iframe title="Rendered HTML email from ${esc(label)}" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" src="/preview?messageId=${encodeURIComponent(message.id)}"></iframe>`
       : esc(message.text);
-    return `<article class="thread-message"><div class="message-header"><span class="sender-avatar${outgoing ? ' agent' : ''}">${esc(label.slice(0, 1).toUpperCase())}</span><div class="sender-meta"><strong>${esc(label)}</strong><small>to ${esc(message.to)}${message.cc.length ? `, cc ${esc(message.cc.join(', '))}` : ''}</small></div><time class="message-date" datetime="${esc(message.at)}">${esc(new Date(message.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}</time></div><div class="message-body">${preview}</div>${outgoing ? `<div class="message-actions"><a href="/api/mime?messageId=${encodeURIComponent(message.id)}" target="_blank" rel="noopener">View raw MIME</a><span>HTML + plain text</span></div>` : ''}</article>`;
+    const attachments = (message.attachments ?? []).map((attachment) => {
+      const href = `/api/attachment?messageId=${encodeURIComponent(message.id)}&attachmentId=${encodeURIComponent(attachment.id)}`;
+      return `<a class="attachment-card" href="${href}" target="_blank" rel="noopener" download="${esc(attachment.name)}">${attachment.previewable ? `<img src="${href}" alt="Preview of ${esc(attachment.name)}" loading="lazy">` : `<span class="attachment-file">${icon('attachment')}</span>`}<span><strong>${esc(attachment.name)}</strong><small>${Math.max(1, Math.ceil(attachment.size / 1024))} KB</small></span></a>`;
+    }).join('');
+    const reactions = (message.reactions ?? []).map((reaction) => `<span class="reaction-chip" title="${esc(reaction.from)} reacted">${esc(reaction.emoji)} ${esc(reaction.from === data.owner ? 'you' : reaction.from)}</span>`).join('');
+    const canReact = outgoing && [message.to, ...message.cc].join(',').split(',').map((address) => address.trim()).includes(data.owner);
+    const reactionButtons = canReact ? `<div class="reaction-picker" aria-label="Simulate Gmail emoji reaction"><span>React</span>${['👍', '❤️', '👀'].map((emoji) => `<button type="button" data-react="${emoji}" data-message="${encodeURIComponent(message.id)}" aria-label="React ${emoji} to this agent email">${emoji}</button>`).join('')}</div>` : '';
+    return `<article class="thread-message"><div class="message-header"><span class="sender-avatar${outgoing ? ' agent' : ''}">${esc(label.slice(0, 1).toUpperCase())}</span><div class="sender-meta"><strong>${esc(label)}</strong><small>to ${esc(message.to)}${message.cc.length ? `, cc ${esc(message.cc.join(', '))}` : ''}${message.from === data.owner && message.bcc?.length ? `, bcc ${esc(message.bcc.join(', '))}` : ''}</small></div><time class="message-date" datetime="${esc(message.at)}">${esc(new Date(message.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}</time></div><div class="message-body">${preview}</div>${attachments ? `<div class="attachment-list">${attachments}</div>` : ''}${reactions ? `<div class="reaction-list">${reactions}</div>` : ''}${reactionButtons}${outgoing ? `<div class="message-actions"><a href="/api/mime?messageId=${encodeURIComponent(message.id)}" target="_blank" rel="noopener">View raw MIME</a><span>HTML + plain text</span></div>` : ''}</article>`;
   }).join('')}<p class="thread-status">${lastJob ? `Latest task: <strong>${esc(lastJob.state.replaceAll('_', ' '))}</strong> · ${esc(lastJob.model.id ?? 'model unclear')}` : ''}</p><button class="reply-trigger" id="replyButton">${icon('reply')} Reply</button>`;
   $('#threadView').querySelectorAll('iframe').forEach((frame) => {
     const fit = () => {
@@ -115,7 +122,7 @@ function renderLab() {
   $('#processNext').disabled = !data.online || queued === 0;
   const thread = data.threads.find((item) => item.id === currentThread);
   const guests = thread ? Object.entries(thread.guests) : [];
-  $('#guestControls').innerHTML = guests.length ? `<h2>Guests on this thread</h2>${guests.map(([email, invite]) => `<div class="invite-item"><strong>${esc(email)}</strong><br>${invite.verified ? 'Address verified' : 'Address unverified'} · ${invite.approved ? 'Owner approved' : 'Owner approval pending'}<br>${!invite.verified ? `<button data-guest-action="verify" data-email="${esc(email)}">Simulate verification</button>` : ''}${!invite.approved ? `<button data-guest-action="approve" data-email="${esc(email)}">Approve access</button>` : ''}</div>`).join('')}` : '';
+  $('#guestControls').innerHTML = guests.length ? `<h2>Participants on this thread</h2>${guests.map(([email, invite]) => `<div class="invite-item"><strong>${esc(email)}</strong><br>${invite.hidden ? 'Added by owner in Bcc' : 'Added by owner in To or Cc'} · ${(invite.authorized ?? (invite.verified && invite.approved)) ? 'Can reply to agent' : 'Access revoked'}<br>${(invite.authorized ?? (invite.verified && invite.approved)) ? `<button data-guest-action="revoke" data-email="${esc(email)}">Revoke access</button>` : ''}</div>`).join('')}` : '';
   $('#approvalControls').innerHTML = awaiting ? `<h2>Needs your decision</h2>${data.jobs.filter((job) => job.state === 'needs_approval').map((job) => `<div class="approval-item">${esc(data.threads.find((item) => item.id === job.threadId)?.subject ?? job.id)}<br><button data-approve="${esc(job.id)}">Approve simulated action</button></div>`).join('')}` : '';
   $('#eventList').innerHTML = data.events.slice(0, 9).map((event) => `<li><time datetime="${esc(event.at)}">${esc(timeLabel(event.at))}</time>${esc(event.description)}</li>`).join('');
 }
@@ -146,7 +153,9 @@ function openCompose({ reply = false, fixture = null } = {}) {
   const thread = data?.threads.find((item) => item.id === currentThread);
   $('#composeTitle').textContent = reply ? `Reply: ${thread?.subject ?? ''}` : 'New Message';
   $('#fromField').value = data?.owner ?? 'owner@gmail.com';
+  $('#toField').value = data?.agent ?? 'agent@wonder.test';
   $('#ccField').value = '';
+  $('#bccField').value = '';
   $('#subjectField').value = reply ? `Re: ${thread.subject}` : '';
   $('#bodyField').value = '';
   $('#composeWindow').dataset.replyTo = reply ? thread.messages.at(-1).id : '';
@@ -208,7 +217,16 @@ $('#threadList').addEventListener('keydown', (event) => {
     openThread(event.target.dataset.thread);
   }
 });
-$('#threadView').addEventListener('click', (event) => { if (event.target.closest('#replyButton')) openCompose({ reply: true }); });
+$('#threadView').addEventListener('click', async (event) => {
+  if (event.target.closest('#replyButton')) { openCompose({ reply: true }); return; }
+  const button = event.target.closest('[data-react]');
+  if (!button) return;
+  try {
+    const result = await api('/api/react', { from: data.owner, targetId: decodeURIComponent(button.dataset.message), emoji: button.dataset.react });
+    await refresh();
+    toast(result.accepted ? 'Synthetic Gmail reaction recorded; no new task queued' : result.reason);
+  } catch (error) { toast(error.message); }
+});
 
 document.querySelectorAll('.folder').forEach((button) => button.addEventListener('click', () => {
   currentFolder = button.dataset.folder;
@@ -240,7 +258,7 @@ $('#composeForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
     const result = await api('/api/send', {
-      from: $('#fromField').value, cc: $('#ccField').value, subject: $('#subjectField').value,
+      from: $('#fromField').value, to: $('#toField').value, cc: $('#ccField').value, bcc: $('#bccField').value, subject: $('#subjectField').value,
       body: $('#bodyField').value, replyTo: $('#composeWindow').dataset.replyTo || null, fixture: currentFixture,
     });
     if (!result.accepted) { toast(result.reason); return; }
@@ -289,6 +307,35 @@ $('#resetButton').addEventListener('click', async () => {
   if (!window.confirm('Reset this synthetic inbox and discard its local test messages?')) return;
   try { await api('/api/reset', {}); currentThread = null; readThreads.clear(); starredThreads.clear(); await refresh(); toast('Synthetic inbox reset'); }
   catch (error) { toast(error.message); }
+});
+
+async function importEmail(source) {
+  try {
+    const response = await fetch('/api/import', { method: 'POST', headers: { 'Content-Type': 'message/rfc822' }, body: source });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error ?? 'Could not import the email');
+    if (!result.accepted) { toast(result.reason); return; }
+    $('#emlFile').value = '';
+    closeLab({ restoreFocus: false });
+    currentThread = result.threadId;
+    readThreads.add(currentThread);
+    await refresh();
+    $('#threadView h1').focus();
+    toast(result.duplicate ? 'Duplicate email ignored' : 'Synthetic .eml imported and queued');
+  } catch (error) { toast(error.message); }
+}
+$('#importForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const file = $('#emlFile').files[0];
+  if (!file) { toast('Choose an .eml file first'); return; }
+  await importEmail(file);
+});
+$('#importSample').addEventListener('click', async () => {
+  try {
+    const response = await fetch('/samples/image-email.eml');
+    if (!response.ok) throw new Error('Could not load the sample email');
+    await importEmail(await response.blob());
+  } catch (error) { toast(error.message); }
 });
 
 refresh().catch((error) => toast(error.message));

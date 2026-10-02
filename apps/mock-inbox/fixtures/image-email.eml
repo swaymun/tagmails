@@ -1,0 +1,22 @@
+From: Owner <owner@gmail.com>
+To: agent@wonder.test
+Subject: Screenshot from the beta
+Message-ID: <image-fixture@tagmails.test>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="tagmails-image-fixture"
+
+--tagmails-image-fixture
+Content-Type: text/plain; charset=utf-8
+
+Model: Luna
+Please inspect this sample image attachment and tell me how an email result should describe it.
+This is a synthetic local test. There is no real screenshot or user data.
+
+--tagmails-image-fixture
+Content-Type: image/png; name="sample-pixel.png"
+Content-Disposition: attachment; filename="sample-pixel.png"
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==
+
+--tagmails-image-fixture--

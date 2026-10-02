@@ -4,9 +4,10 @@ TagMails gives an existing local coding agent an email address. This repository 
 
 ## Run the internal inbox
 
-Requires Node.js 20 or newer. No package install is needed.
+Requires Node.js 20.19 or newer and Rust for the optional worker.
 
 ```sh
+npm ci
 npm run lab
 ```
 
@@ -14,9 +15,13 @@ Open `http://127.0.0.1:4177`. The lab binds only to localhost. Its synthetic mes
 
 The TagMails landing page prototype is at `http://127.0.0.1:4177/landing/`. It describes the proposed product, links to the synthetic inbox, and includes a copyable setup prompt preview. Signup, installation, payments, and real delivery are not connected.
 
-The initial inbox includes examples for a decision catch-up, synthetic metrics, call preparation, a failed task, an approval pause, a queued bug report, and a CC invitation. Open **Internal test controls** to connect or disconnect the mock daemon, process queued mail, load more examples, verify and approve a guest for a selected thread, or approve a paused task. Compose and reply work like email. Model routing accepts a `Model: Claude`, `Model: Codex`, or `Model: Luna` line in the message body.
+The initial inbox includes examples for a decision catch-up, synthetic metrics, call preparation, a failed task, an approval pause, a queued bug report, and a shared thread. Open **Internal test controls** to connect or disconnect the mock daemon, process queued mail, import a raw `.eml` file, load more examples, revoke a participant for a selected thread, or approve a paused task. Compose and reply work like email. Model routing accepts a `Model: Claude`, `Model: Codex`, or `Model: Luna` line in the message body.
 
-Outgoing replies are built as multipart plain-text and HTML MIME with `Message-ID`, `In-Reply-To`, and `References` headers. The thread view renders the HTML decoded from those generated MIME bytes and offers a raw MIME view. Every result states that it is synthetic. The local trace pages show mock job events.
+When the owner includes another address in To, Cc, or Bcc, that address can reply to the agent in the same thread. Only the owner can add participants. Bcc recipients stay out of visible reply headers, and an agent reply to a Bcc participant does not automatically reveal them to the owner. This local lab simulates sender identity; production must verify inbound mail provenance before trusting the From address. Gmail emoji reactions to an agent reply are recorded on that message and never queued as new tasks. The buttons below agent replies simulate those reactions in the lab.
+
+Use **Import sample email with image** to test raw MIME parsing and an image preview. A custom `.eml` must include `agent@wonder.test` in To, Cc, or Bcc and have a valid `Message-ID`. Imported sender identity is simulated; the lab does not verify that the file came from Gmail. The parser converts HTML-only mail to text, limits mail and attachment sizes, and keeps attachment bytes in the local state file. The Rust mock worker fetches each attachment and reports its byte count without interpreting the image. In production, Bcc and delivery-recipient metadata must come from the verified mail provider event because raw email headers may omit Bcc.
+
+Outgoing replies are built as multipart plain-text and HTML MIME with `Message-ID`, `In-Reply-To`, `References`, and visible `Cc` headers. The thread view renders the HTML decoded from those generated MIME bytes and offers a raw MIME view. Every result states that it is synthetic. The local trace pages show mock job events.
 
 To process queued mail with the local Rust prototype, keep the inbox server running in one terminal and run this in another:
 
@@ -30,7 +35,7 @@ The worker polls the localhost lab, claims one queued task at a time, and return
 npm test
 ```
 
-The tests cover durable offline mail, reply continuation, explicit model selection, duplicate IDs, CC guest permissions, approval and failure states, HTML escaping, header injection, interrupted job recovery, and expired Rust claim rejection.
+The tests cover durable offline mail, a six-message owner/participant/agent thread across a restart, per-turn model selection, duplicate IDs, To/Cc/Bcc access and Bcc privacy, revocation, Gmail reaction MIME, approval and failure states, HTML escaping, header injection, interrupted job recovery, expired Rust claim rejection, raw MIME, attachments, and import limits.
 
 ## Current scope
 
