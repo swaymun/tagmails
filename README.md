@@ -39,4 +39,4 @@ The tests cover durable offline mail, a six-message owner/participant/agent thre
 
 ## Current scope
 
-The lab uses deterministic mock runners. Real Codex and Claude adapters, a production Rust daemon, hosted relay, Google sign-in, payment ledger, real delivery, and artifact storage are next stages in [PLAN.md](PLAN.md). TagMails is the selected public brand; `tagmails.com` has not been purchased or verified for use.
+The lab uses deterministic mock runners. Isolated CLI probes verified one new and one resumed Codex turn, plus one new Claude Sonnet 5.5 turn. Claude CLI resume stopped at its budget gate before replying; details are in [PLAN.md](PLAN.md). Real Codex and Claude adapters, a production Rust daemon, hosted relay, Google sign-in, payment ledger, real delivery, and artifact storage are next stages. TagMails is the selected public brand; `tagmails.com` has not been purchased or verified for use.
