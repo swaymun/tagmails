@@ -10,7 +10,7 @@
   "env": {
     "dev": {
       "name": "tagmails-relay-dev",
-      "vars": { "SITE_ALLOWED_ORIGINS": "https://tagmails.com,https://www.tagmails.com" },
+      "vars": { "SITE_ALLOWED_ORIGINS": "https://tagmails.com,https://www.tagmails.com", "BILLING_TEST_MODE": "true" },
       "d1_databases": [{ "binding": "DB", "database_name": "tagmails-relay-dev", "database_id": "792cbd68-83f3-4b64-b050-b62aebcb6801", "migrations_dir": "services/migrations" }],
       "r2_buckets": [{ "binding": "MAIL", "bucket_name": "tagmails-relay-mail-dev" }],
       "secrets": { "required": ["RESEND_API_KEY", "RESEND_WEBHOOK_SECRET", "GOOGLE_CLIENT_ID", "AGENT_DOMAIN", "PUBLIC_ORIGIN", "SITE_ORIGIN"] },
