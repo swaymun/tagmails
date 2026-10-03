@@ -97,6 +97,51 @@ test('test Checkout credits once after a signed paid event and reverses a succes
   assert.equal(sqlite.prepare("SELECT count(*) n FROM credit_ledger WHERE kind = 'test_refund_restored'").get().n, 1);
 });
 
+test('the private Site shows only its Gmail owner test credits and returns from test Checkout', async () => {
+  const { env, sqlite } = fixture();
+  env.SITE_ORIGIN = 'https://tagmails.chatgpt.site';
+  env.GOOGLE_CLIENT_ID = 'test-google-client';
+  const site = (path, method = 'GET', bearer = 'owner-token', siteOrigin = env.SITE_ORIGIN) =>
+    new Request(`${origin}${path}`, { method, headers: {
+      Origin: siteOrigin, Authorization: `Bearer ${bearer}`,
+    } });
+  let checkout;
+  const call = (req) => handleTestWalletRequest(req, env, {
+    verifyIdentity: async (credential) => {
+      if (credential !== 'owner-token') throw new Error('Invalid token');
+      return { sub: 'google-sub-1', email: 'owner@gmail.com' };
+    },
+    stripeFetch: async (url, options) => {
+      assert.equal(url, 'https://api.stripe.com/v1/checkout/sessions');
+      checkout = new URLSearchParams(options.body);
+      return Response.json({ id: 'cs_test_site_1', url: 'https://checkout.stripe.com/c/pay/cs_test_site_1' });
+    },
+  });
+  assert.equal((await call(site('/api/site/billing', 'OPTIONS'))).status, 204);
+  assert.equal((await call(site('/api/site/billing', 'GET', 'bad-token'))).status, 401);
+  assert.equal((await call(site('/api/site/billing', 'GET', 'owner-token', 'https://other.test'))).status, 403);
+  assert.equal((await call(site('/api/site/billing', 'GET', 'owner-token', 'https://other.test')))
+    .headers.get('access-control-allow-origin'), null);
+  const balance = await call(site('/api/site/billing'));
+  assert.equal(balance.headers.get('access-control-allow-origin'), env.SITE_ORIGIN);
+  assert.deepEqual(await balance.json(), { balanceCents: 0, waitingEmails: 0,
+    currency: 'usd', testMode: true, checkoutEnabled: true });
+  assert.equal((await call(site('/api/site/billing', 'GET', 'owner-token', 'http://tagmails.chatgpt.site'))).status, 403);
+  assert.equal((await handleTestWalletRequest(site('/api/site/billing'), env, {
+    verifyIdentity: async () => ({ sub: 'other-sub', email: 'other@gmail.com' }),
+  })).status, 404);
+  const response = await call(site('/api/site/billing/checkout', 'POST'));
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).testMode, true);
+  assert.equal(checkout.get('success_url'), `${env.SITE_ORIGIN}/setup?topup=returned`);
+  assert.equal(checkout.get('cancel_url'), `${env.SITE_ORIGIN}/setup?topup=canceled`);
+  assert.equal(checkout.get('customer_email'), 'owner@gmail.com');
+  assert.equal(sqlite.prepare('SELECT count(*) n FROM billing_checkouts').get().n, 1);
+  env.BILLING_TEST_MODE = 'false';
+  assert.equal((await (await call(site('/api/site/billing'))).json()).checkoutEnabled, false);
+  assert.equal((await call(site('/api/site/billing/checkout', 'POST'))).status, 503);
+});
+
 test('wallet rejects live keys, live events, mismatched paid sessions, and unknown refunds', async () => {
   const { env, sqlite } = fixture();
   const call = async (req) => handleTestWalletRequest(req, env, {

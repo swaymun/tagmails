@@ -134,7 +134,7 @@ async function pair(request, env) {
   return json({ paired: true, deviceId }, 201);
 }
 
-function siteCors(request, env) {
+export function siteCors(request, env) {
   const origin = request.headers.get('origin');
   return origin && origin === env.SITE_ORIGIN ? {
     'Access-Control-Allow-Origin': origin,
@@ -142,6 +142,17 @@ function siteCors(request, env) {
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Vary': 'Origin',
   } : {};
+}
+
+export async function siteOwnerFor(request, env, verifyIdentity = verifyGoogleCredential) {
+  const credential = request.headers.get('authorization')?.match(/^Bearer (\S+)$/)?.[1];
+  let identity;
+  try { identity = await verifyIdentity(credential, env.GOOGLE_CLIENT_ID); }
+  catch { return { error: 'Google sign-in required', status: 401 }; }
+  const account = await env.DB.prepare('SELECT id, owner_email, agent_email FROM accounts WHERE google_sub = ? AND active = 1')
+    .bind(identity.sub).first();
+  if (!account || account.owner_email !== identity.email) return { error: 'Account not found', status: 404 };
+  return { account };
 }
 
 async function createPairingCode(env, accountId) {
@@ -169,13 +180,9 @@ async function siteAccountRequest(request, env, pathname, verifyIdentity) {
     status: request.headers.get('origin') === env.SITE_ORIGIN ? 204 : 403, headers,
   });
   if (request.headers.get('origin') !== env.SITE_ORIGIN) return json({ error: 'Invalid origin' }, 403);
-  const credential = request.headers.get('authorization')?.match(/^Bearer (\S+)$/)?.[1];
-  let identity;
-  try { identity = await verifyIdentity(credential, env.GOOGLE_CLIENT_ID); }
-  catch { return json({ error: 'Google sign-in required' }, 401, headers); }
-  const account = await env.DB.prepare('SELECT id, owner_email, agent_email FROM accounts WHERE google_sub = ? AND active = 1')
-    .bind(identity.sub).first();
-  if (!account || account.owner_email !== identity.email) return json({ error: 'Account not found' }, 404, headers);
+  const owner = await siteOwnerFor(request, env, verifyIdentity);
+  if (owner.error) return json({ error: owner.error }, owner.status, headers);
+  const { account } = owner;
   if (pathname === '/api/site/account' && request.method === 'GET') {
     return json({ ownerEmail: account.owner_email, agentEmail: account.agent_email,
       deliveryReady: env.MAIL_DELIVERY_READY === 'true' }, 200, headers);

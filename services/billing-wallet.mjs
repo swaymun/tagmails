@@ -1,13 +1,24 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
-import { accountFor, sameOrigin } from './account-auth.mjs';
+import { accountFor, sameOrigin, siteCors, siteOwnerFor, verifyGoogleCredential } from './account-auth.mjs';
 import { reservePendingTestEmails, testBillingEnabled, testWalletSnapshot } from './email-charges.mjs';
 
 const TOP_UP_CENTS = 1000;
 const MAX_WEBHOOK_BYTES = 128_000;
 const UUID = /^[0-9a-f-]{36}$/i;
 
-function json(value, status = 200) {
-  return Response.json(value, { status, headers: { 'Cache-Control': 'no-store' } });
+function json(value, status = 200, headers = {}) {
+  return Response.json(value, { status, headers: { 'Cache-Control': 'no-store', ...headers } });
+}
+
+function siteOriginFor(request, env) {
+  try {
+    const configured = new URL(env.SITE_ORIGIN);
+    const local = ['localhost', '127.0.0.1'].includes(configured.hostname);
+    if ((configured.protocol !== 'https:' && !(local && configured.protocol === 'http:' && configured.port)) ||
+        configured.pathname !== '/' || configured.search || configured.hash ||
+        configured.username || configured.password || configured.origin !== request.headers.get('origin')) return null;
+    return configured.origin;
+  } catch { return null; }
 }
 
 function originFor(request, env) {
@@ -52,10 +63,11 @@ export function verifyStripeSignature(body, signature, secret, now = Date.now())
     });
 }
 
-async function createCheckout(request, env, account, stripeFetch) {
-  if (!sameOrigin(request)) return json({ error: 'Invalid origin' }, 403);
-  const origin = originFor(request, env);
-  if (!origin || !testBillingEnabled(env)) return json({ error: 'Test checkout is not configured' }, 503);
+async function createCheckout(request, env, account, stripeFetch, site = false) {
+  const headers = site ? siteCors(request, env) : {};
+  if (site ? !siteOriginFor(request, env) : !sameOrigin(request)) return json({ error: 'Invalid origin' }, 403, headers);
+  const origin = site ? siteOriginFor(request, env) : originFor(request, env);
+  if (!origin || !testBillingEnabled(env)) return json({ error: 'Test checkout is not configured' }, 503, headers);
   const id = randomUUID();
   await env.DB.prepare('INSERT INTO billing_checkouts (id, account_id, amount_cents) VALUES (?, ?, ?)')
     .bind(id, account.id, TOP_UP_CENTS).run();
@@ -63,8 +75,8 @@ async function createCheckout(request, env, account, stripeFetch) {
     mode: 'payment',
     client_reference_id: id,
     customer_email: account.owner_email,
-    success_url: `${origin}/account?topup=returned`,
-    cancel_url: `${origin}/account?topup=canceled`,
+    success_url: `${origin}/${site ? 'setup' : 'account'}?topup=returned`,
+    cancel_url: `${origin}/${site ? 'setup' : 'account'}?topup=canceled`,
     'payment_method_types[0]': 'card',
     'line_items[0][price_data][currency]': 'usd',
     'line_items[0][price_data][unit_amount]': String(TOP_UP_CENTS),
@@ -80,16 +92,16 @@ async function createCheckout(request, env, account, stripeFetch) {
     },
     body: form.toString(),
   });
-  if (!response.ok) return json({ error: 'Stripe test checkout could not be created' }, 502);
+  if (!response.ok) return json({ error: 'Stripe test checkout could not be created' }, 502, headers);
   const session = await response.json();
   let url;
   try { url = new URL(session.url); } catch { /* Invalid Stripe response. */ }
   if (!session.id?.startsWith('cs_test_') || url?.protocol !== 'https:' || url.hostname !== 'checkout.stripe.com') {
-    return json({ error: 'Stripe returned an invalid test checkout' }, 502);
+    return json({ error: 'Stripe returned an invalid test checkout' }, 502, headers);
   }
   await env.DB.prepare('UPDATE billing_checkouts SET stripe_session_id = ? WHERE id = ? AND stripe_session_id IS NULL')
     .bind(session.id, id).run();
-  return json({ checkoutUrl: url.href, testMode: true });
+  return json({ checkoutUrl: url.href, testMode: true }, 200, headers);
 }
 
 async function paidCheckout(env, session, stripeFetch) {
@@ -218,10 +230,28 @@ async function stripeWebhook(request, env, now, stripeFetch) {
   return json({ received: true, ignored: true });
 }
 
-export async function handleTestWalletRequest(request, env, { stripeFetch = fetch, now = Date.now() } = {}) {
+export async function handleTestWalletRequest(request, env, { stripeFetch = fetch, now = Date.now(),
+  verifyIdentity = verifyGoogleCredential } = {}) {
   const pathname = new URL(request.url).pathname;
-  if (!['/api/billing', '/api/billing/checkout', '/webhooks/stripe'].includes(pathname)) return null;
+  const site = pathname === '/api/site/billing' || pathname === '/api/site/billing/checkout';
+  if (!site && !['/api/billing', '/api/billing/checkout', '/webhooks/stripe'].includes(pathname)) return null;
   if (!env.DB) throw new Error('Account database is not configured');
+  if (site) {
+    const headers = siteCors(request, env);
+    if (request.method === 'OPTIONS') return new Response(null, { status: siteOriginFor(request, env) ? 204 : 403, headers });
+    if (!siteOriginFor(request, env)) return json({ error: 'Invalid origin' }, 403);
+    const owner = await siteOwnerFor(request, env, verifyIdentity);
+    if (owner.error) return json({ error: owner.error }, owner.status, headers);
+    if (pathname === '/api/site/billing' && request.method === 'GET') {
+      const snapshot = await testWalletSnapshot(env, owner.account.id);
+      return json({ ...snapshot, waitingEmails: testBillingEnabled(env) ? snapshot.waitingEmails : 0,
+        currency: 'usd', testMode: true, checkoutEnabled: Boolean(testBillingEnabled(env)) }, 200, headers);
+    }
+    if (pathname === '/api/site/billing/checkout' && request.method === 'POST') {
+      return createCheckout(request, env, owner.account, stripeFetch, true);
+    }
+    return json({ error: 'Not found' }, 404, headers);
+  }
   if (pathname === '/webhooks/stripe') {
     return request.method === 'POST' ? stripeWebhook(request, env, now, stripeFetch) : new Response('Not found', { status: 404 });
   }
