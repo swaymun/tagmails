@@ -1,8 +1,10 @@
 # TagMails
 
-TagMails gives an existing local coding agent an email address. This repository currently contains the product plan and an **internal, synthetic Gmail-style test inbox**. A [private TagMails Site](https://tagmails.saimun-h-shahee.chatgpt.site) hosts the landing preview, owner-only Google sign-in and device setup, and run transcripts from a separate source checkout in `site/`; real Gmail mail has reached the development Resend inbox and signed Worker webhook, but no agent reply has been delivered yet. By default the local prototype sends no email, invokes no model, changes no files on behalf of a message, and charges no money. Explicit one-job Codex and Claude read-only modes are available for local testing, plus opt-in Codex and Claude modes that can edit one selected workspace.
+TagMails gives an existing local coding agent an email address. This repository currently contains the product plan and an **internal, synthetic Gmail-style test inbox**. A [private TagMails Site](https://tagmails.saimun-h-shahee.chatgpt.site) hosts the landing preview, owner-only Google sign-in and device setup, and run transcripts from the separately versioned `site/` submodule; real Gmail mail has reached the development Resend inbox and signed Worker webhook, but no agent reply has been delivered yet. By default the local prototype sends no email, invokes no model, changes no files on behalf of a message, and charges no money. Explicit one-job Codex and Claude read-only modes are available for local testing, plus opt-in Codex and Claude modes that can edit one selected workspace.
 
 TagMails source is [MIT licensed](LICENSE). The separate Site checkout has its own MIT license. Third-party dependencies retain their own licenses. Neither checkout is a public source release yet.
+
+Clone with `git clone --recurse-submodules` to include the private Site source. An existing clone can run `git submodule update --init` after checkout. Local credentials and test state remain under ignored `.local/` and are not part of either repository.
 
 An initial [self-hosting starter](SELF_HOSTING.md) provides a separate Worker configuration and setup sequence. The configuration builds locally; a fresh-account deployment and full live email loop are still unverified.
 
