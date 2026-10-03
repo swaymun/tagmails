@@ -250,9 +250,16 @@ export async function runClaim(claim, { write = false } = {}) {
   if (existing && existing.workspace !== workspace) return fail('This email thread was paired with a different workspace.', write);
   const staged = await stageAgentAttachments(claim.request.attachments, workspace);
   try {
+    if (write) {
+      store.jobs[claim.jobId] = fail('A previous local write attempt stopped before TagMails recorded its result. Inspect the workspace before sending a new request.', true);
+      await saveStore(storeFile, store);
+    }
     const { result, threadId } = await runCodex(claim, workspace, home, existing?.sessionId, staged, write);
     if (['completed', 'needs_approval'].includes(result.state)) {
       store.threads[claim.threadId] = { sessionId: threadId, workspace };
+      store.jobs[claim.jobId] = result;
+      await saveStore(storeFile, store);
+    } else if (write) {
       store.jobs[claim.jobId] = result;
       await saveStore(storeFile, store);
     }

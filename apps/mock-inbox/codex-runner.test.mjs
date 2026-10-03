@@ -54,6 +54,10 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     const attachmentText = attachment ? fs.readFileSync(attachment, 'utf8') : null;
     fs.appendFileSync(log, JSON.stringify({ method: message.method, params: message.params,
       attachment, attachmentText }) + '\\n');
+    if (mode === 'abrupt-write') {
+      fs.writeFileSync('partial.txt', 'one local edit\\n');
+      process.exit(17);
+    }
     send({ id: message.id, result: { turn: { id: 'turn-1', status: 'inProgress' } } });
     if (mode === 'approval-request') send({ id: 900, method: 'item/commandExecution/requestApproval',
       params: { threadId: id, turnId: 'turn-1', command: 'curl https://example.com' } });
@@ -203,4 +207,18 @@ test('Codex write mode declines access expansion and reports a waiting result', 
   assert.match(result.checks.join(' '), /Local edits may already have occurred/);
   const events = fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(events.find((item) => item.method === 'approval-response')?.decision, 'decline');
+});
+
+test('an interrupted Codex write is not executed a second time for the same email', async (t) => {
+  const { root, workspace, calls } = setup(t, 'abrupt-write');
+  const job = claim('job-interrupted', 'thread-interrupted', 'Edit a file in this workspace.');
+  await assert.rejects(runClaim(job, { write: true }), /exited with 17/);
+  assert.equal(fs.readFileSync(path.join(workspace, 'partial.txt'), 'utf8'), 'one local edit\n');
+  const result = await runClaim(job, { write: true });
+  assert.equal(result.state, 'failed');
+  assert.match(result.summary, /previous local write attempt stopped/i);
+  assert.match(result.checks[0], /local edits may remain/);
+  assert.equal(fs.readFileSync(calls, 'utf8').trim().split('\n').filter((line) =>
+    JSON.parse(line).method === 'turn/start').length, 1);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, 'sessions.json'))).jobs[job.jobId], result);
 });

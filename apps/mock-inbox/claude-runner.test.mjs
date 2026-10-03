@@ -30,6 +30,10 @@ process.stdin.on('end', () => {
   const attachment = attachmentLine?.split(' (')[0].slice(3);
   const attachmentText = attachment ? fs.readFileSync(attachment, 'utf8') : null;
   fs.appendFileSync(path.join(process.cwd(), 'calls.jsonl'), JSON.stringify({ args, prompt, attachment, attachmentText, hadApiKey: Boolean(process.env.ANTHROPIC_API_KEY) }) + '\\n');
+  if (prompt.includes('[abrupt-write]')) {
+    fs.writeFileSync(path.join(process.cwd(), 'partial.txt'), 'one local edit\\n');
+    process.exit(17);
+  }
   const resumed = args.includes('--resume');
   const budgetFail = prompt.includes('[budget-fail]');
   const outsideDenied = prompt.includes('[outside-denied]');
@@ -134,6 +138,14 @@ process.stdin.on('end', () => {
   assert.match(denied.summary, /outside the selected workspace/);
   assert.match(denied.checks[0], /partial changes/);
   assert.match(JSON.stringify(denied.transcript), /File access outside the selected workspace was denied/);
+
+  const interrupted = await runClaim(claim('job-5', '[abrupt-write]'));
+  assert.equal(interrupted.state, 'failed');
+  assert.match(interrupted.checks[0], /partial changes/);
+  assert.equal(fs.readFileSync(path.join(workspace, 'partial.txt'), 'utf8'), 'one local edit\n');
+  const callsAfterFailure = fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').length;
+  assert.deepEqual(await runClaim(claim('job-5', '[abrupt-write]')), interrupted);
+  assert.equal(fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').length, callsAfterFailure);
 });
 
 test('Claude adapter keeps its session store outside the selected workspace', async (t) => {

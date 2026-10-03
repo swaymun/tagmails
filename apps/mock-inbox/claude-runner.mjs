@@ -218,12 +218,16 @@ export async function runClaim(claim) {
   if (existing && existing.workspace !== workspace) return fail('This email thread was paired with a different workspace.', write);
   const staged = await stageAgentAttachments(claim.request.attachments, workspace);
   try {
+    if (write) {
+      store.jobs[claim.jobId] = fail('A previous local write attempt stopped before TagMails recorded its result. Inspect the workspace before sending a new request.', true);
+      await saveStore(storeFile, store);
+    }
     const { result, sessionId } = await runClaude(claim, workspace, existing?.sessionId, staged, write);
     if (result.state === 'completed') {
       store.threads[claim.threadId] = { sessionId, workspace };
       store.jobs[claim.jobId] = result;
       await saveStore(storeFile, store);
-    } else if (result.usage) {
+    } else if (write || result.usage) {
       // A failed turn can still consume model tokens. Reuse that terminal result
       // if relay completion is retried, rather than paying for the same job twice.
       store.jobs[claim.jobId] = result;
