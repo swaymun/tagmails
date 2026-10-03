@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Resend } from 'resend';
 import { inspectResendInbound } from './resend-inbound.mjs';
 import { handleDeviceRequest } from './device-jobs.mjs';
+import { sendNextOutbox } from './outbox.mjs';
 
 const MAX_WEBHOOK_BYTES = 128_000;
 
@@ -52,6 +53,39 @@ function visibleGuests(message, owner, agent) {
   return guests;
 }
 
+async function recordReaction(env, account, message) {
+  const prior = await env.DB.prepare(`SELECT id FROM reactions
+    WHERE account_id = ? AND (provider_email_id = ? OR message_id = ?) LIMIT 1`)
+    .bind(account.id, message.providerEmailId, message.messageId).first();
+  if (prior) return Response.json({ accepted: true, reaction: true, duplicate: true });
+  const target = await env.DB.prepare(`SELECT m.id, m.thread_id, o.payload_json FROM messages m
+    JOIN outbox o ON o.provider_email_id = m.provider_email_id
+    WHERE m.account_id = ? AND m.message_id = ? AND m.direction = 'outbound' LIMIT 1`)
+    .bind(account.id, message.reactionTargetId).first();
+  if (!target) return Response.json({ accepted: false, reaction: true });
+  const payload = JSON.parse(target.payload_json);
+  const recipients = [...payload.to, ...(payload.cc ?? [])];
+  if (!recipients.includes(message.from)) return Response.json({ accepted: false, reaction: true });
+  if (message.from !== account.owner_email.toLowerCase()) {
+    const participant = await env.DB.prepare('SELECT email FROM participants WHERE thread_id = ? AND email = ? AND revoked_at IS NULL')
+      .bind(target.thread_id, message.from).first();
+    if (!participant) return Response.json({ accepted: false, reaction: true });
+  }
+  try {
+    await env.DB.prepare(`INSERT INTO reactions
+      (id, account_id, target_message_id, provider_email_id, message_id, sender_email, emoji)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(randomUUID(), account.id, target.id,
+      message.providerEmailId, message.messageId, message.from, message.reaction).run();
+  } catch (error) {
+    const raced = await env.DB.prepare(`SELECT id FROM reactions
+      WHERE account_id = ? AND (provider_email_id = ? OR message_id = ?) LIMIT 1`)
+      .bind(account.id, message.providerEmailId, message.messageId).first();
+    if (raced) return Response.json({ accepted: true, reaction: true, duplicate: true });
+    throw error;
+  }
+  return Response.json({ accepted: true, reaction: true, duplicate: false });
+}
+
 export async function handleInbound(request, env, { inspect = inspectResendInbound, getReceivedEmail = (id) => receivedEmail(env, id), fetchRaw = fetch } = {}) {
   if (request.method !== 'POST' || new URL(request.url).pathname !== '/webhooks/resend') return new Response('Not found', { status: 404 });
   if (!env.DB || !env.MAIL || !env.RESEND_WEBHOOK_SECRET || !env.RESEND_API_KEY || !env.AGENT_ADDRESS) {
@@ -77,6 +111,7 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
   const duplicate = await env.DB.prepare('SELECT id FROM messages WHERE account_id = ? AND (provider_email_id = ? OR message_id = ?) LIMIT 1')
     .bind(account.id, message.providerEmailId, message.messageId).first();
   if (duplicate) return Response.json({ accepted: true, duplicate: true });
+  if (message.reaction) return recordReaction(env, account, message);
 
   const ownerEmail = account.owner_email.toLowerCase();
   const owner = message.from === ownerEmail;
@@ -87,10 +122,6 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
       .bind(threadId, message.from).first();
     if (!participant) return Response.json({ accepted: false });
   }
-  // A Gmail reaction must never become an agent job. Outbound-message visibility
-  // verification and feedback storage are added with the send path.
-  if (message.reaction) return Response.json({ accepted: false, reaction: true });
-
   const id = randomUUID();
   const newThreadId = threadId ?? randomUUID();
   const guests = owner ? visibleGuests(message, ownerEmail, agent) : [];
@@ -128,5 +159,11 @@ export default {
     }
     try { return await handleInbound(request, env); }
     catch { return new Response('Inbound mail could not be accepted', { status: 500 }); }
+  },
+  async scheduled(_event, env) {
+    for (let index = 0; index < 10; index += 1) {
+      const result = await sendNextOutbox(env);
+      if (['idle', 'contended', 'accepted'].includes(result.state)) break;
+    }
   },
 };

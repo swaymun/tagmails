@@ -109,11 +109,18 @@ async function complete(env, device, body) {
   const key = `results/${device.account_id}/${body.jobId}/${body.leaseId}.json`;
   await env.MAIL.put(key, serialized, { httpMetadata: { contentType: 'application/json' } });
   const state = body.result.state === 'failed' ? 'failed' : 'completed';
-  const updated = await env.DB.prepare(`UPDATE jobs SET state = ?, result_key = ?, result_hash = ?, lease_until = NULL
-    WHERE id = ? AND device_id = ? AND lease_id = ? AND state = 'running'
-      AND lease_until > CURRENT_TIMESTAMP RETURNING id`)
-    .bind(state, key, resultHash, body.jobId, device.id, body.leaseId).first();
-  return updated ? json({ completed: true, duplicate: false }) : json({ error: 'Lease expired or replaced' }, 409);
+  // Completion and its one outbound reply commit together. A replaced lease
+  // cannot enqueue mail even if it uploaded a result object first.
+  const updated = await env.DB.batch([
+    env.DB.prepare(`UPDATE jobs SET state = ?, result_key = ?, result_hash = ?, lease_until = NULL
+      WHERE id = ? AND device_id = ? AND lease_id = ? AND state = 'running'
+        AND lease_until > CURRENT_TIMESTAMP`).bind(state, key, resultHash, body.jobId, device.id, body.leaseId),
+    env.DB.prepare(`INSERT INTO outbox (job_id) SELECT id FROM jobs
+      WHERE id = ? AND device_id = ? AND lease_id = ? AND result_hash = ? AND state = ?`)
+      .bind(body.jobId, device.id, body.leaseId, resultHash, state),
+  ]);
+  return (updated[1].meta?.changes ?? updated[1].changes) === 1
+    ? json({ completed: true, duplicate: false }) : json({ error: 'Lease expired or replaced' }, 409);
 }
 
 export async function handleDeviceRequest(request, env) {

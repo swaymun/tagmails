@@ -71,6 +71,8 @@ test('a paired device receives a signed, account-scoped claim and completes it o
   assert.equal((await call(env, paired.token, 'complete', { ...lease, result: { ...result, summary: 'Different' } })).status, 409);
   const job = sqlite.prepare('SELECT state, result_key FROM jobs').get();
   assert.equal(job.state, 'completed');
+  assert.equal(sqlite.prepare('SELECT job_id FROM outbox').get().job_id, signedJob.jobId);
+  assert.equal(sqlite.prepare('SELECT state FROM outbox').get().state, 'queued');
   assert.equal(JSON.parse(objects.get(job.result_key).toString()).summary, result.summary);
 });
 
@@ -90,6 +92,7 @@ test('expired leases are reclaimed and a stale or different device cannot comple
   assert.equal((await call(env, secondDevice.token, 'complete', { jobId: second.jobId, leaseId: first.leaseId, result })).status, 409);
   assert.equal((await call(env, secondDevice.token, 'complete', { jobId: second.jobId, leaseId: second.leaseId, result })).status, 200);
   assert.equal(sqlite.prepare('SELECT attempts FROM jobs').get().attempts, 2);
+  assert.equal(sqlite.prepare('SELECT count(*) n FROM outbox').get().n, 1);
 });
 
 test('a device cannot claim another account and revocation blocks access', async () => {
