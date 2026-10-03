@@ -2,3 +2,6 @@
 node_modules/
 target/
 .impeccable/review/
+.dev.vars*
+.env*
+.wrangler/

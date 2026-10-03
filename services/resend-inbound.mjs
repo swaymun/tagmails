@@ -65,7 +65,8 @@ export async function inspectResendInbound({ rawPayload, headers, webhookSecret,
   if (rawUrl.protocol !== 'https:' || !(rawUrl.hostname === 'resend.com' || rawUrl.hostname.endsWith('.resend.com'))) {
     throw new Error('Resend raw email URL is outside the provider domain');
   }
-  const parsed = await parseInbound(await boundedRaw(await fetchRaw(rawUrl.href)), agent, { verifiedDeliveryToAgent: true });
+  const rawMime = await boundedRaw(await fetchRaw(rawUrl.href));
+  const parsed = await parseInbound(rawMime, agent, { verifiedDeliveryToAgent: true });
   if (parsed.messageId !== metadata.message_id || parsed.from !== mailbox(metadata.from)) {
     throw new Error('Raw email does not match the verified Resend metadata');
   }
@@ -83,5 +84,6 @@ export async function inspectResendInbound({ rawPayload, headers, webhookSecret,
     attachments: parsed.attachments,
     reaction: parsed.reaction,
     reactionTargetId: parsed.reactionTargetId,
+    rawMime,
   };
 }

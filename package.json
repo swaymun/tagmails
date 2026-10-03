@@ -10,5 +10,8 @@
     "html-to-text": "10.0.1",
     "postal-mime": "2.7.5",
     "resend": "6.32.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.147.0"
   }
 }

@@ -57,6 +57,7 @@ test('verified Resend metadata and raw MIME yield a task without granting unobse
   assert.deepEqual(message.cc, ['teammate@gmail.com']);
   assert.deepEqual(message.bcc, []);
   assert.match(message.body, /launch copy/);
+  assert.equal(message.rawMime.toString(), item.raw);
 });
 
 test('verified delivery accepts an agent who was Bcc on its own provider copy', async () => {

@@ -1,0 +1,126 @@
+import { randomUUID } from 'node:crypto';
+import { Resend } from 'resend';
+import { inspectResendInbound } from './resend-inbound.mjs';
+
+const MAX_WEBHOOK_BYTES = 128_000;
+
+async function boundedWebhook(request) {
+  const reader = request.body?.getReader();
+  if (!reader) return '';
+  const chunks = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_WEBHOOK_BYTES) {
+        await reader.cancel();
+        throw new Error('Webhook too large');
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
+async function receivedEmail(env, emailId) {
+  const { data, error } = await new Resend(env.RESEND_API_KEY).emails.receiving.get(emailId);
+  if (error || !data) throw new Error('Resend could not retrieve the received email');
+  return data;
+}
+
+async function parentThread(db, accountId, parentIds) {
+  for (const messageId of [...parentIds].reverse()) {
+    const row = await db.prepare(`SELECT m.thread_id FROM messages m
+      JOIN threads t ON t.id = m.thread_id
+      WHERE t.account_id = ? AND m.message_id = ? LIMIT 1`).bind(accountId, messageId).first();
+    if (row) return row.thread_id;
+  }
+  return null;
+}
+
+function visibleGuests(message, owner, agent) {
+  const guests = [...new Set([...(message.to ?? []), ...(message.cc ?? [])])]
+    .filter((email) => email !== owner && email !== agent);
+  if (guests.length > 20 || guests.some((email) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
+    throw new Error('Owner email has too many or invalid visible participants');
+  }
+  return guests;
+}
+
+export async function handleInbound(request, env, { inspect = inspectResendInbound, getReceivedEmail = (id) => receivedEmail(env, id), fetchRaw = fetch } = {}) {
+  if (request.method !== 'POST' || new URL(request.url).pathname !== '/webhooks/resend') return new Response('Not found', { status: 404 });
+  if (!env.DB || !env.MAIL || !env.RESEND_WEBHOOK_SECRET || !env.RESEND_API_KEY || !env.AGENT_ADDRESS) {
+    throw new Error('Resend relay bindings and secrets are incomplete');
+  }
+  if (Number(request.headers.get('content-length') || 0) > MAX_WEBHOOK_BYTES) return new Response('Webhook too large', { status: 413 });
+  let rawPayload;
+  try { rawPayload = await boundedWebhook(request); }
+  catch (error) {
+    if (error.message === 'Webhook too large') return new Response('Webhook too large', { status: 413 });
+    throw error;
+  }
+  const message = await inspect({
+    rawPayload, headers: request.headers, webhookSecret: env.RESEND_WEBHOOK_SECRET,
+    apiKey: env.RESEND_API_KEY, agentAddress: env.AGENT_ADDRESS,
+    getReceivedEmail, fetchRaw,
+  });
+  if (message.ignored) return Response.json({ accepted: false });
+  const agent = env.AGENT_ADDRESS.toLowerCase();
+  const account = await env.DB.prepare('SELECT id, owner_email FROM accounts WHERE agent_email = ? AND active = 1')
+    .bind(agent).first();
+  if (!account) return Response.json({ accepted: false });
+  const duplicate = await env.DB.prepare('SELECT id FROM messages WHERE account_id = ? AND (provider_email_id = ? OR message_id = ?) LIMIT 1')
+    .bind(account.id, message.providerEmailId, message.messageId).first();
+  if (duplicate) return Response.json({ accepted: true, duplicate: true });
+
+  const owner = message.from === account.owner_email;
+  const threadId = await parentThread(env.DB, account.id, message.parentIds ?? []);
+  if (!owner) {
+    if (!threadId) return Response.json({ accepted: false });
+    const participant = await env.DB.prepare('SELECT email FROM participants WHERE thread_id = ? AND email = ? AND revoked_at IS NULL')
+      .bind(threadId, message.from).first();
+    if (!participant) return Response.json({ accepted: false });
+  }
+  // A Gmail reaction must never become an agent job. Outbound-message visibility
+  // verification and feedback storage are added with the send path.
+  if (message.reaction) return Response.json({ accepted: false, reaction: true });
+
+  const id = randomUUID();
+  const newThreadId = threadId ?? randomUUID();
+  const guests = owner ? visibleGuests(message, account.owner_email, agent) : [];
+  const objectKey = `inbound/${account.id}/${message.providerEmailId}.eml`;
+  await env.MAIL.put(objectKey, message.rawMime, { httpMetadata: { contentType: 'message/rfc822' } });
+  const statements = [];
+  if (!threadId) statements.push(env.DB.prepare('INSERT INTO threads (id, account_id, subject) VALUES (?, ?, ?)')
+    .bind(newThreadId, account.id, message.subject.slice(0, 300)));
+  statements.push(env.DB.prepare(`INSERT INTO messages
+    (id, account_id, thread_id, provider_email_id, message_id, direction, sender_email, object_key)
+    VALUES (?, ?, ?, ?, ?, 'inbound', ?, ?)`).bind(id, account.id, newThreadId, message.providerEmailId, message.messageId, message.from, objectKey));
+  for (const guest of guests) {
+    statements.push(env.DB.prepare(`INSERT INTO participants (thread_id, email) VALUES (?, ?)
+      ON CONFLICT(thread_id, email) DO UPDATE SET revoked_at = NULL`).bind(newThreadId, guest));
+  }
+  statements.push(env.DB.prepare("INSERT INTO jobs (id, thread_id, message_id, state) VALUES (?, ?, ?, 'queued')")
+    .bind(randomUUID(), newThreadId, id));
+  try {
+    await env.DB.batch(statements);
+  } catch (error) {
+    // A concurrent delivery may have committed the same provider email first.
+    const raced = await env.DB.prepare('SELECT id FROM messages WHERE account_id = ? AND (provider_email_id = ? OR message_id = ?) LIMIT 1')
+      .bind(account.id, message.providerEmailId, message.messageId).first();
+    if (raced) return Response.json({ accepted: true, duplicate: true });
+    throw error;
+  }
+  return Response.json({ accepted: true, duplicate: false });
+}
+
+export default {
+  async fetch(request, env) {
+    try { return await handleInbound(request, env); }
+    catch { return new Response('Inbound mail could not be accepted', { status: 500 }); }
+  },
+};

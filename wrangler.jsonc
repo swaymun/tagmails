@@ -1,0 +1,9 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "tagmails-relay",
+  "main": "services/relay-worker.mjs",
+  "compatibility_date": "2026-10-02",
+  "d1_databases": [{ "binding": "DB", "database_name": "tagmails-relay", "migrations_dir": "services/migrations" }],
+  "r2_buckets": [{ "binding": "MAIL" }],
+  "secrets": { "required": ["RESEND_API_KEY", "RESEND_WEBHOOK_SECRET", "AGENT_ADDRESS"] }
+}
