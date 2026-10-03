@@ -152,6 +152,7 @@ function render() {
   if (!data) return;
   const thread = data.threads.find((item) => item.id === currentThread);
   if (!thread) currentThread = null;
+  document.body.classList.toggle('thread-open', Boolean(currentThread));
   $('#inboxView').hidden = Boolean(currentThread);
   $('#threadView').hidden = !currentThread;
   $('#inboxTools').hidden = Boolean(currentThread);
@@ -207,6 +208,7 @@ function openThread(id) {
 }
 
 $('#composeButton').addEventListener('click', () => openCompose());
+$('#mobileComposeButton').addEventListener('click', () => openCompose());
 $('#closeCompose').addEventListener('click', closeCompose);
 $('#backButton').addEventListener('click', () => {
   const previous = currentThread;
