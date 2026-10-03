@@ -53,6 +53,16 @@ export class Lab {
     this.state.events = this.state.events.slice(0, 100);
   }
 
+  statusReaction(job, status) {
+    const emoji = { received: '👀', working: '📝', completed: '✅', failed: '⚠️' }[status];
+    if (!emoji) return;
+    const request = this.findMessage(job.requestMessageId)?.message;
+    if (!request || request.reactions?.some((reaction) => reaction.status === status && reaction.jobId === job.id)) return;
+    request.reactions ??= [];
+    request.reactions.push({ id: `<${job.id}.${status}@wonder.test>`, from: AGENT,
+      emoji, status, jobId: job.id, at: now() });
+  }
+
   seed() {
     this.state.online = true;
     this.send({ from: OWNER, subject: 'What did we decide for the beta?', body: 'Catch me up on the decisions in our launch thread and tell me what still needs an owner.', fixture: 'catchup' });
@@ -166,6 +176,7 @@ export class Lab {
     const fixture = ['catchup', 'incident', 'metrics', 'callprep'].includes(input.fixture) ? input.fixture : null;
     const job = { id: this.next('job'), threadId: target.id, requestMessageId: id, state: 'queued', model, fixture, approved: false, createdAt: now() };
     this.state.jobs.push(job);
+    if (!model.error) this.statusReaction(job, 'received');
     this.event('queued', `Accepted mail from ${from}; ${this.state.online ? 'ready to process' : 'waiting for the daemon'}.`, target.id, job.id);
     this.save();
     return { accepted: true, duplicate: false, threadId: target.id, jobId: job.id };
@@ -201,6 +212,7 @@ export class Lab {
     job.state = 'running';
     job.claimedAt = now();
     job.claimId = this.next('claim');
+    if (!job.model.error) this.statusReaction(job, 'working');
     this.event('running', `Rust mock daemon claimed the task for ${job.model.id ?? 'unresolved model'}.`, thread.id, job.id);
     this.save();
     return {
@@ -252,6 +264,7 @@ export class Lab {
     if (realAgent) job.runtime = input.runtime;
     delete job.claimedAt;
     delete job.claimId;
+    this.statusReaction(job, result.state);
     this.reply(thread, request, job, result);
     this.event(result.state, result.summary, thread.id, job.id);
     this.save();
@@ -313,6 +326,7 @@ export class Lab {
     const thread = this.state.threads.find((item) => item.id === job.threadId);
     const request = thread.messages.find((item) => item.id === job.requestMessageId);
     job.state = 'running';
+    if (!job.model.error) this.statusReaction(job, 'working');
     this.event('running', `Mock runtime started with ${job.model.id ?? 'unresolved model'}.`, thread.id, job.id);
     this.save();
 
@@ -325,7 +339,7 @@ export class Lab {
     } else if (request.text.includes('[simulate:fail]')) {
       result = { state: 'failed', summary: 'The mock runner stopped at the requested failure fixture.', details: [], checks: ['No files changed and no external action occurred.'], links: [traceLink], note: 'This is a synthetic failure preview.' };
     } else if (job.fixture === 'catchup') {
-      result = { state: 'completed', summary: 'The beta plan centers on emailing an existing local Codex or Claude agent, then replying in the same thread to continue the work.', details: ['Decided: Google sign-in with a verified Gmail sender for the first beta.', 'Decided: keep model credentials and project execution on the customer’s Mac.', 'Decided: TagMails is the public brand. Still open: domain purchase, source license, and final retention and pricing settings.'], checks: ['This answer uses a synthetic fixture based on the local plan; no external source or model was queried.'], links: [traceLink], note: 'Synthetic example for email layout testing. No model was called.' };
+      result = { state: 'completed', summary: 'The beta plan centers on emailing an existing local Codex or Claude agent, then replying in the same thread to continue the work.', details: ['Decided: Google sign-in with a verified Gmail sender for the first beta.', 'Decided: keep model credentials and project execution on the customer’s Mac; API-funded runs are outside the first beta.', 'Decided: TagMails is the public brand and tagmails.com has been purchased. Still open: source license and final retention and pricing settings.'], checks: ['This answer uses a synthetic fixture based on the local plan; no external source or model was queried.'], links: [traceLink], note: 'Synthetic example for email layout testing. No model was called.' };
     } else if (job.fixture === 'incident') {
       result = { state: 'completed', summary: 'Draft investigation: the screenshot must travel as an authenticated attachment through persistence and trace rendering.', details: ['Trace the inbound attachment bytes, stored object reference, and viewer payload.', 'Prepare a draft fix that preserves the image after daemon restart.', 'Ask for a real test email before claiming the issue is resolved.'], checks: ['This is a simulated investigation. No code changed and no PR was opened.'], links: [traceLink], note: 'Synthetic example for email layout testing. No model was called.' };
     } else if (job.fixture === 'metrics') {
@@ -336,6 +350,7 @@ export class Lab {
       result = { state: 'completed', preview: true, summary: 'This email previews the reply layout and thread routing. No agent answered the request.', details: [`The ${job.model.id} (${job.model.effort}) route was selected${job.model.source === 'explicit' ? ' from your email' : ' by default'}.`, 'The request remains in this thread so you can inspect a follow-up and shared recipients.'], checks: ['No model was called and no files changed in this preview.'], links: [traceLink], note: 'This is a synthetic email preview. Real run claims will appear only after a runtime is connected.' };
     }
     job.state = result.state;
+    this.statusReaction(job, result.state);
     this.reply(thread, request, job, result);
     this.event(result.state, result.summary, thread.id, job.id);
     this.save();

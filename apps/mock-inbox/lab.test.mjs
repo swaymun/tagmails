@@ -66,6 +66,30 @@ test('offline mail survives restart and produces a threaded multipart reply', (t
   assert.match(readGeneratedMime(outgoing.mime).text, /Reply to this email/);
 });
 
+test('the Gmail lab shows ordered status reactions through a shared follow-up and failure', (t) => {
+  const { lab, file } = freshLab(t);
+  const owner = lab.send({ from: 'owner@gmail.com', cc: 'guest@gmail.com',
+    subject: 'Shared review', body: 'Please review the plan.' });
+  const first = lab.findMessage(lab.state.jobs[0].requestMessageId).message;
+  assert.deepEqual(first.reactions.map((reaction) => reaction.emoji), ['👀']);
+  const restarted = new Lab(file, { seed: false });
+  restarted.setOnline(true);
+  restarted.processNext();
+  assert.deepEqual(restarted.findMessage(first.id).message.reactions.map((reaction) => reaction.emoji),
+    ['👀', '📝', '✅']);
+  const reply = restarted.send({ from: 'guest@gmail.com', replyTo: first.id,
+    subject: 'Re: Shared review', body: 'Please continue.' });
+  assert.equal(reply.threadId, owner.threadId);
+  const guestMessage = restarted.findMessage(restarted.state.jobs.at(-1).requestMessageId).message;
+  restarted.processNext();
+  assert.deepEqual(guestMessage.reactions.map((reaction) => reaction.emoji), ['👀', '📝', '✅']);
+  const failed = restarted.send({ from: 'owner@gmail.com', subject: 'Failure', body: '[simulate:fail]' });
+  const failedMessage = restarted.findMessage(restarted.state.jobs.at(-1).requestMessageId).message;
+  restarted.processNext();
+  assert.equal(failed.threadId !== owner.threadId, true);
+  assert.deepEqual(failedMessage.reactions.map((reaction) => reaction.emoji), ['👀', '📝', '⚠️']);
+});
+
 test('a reply continues the same thread and honors explicit model routing', (t) => {
   const { lab } = freshLab(t);
   const first = lab.send({ from: 'owner@gmail.com', subject: 'Bug report', body: 'Find the cause.' });
@@ -297,6 +321,8 @@ test('Rust claim completes once and an expired claim cannot complete newer work'
   lab.send({ from: 'owner@gmail.com', subject: 'Worker handoff', body: 'Summarize the plan.' });
   const first = lab.claimNext();
   assert.equal(first.claimed, true);
+  const request = lab.findMessage(lab.state.jobs[0].requestMessageId).message;
+  assert.deepEqual(request.reactions.map((reaction) => reaction.emoji), ['👀', '📝']);
   assert.equal(lab.claimNext().claimed, false);
   lab.state.jobs[0].claimedAt = new Date(Date.now() - 61_000).toISOString();
   const replacement = lab.claimNext();
@@ -306,6 +332,7 @@ test('Rust claim completes once and an expired claim cannot complete newer work'
   assert.throws(() => lab.completeClaim(first.jobId, first.claimId, result), /expired or been replaced/);
   assert.equal(lab.completeClaim(replacement.jobId, replacement.claimId, result).state, 'completed');
   assert.equal(lab.completeClaim(replacement.jobId, replacement.claimId, result).duplicate, true);
+  assert.deepEqual(request.reactions.map((reaction) => reaction.emoji), ['👀', '📝', '✅']);
   assert.equal(lab.state.threads[0].messages.length, 2);
 });
 

@@ -109,7 +109,7 @@ function renderThread(thread) {
       const href = `/api/attachment?messageId=${encodeURIComponent(message.id)}&attachmentId=${encodeURIComponent(attachment.id)}`;
       return `<a class="attachment-card" href="${href}" target="_blank" rel="noopener" download="${esc(attachment.name)}">${attachment.previewable ? `<img src="${href}" alt="Preview of ${esc(attachment.name)}" loading="lazy">` : `<span class="attachment-file">${icon('attachment')}</span>`}<span><strong>${esc(attachment.name)}</strong><small>${Math.max(1, Math.ceil(attachment.size / 1024))} KB</small></span></a>`;
     }).join('');
-    const reactions = (message.reactions ?? []).map((reaction) => `<span class="reaction-chip" title="${esc(reaction.from)} reacted">${esc(reaction.emoji)} ${esc(reaction.from === data.owner ? 'you' : reaction.from)}</span>`).join('');
+    const reactions = (message.reactions ?? []).map((reaction) => `<span class="reaction-chip" title="${esc(reaction.from)} reacted">${esc(reaction.emoji)} ${esc(reaction.from === data.owner ? 'you' : reaction.from === data.agent ? 'Agent' : reaction.from)}</span>`).join('');
     const visibleRecipients = [message.to, ...message.cc].join(',').split(',').map((address) => address.trim()).filter(Boolean);
     const recipientCount = new Set([...visibleRecipients, ...(message.bcc ?? [])]).size;
     const canReact = outgoing && visibleRecipients.includes(data.owner) && recipientCount <= 20;
