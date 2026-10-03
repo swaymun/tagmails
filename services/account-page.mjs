@@ -18,6 +18,8 @@ export function accountPage() {
   input{box-sizing:border-box;width:100%;max-width:100%;padding:10px;margin:8px 0;border:1px solid #b5b0a5;border-radius:8px;font:inherit}input:focus-visible{outline:3px solid #b98432;outline-offset:2px}
   code,pre{background:#f0eee8;border-radius:6px;padding:3px 6px;overflow-wrap:anywhere}
   pre{white-space:pre-wrap;padding:12px}.device{border-top:1px solid #e7e2d8;padding:12px 0;display:flex;justify-content:space-between;gap:12px;align-items:center}
+  .thread{border-top:1px solid #e7e2d8;padding:16px 0}.thread h3{font-size:1rem;margin:0 0 4px;overflow-wrap:anywhere}
+  .thread label{display:block;margin-top:12px}.thread .device{padding:8px 0}.thread .device span{overflow-wrap:anywhere}
   #status{min-height:1.5em}#signedIn[hidden],#signedOut[hidden]{display:none}
 </style>
 <script src="https://accounts.google.com/gsi/client" defer></script>
@@ -48,6 +50,48 @@ async function devices() {
       row.append(button);
     }
     list.append(row);
+  }
+}
+async function threads() {
+  const data = await api('/api/account/threads');
+  const list = $('threads'); list.replaceChildren();
+  if (!data.threads.length) { list.textContent = 'No email threads yet.'; return; }
+  for (const thread of data.threads) {
+    const section = document.createElement('div'); section.className = 'thread';
+    const title = document.createElement('h3'); title.textContent = thread.subject;
+    section.append(title);
+    for (const person of thread.participants) {
+      const row = document.createElement('div'); row.className = 'device';
+      const name = document.createElement('span');
+      name.textContent = person.email + (person.revokedAt ? ' · revoked' : ' · can reply');
+      row.append(name);
+      if (!person.revokedAt) {
+        const revoke = document.createElement('button'); revoke.className = 'secondary'; revoke.textContent = 'Revoke';
+        revoke.setAttribute('aria-label', 'Revoke ' + person.email + ' from ' + thread.subject);
+        revoke.addEventListener('click', async () => {
+          try {
+            await api('/api/account/threads/' + thread.id + '/revoke', { method: 'POST',
+              headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: person.email }) });
+            await threads(); status('Participant access revoked.');
+          } catch (error) { status(error.message); }
+        });
+        row.append(revoke);
+      }
+      section.append(row);
+    }
+    const label = document.createElement('label'); label.textContent = 'Grant reply access to an email address';
+    const input = document.createElement('input'); input.type = 'email'; input.placeholder = 'teammate@gmail.com'; input.autocomplete = 'off';
+    label.append(input); section.append(label);
+    const invite = document.createElement('button'); invite.textContent = 'Grant access';
+    invite.addEventListener('click', async () => {
+      invite.disabled = true;
+      try {
+        await api('/api/account/threads/' + thread.id + '/invite', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: input.value }) });
+        await threads(); status('Reply access granted. No invitation email was sent.');
+      } catch (error) { status(error.message); invite.disabled = false; }
+    });
+    section.append(invite); list.append(section);
   }
 }
 async function billing() {
@@ -95,6 +139,8 @@ async function refresh() {
   if (next?.startsWith('/runs/') && /^[0-9a-f-]{36}$/i.test(next.slice(6))) { location.assign(next); return; }
   try { await devices(); }
   catch { $('devices').textContent = 'Devices could not be loaded. Reload to try again.'; }
+  try { await threads(); }
+  catch { $('threads').textContent = 'Threads could not be loaded. Reload to try again.'; }
   try { await billing(); }
   catch { $('balance').textContent = 'Test balance is unavailable. Reload to try again.'; }
   status(new URLSearchParams(location.search).get('topup') === 'returned'
@@ -156,6 +202,10 @@ document.addEventListener('DOMContentLoaded', () => {
     try { await billing(); status('Test balance refreshed.'); }
     catch { status('Test balance is unavailable. Reload to try again.'); }
   });
+  $('refreshThreads').addEventListener('click', async () => {
+    try { await threads(); status('Threads refreshed.'); }
+    catch { status('Threads could not be loaded. Reload to try again.'); }
+  });
   $('signOut').addEventListener('click', async () => {
     try { await api('/api/auth/logout', { method: 'POST' }); await refresh(); }
     catch (error) { status(error.message); }
@@ -181,6 +231,7 @@ document.addEventListener('DOMContentLoaded', () => {
     <button id="copyInstall" class="secondary">Copy start command</button>
     <p class="muted">The installer checks the path and token, then registers a macOS LaunchAgent. It refuses to overwrite an existing TagMails agent. The checkout and local CLI tools must remain available on this Mac.</p></section>
   <section class="card"><h2>Devices</h2><div id="devices"></div></section>
+  <section class="card"><h2>Shared threads</h2><p class="muted">Only you can grant or revoke reply access. To include someone hidden in Bcc, grant their address here after you send the thread. This does not send them an invitation or reveal them in a reply.</p><button id="refreshThreads" class="secondary">Refresh threads</button><div id="threads"></div></section>
   <section class="card"><h2>Test credits</h2><p id="balance">Loading balance…</p>
     <p class="muted">This is a non-spendable test wallet. The proposed exchange price and real payments are not enabled.</p>
     <button id="topup" hidden>Add $10 in Stripe test mode</button> <button id="refreshBalance" class="secondary">Refresh balance</button></section>

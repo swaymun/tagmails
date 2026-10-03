@@ -45,8 +45,11 @@ async function claim(env, device) {
     lease_until = datetime('now', '+${LEASE_SECONDS} seconds'), attempts = attempts + 1
     WHERE id = (
       SELECT j.id FROM jobs j JOIN threads t ON t.id = j.thread_id
+      JOIN messages m ON m.id = j.message_id JOIN accounts a ON a.id = t.account_id
       WHERE t.account_id = ? AND (j.state = 'queued' OR
         (j.state = 'running' AND (j.lease_until IS NULL OR j.lease_until <= CURRENT_TIMESTAMP)))
+        AND (m.sender_email = a.owner_email OR EXISTS (
+          SELECT 1 FROM participants p WHERE p.thread_id = t.id AND p.email = m.sender_email AND p.revoked_at IS NULL))
       ORDER BY j.created_at, j.id LIMIT 1
     ) RETURNING id, thread_id, message_id, lease_until`)
     .bind(device.id, leaseId, device.account_id).first();

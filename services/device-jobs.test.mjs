@@ -105,3 +105,17 @@ test('a device cannot claim another account and revocation blocks access', async
   sqlite.prepare('UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE id = ?').run(other.id);
   assert.equal((await call(env, other.token, 'claim')).status, 401);
 });
+
+test('a revoked participant email cannot be claimed even if its job remains queued', async () => {
+  const { env, sqlite } = bindings();
+  const paired = device(sqlite);
+  await inbound(env);
+  const threadId = sqlite.prepare('SELECT id FROM threads').get().id;
+  sqlite.prepare("UPDATE jobs SET state = 'completed'").run();
+  sqlite.prepare('INSERT INTO participants (thread_id, email, revoked_at) VALUES (?, ?, CURRENT_TIMESTAMP)')
+    .run(threadId, 'guest@gmail.com');
+  sqlite.prepare(`INSERT INTO messages (id, account_id, thread_id, message_id, direction, sender_email, object_key)
+    VALUES (?, 'account-1', ?, ?, 'inbound', 'guest@gmail.com', ?)`).run('revoked-message', threadId, '<revoked@gmail.com>', 'inbound/revoked.eml');
+  sqlite.prepare("INSERT INTO jobs (id, thread_id, message_id, state) VALUES ('revoked-job', ?, 'revoked-message', 'queued')").run(threadId);
+  assert.deepEqual((await call(env, paired.token, 'claim')).body, { claimed: false });
+});

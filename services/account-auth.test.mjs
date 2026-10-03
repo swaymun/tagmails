@@ -5,6 +5,7 @@ import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { bindings } from './bindings-fixture.mjs';
 import { handleAccountRequest, verifyGoogleCredential } from './account-auth.mjs';
 import { handleDeviceRequest } from './device-jobs.mjs';
+import { handleInbound } from './relay-worker.mjs';
 
 const clientId = 'tagmails-test.apps.googleusercontent.com';
 
@@ -122,4 +123,40 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   }), env)).status, 401);
   assert.equal((await handleAccountRequest(request('/api/auth/logout', 'POST', {}, cookie), env, options)).status, 200);
   assert.equal((await handleAccountRequest(request('/api/account/me', 'GET', undefined, cookie), env, options)).status, 401);
+});
+
+test('only the signed-in owner grants and revokes a hidden participant on an existing thread', async () => {
+  const { env, sqlite } = bindings();
+  env.GOOGLE_CLIENT_ID = clientId;
+  env.AGENT_DOMAIN = 'tagmails.test';
+  const owner = { verifyIdentity: async () => ({ sub: 'google-sub-1', email: 'owner@gmail.com' }) };
+  const signedIn = await handleAccountRequest(request('/api/auth/google', 'POST', { credential: 'test' }), env, owner);
+  const cookie = signedIn.headers.get('set-cookie').split(';')[0];
+  const deliver = async (id, from, parentIds = [], bcc = []) => {
+    const message = { providerEmailId: id, messageId: `<${id}@gmail.com>`, from,
+      agentAddress: 'agent@wonder.test', to: ['agent@wonder.test'], cc: [], bcc,
+      parentIds, subject: 'Hidden review', body: 'Review this.', attachments: [],
+      rawMime: Buffer.from(`From: ${from}\r\nMessage-ID: <${id}@gmail.com>\r\n`) };
+    const response = await handleInbound(request('/webhooks/resend', 'POST', {}), env, { inspect: async () => message });
+    return response.json();
+  };
+  assert.deepEqual(await deliver('owner-first', 'owner@gmail.com', [], ['hidden@gmail.com']), { accepted: true, duplicate: false });
+  const threadId = sqlite.prepare('SELECT id FROM threads').get().id;
+  assert.deepEqual(await deliver('hidden-before', 'hidden@gmail.com', ['<owner-first@gmail.com>']), { accepted: false });
+  const path = `/api/account/threads/${threadId}`;
+  assert.equal((await handleAccountRequest(request(`${path}/invite`, 'POST', { email: 'hidden@gmail.com' }, cookie, 'https://elsewhere.test'), env, owner)).status, 403);
+  assert.equal((await handleAccountRequest(request(`${path}/invite`, 'POST', { email: 'bad address' }, cookie), env, owner)).status, 400);
+  assert.deepEqual(await (await handleAccountRequest(request(`${path}/invite`, 'POST', { email: 'HIDDEN@gmail.com' }, cookie), env, owner)).json(), { invited: true });
+  const listed = await handleAccountRequest(request('/api/account/threads', 'GET', undefined, cookie), env, owner);
+  assert.deepEqual((await listed.json()).threads[0].participants, [{ email: 'hidden@gmail.com', revokedAt: null }]);
+  assert.deepEqual(await deliver('hidden-after', 'hidden@gmail.com', ['<owner-first@gmail.com>']), { accepted: true, duplicate: false });
+  const other = await handleAccountRequest(request('/api/auth/google', 'POST', { credential: 'test' }), env, {
+    verifyIdentity: async () => ({ sub: 'another-sub', email: 'another@gmail.com' }),
+  });
+  const otherCookie = other.headers.get('set-cookie').split(';')[0];
+  assert.equal((await handleAccountRequest(request(`${path}/invite`, 'POST', { email: 'stranger@gmail.com' }, otherCookie), env, owner)).status, 404);
+  assert.deepEqual((await (await handleAccountRequest(request('/api/account/threads', 'GET', undefined, otherCookie), env, owner)).json()).threads, []);
+  assert.deepEqual(await (await handleAccountRequest(request(`${path}/revoke`, 'POST', { email: 'hidden@gmail.com' }, cookie), env, owner)).json(), { revoked: true });
+  assert.equal(sqlite.prepare("SELECT state FROM jobs j JOIN messages m ON m.id = j.message_id WHERE m.sender_email = 'hidden@gmail.com'").get().state, 'failed');
+  assert.deepEqual(await deliver('hidden-revoked', 'hidden@gmail.com', ['<owner-first@gmail.com>']), { accepted: false });
 });
