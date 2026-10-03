@@ -164,8 +164,9 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
       ON CONFLICT(thread_id, email) DO UPDATE SET revoked_at = NULL`).bind(newThreadId, guest));
   }
   const jobId = randomUUID();
+  const model = chooseModel(message.body, account.default_model);
   statements.push(env.DB.prepare("INSERT INTO jobs (id, thread_id, message_id, state, model_json) VALUES (?, ?, ?, 'queued', ?)")
-    .bind(jobId, newThreadId, id, JSON.stringify(chooseModel(message.body, account.default_model))));
+    .bind(jobId, newThreadId, id, JSON.stringify(model)));
   try {
     await env.DB.batch(statements);
   } catch (error) {
@@ -180,7 +181,7 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
     catch { console.error('Test email credit reservation is delayed'); }
     const charge = await env.DB.prepare('SELECT job_id FROM test_email_charges WHERE job_id = ? AND state = ?')
       .bind(jobId, 'reserved').first();
-    return Response.json({ accepted: true, duplicate: false, awaitingCredits: !charge });
+    return Response.json({ accepted: true, duplicate: false, awaitingCredits: !model.error && !charge });
   }
   return Response.json({ accepted: true, duplicate: false });
 }

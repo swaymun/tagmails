@@ -28,12 +28,13 @@ function credit(sqlite, accountId, amount, suffix) {
 async function deliver(env, id, from = 'owner@gmail.com', overrides = {}) {
   const agentAddress = overrides.agentAddress ?? 'agent@wonder.test';
   const messageId = `<${id}@gmail.com>`;
+  const body = overrides.body ?? 'Check this.';
   const rawMime = Buffer.from([
     `From: ${from}`, `To: ${agentAddress}`, 'Subject: Pilot', `Message-ID: ${messageId}`,
-    'Content-Type: text/plain; charset=utf-8', '', 'Check this.',
+    'Content-Type: text/plain; charset=utf-8', '', body,
   ].join('\r\n'));
   const mail = { providerEmailId: id, messageId, from, agentAddress, to: [agentAddress], cc: [], bcc: [],
-    subject: 'Pilot', body: 'Check this.', parentIds: [], rawMime, ...overrides };
+    subject: 'Pilot', body, parentIds: [], rawMime, ...overrides };
   const response = await handleInbound(new Request('https://relay.test/webhooks/resend', {
     method: 'POST', body: '{}',
   }), env, { inspect: async () => mail });
@@ -78,6 +79,32 @@ test('pilot credits reserve oldest queued email once, isolate accounts, and gate
   const claimed = await claim(env, token);
   assert.equal(claimed.claimed, true);
   assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM test_email_charges WHERE account_id = ?').get('account-1').n, 1);
+});
+
+test('an invalid model gets a free clarification reply while funded work still waits', async () => {
+  const { env, sqlite } = pilot();
+  const token = device(sqlite);
+  assert.equal((await deliver(env, 'valid-1')).awaitingCredits, true);
+  assert.equal((await deliver(env, 'invalid-1', 'owner@gmail.com', {
+    body: 'Model: Not available\n\nPlease check this.',
+  })).awaitingCredits, false);
+  assert.deepEqual(await testWalletSnapshot(env, 'account-1'), { balanceCents: 0, waitingEmails: 1 });
+  const claimed = await claim(env, token);
+  assert.equal(claimed.claimed, true);
+  const envelope = JSON.parse(Buffer.from(claimed.payload, 'base64url').toString());
+  assert.match(envelope.model.error, /not available/i);
+  await env.MAIL.put('results/clarification.json', JSON.stringify({
+    state: 'needs_clarification', summary: envelope.model.error,
+  }));
+  sqlite.prepare("UPDATE jobs SET state = 'completed', result_key = ? WHERE id = ?")
+    .run('results/clarification.json', envelope.jobId);
+  sqlite.prepare('INSERT INTO outbox (job_id) VALUES (?)').run(envelope.jobId);
+  assert.equal((await sendNextOutbox(env, {
+    sendEmail: async () => ({ data: { id: 'sent-clarification' } }),
+    getSentEmail: async () => ({ data: { message_id: '<sent-clarification@tagmails.test>' } }),
+  })).state, 'sent');
+  assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM test_email_charges').get().n, 0);
+  assert.deepEqual(await testWalletSnapshot(env, 'account-1'), { balanceCents: 0, waitingEmails: 1 });
 });
 
 test('a signed paid test Checkout funds waiting email without a duplicate debit', async () => {

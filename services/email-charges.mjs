@@ -23,6 +23,7 @@ export async function reservePendingTestEmails(env, accountId, limit = 20) {
       JOIN accounts a ON a.id = t.account_id
       JOIN messages m ON m.id = j.message_id
       WHERE t.account_id = ? AND a.active = 1 AND j.state = 'queued'
+        AND json_extract(j.model_json, '$.error') IS NULL
         AND (m.sender_email = a.owner_email OR EXISTS
           (SELECT 1 FROM participants p WHERE p.thread_id = t.id
             AND p.email = m.sender_email AND p.revoked_at IS NULL))
@@ -45,6 +46,7 @@ export async function fundPendingTestEmails(env) {
     JOIN accounts a ON a.id = t.account_id
     WHERE j.state = 'queued' AND NOT EXISTS
       (SELECT 1 FROM test_email_charges c WHERE c.job_id = j.id)
+      AND json_extract(j.model_json, '$.error') IS NULL
       AND (m.sender_email = a.owner_email OR EXISTS
         (SELECT 1 FROM participants p WHERE p.thread_id = t.id
           AND p.email = m.sender_email AND p.revoked_at IS NULL))
@@ -61,6 +63,7 @@ export async function testWalletSnapshot(env, accountId) {
       JOIN messages m ON m.id = j.message_id JOIN accounts a ON a.id = t.account_id
       WHERE t.account_id = ? AND j.state = 'queued'
         AND NOT EXISTS (SELECT 1 FROM test_email_charges c WHERE c.job_id = j.id)
+        AND json_extract(j.model_json, '$.error') IS NULL
         AND (m.sender_email = a.owner_email OR EXISTS
           (SELECT 1 FROM participants p WHERE p.thread_id = t.id
             AND p.email = m.sender_email AND p.revoked_at IS NULL))) AS waiting

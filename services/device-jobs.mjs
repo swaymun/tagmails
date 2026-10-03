@@ -43,7 +43,8 @@ async function boundedJson(request) {
 async function claim(env, device) {
   const leaseId = randomUUID();
   const funded = testBillingEnabled(env)
-    ? "AND EXISTS (SELECT 1 FROM test_email_charges c WHERE c.job_id = j.id AND c.state = 'reserved')"
+    ? `AND (json_extract(j.model_json, '$.error') IS NOT NULL OR EXISTS
+        (SELECT 1 FROM test_email_charges c WHERE c.job_id = j.id AND c.state = 'reserved'))`
     : '';
   const row = await env.DB.prepare(`UPDATE jobs SET
     state = 'running', device_id = ?, lease_id = ?,
