@@ -232,6 +232,11 @@ async function prepare(env, row) {
   const ownerOnly = to.length === 1 && to[0] === owner && cc.length === 0;
   const balance = ownerOnly && testBillingEnabled(env)
     ? await testWalletSnapshot(env, row.account_id) : null;
+  const charge = balance
+    ? await env.DB.prepare('SELECT state FROM test_email_charges WHERE job_id = ?').bind(row.job_id).first()
+    : null;
+  const noChargeDetail = charge?.state === 'released'
+    ? 'This attempt did not use a TagMails test credit.' : null;
   const creditDetail = balance
     ? `TagMails test credits remaining: $${(balance.balanceCents / 100).toFixed(2)}.` : null;
   const allowance = ownerOnly && result.codexAllowance;
@@ -252,7 +257,8 @@ async function prepare(env, row) {
   const rendered = renderResult({
     state: result.state, summary: result.summary,
     details: [...(selectedModel ? [selectedModel] : []), ...(result.details ?? []), ...fileNote,
-      ...(creditDetail ? [creditDetail] : []), ...allowanceDetail], checks: result.checks,
+      ...(noChargeDetail ? [noChargeDetail] : []), ...(creditDetail ? [creditDetail] : []),
+      ...allowanceDetail], checks: result.checks,
     links: transcriptUrl && (ownerCanOpen || participantTranscriptReady)
       ? [{ label: sharedWithParticipant && !participantTranscriptReady ? `${runLinkLabel} (owner only)` : runLinkLabel,
         url: transcriptUrl }] : [],

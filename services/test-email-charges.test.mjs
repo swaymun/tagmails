@@ -181,6 +181,39 @@ test('provider acceptance settles a reserved charge; uncertain delivery holds it
   assert.deepEqual(await testWalletSnapshot(env, 'account-1'), { balanceCents: 0, waitingEmails: 0 });
 });
 
+test('failed and approval-waiting agent turns return test credit before their notice email', async () => {
+  for (const state of ['failed', 'needs_approval']) {
+    const { env, sqlite } = pilot();
+    credit(sqlite, 'account-1', 5, state);
+    await deliver(env, `mail-${state}`);
+    const token = device(sqlite);
+    const claimed = await claim(env, token);
+    assert.equal(claimed.claimed, true);
+    const task = JSON.parse(Buffer.from(claimed.payload, 'base64url').toString());
+    const completion = await handleDeviceRequest(new Request('https://relay.test/api/device/complete', {
+      method: 'POST', headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ jobId: task.jobId, leaseId: task.leaseId,
+        result: { state, summary: 'The agent could not finish this task.' } }),
+    }), env);
+    assert.equal(completion.status, 200);
+    assert.equal((await completion.json()).completed, true);
+    assert.equal(sqlite.prepare('SELECT state FROM test_email_charges WHERE job_id = ?').get(task.jobId).state,
+      'released');
+    assert.deepEqual(await testWalletSnapshot(env, 'account-1'), { balanceCents: 5, waitingEmails: 0 });
+    assert.equal((await sendNextOutbox(env, {
+      sendEmail: async (payload) => {
+        assert.match(payload.text, /This attempt did not use a TagMails test credit/);
+        assert.match(payload.text, /TagMails test credits remaining: \$0\.05/);
+        return { data: { id: `sent-${state}` } };
+      },
+      getSentEmail: async () => ({ data: { message_id: `<sent-${state}@tagmails.test>` } }),
+    })).state, 'sent');
+    await reconcileTestEmailCharges(env);
+    assert.equal(sqlite.prepare('SELECT state FROM test_email_charges WHERE job_id = ?').get(task.jobId).state,
+      'released');
+  }
+});
+
 test('a primary-recipient bounce releases a test charge even before the send response', async () => {
   const { env, sqlite } = pilot();
   credit(sqlite, 'account-1', 5, 'owner');

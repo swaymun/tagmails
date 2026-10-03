@@ -234,6 +234,14 @@ async function complete(env, device, body) {
       WHERE id = ? AND device_id = ? AND lease_id = ? AND result_hash = ? AND state = ?`)
       .bind(body.jobId, device.id, body.leaseId, resultHash, state),
   ];
+  if (testBillingEnabled(env) && body.result.state !== 'completed') {
+    statements.push(env.DB.prepare(`UPDATE test_email_charges
+      SET state = 'released', updated_at = CURRENT_TIMESTAMP
+      WHERE job_id = ? AND state = 'reserved' AND EXISTS (
+        SELECT 1 FROM jobs WHERE id = ? AND device_id = ? AND lease_id = ?
+          AND result_hash = ? AND state = ?)`)
+      .bind(body.jobId, body.jobId, device.id, body.leaseId, resultHash, state));
+  }
   if (reactionStatus && env.STATUS_REACTIONS_ENABLED === 'true' && !env.RESEND_TEST_FROM) {
     statements.push(env.DB.prepare(`INSERT OR IGNORE INTO status_reactions (job_id, status)
       SELECT j.id, ? FROM jobs j JOIN messages m ON m.id = j.message_id
