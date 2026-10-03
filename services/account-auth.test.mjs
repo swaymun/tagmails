@@ -52,6 +52,7 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   env.GOOGLE_CLIENT_ID = clientId;
   env.AGENT_DOMAIN = 'tagmails.test';
   env.SITE_ORIGIN = 'https://tagmails.chatgpt.site';
+  env.SITE_ALLOWED_ORIGINS = 'https://tagmails.com,https://www.tagmails.com';
   const identity = { sub: 'google-user-2', email: 'new.owner@gmail.com' };
   const options = { verifyIdentity: async (credential) => {
     if (credential !== 'test') throw new Error('Invalid credential');
@@ -79,6 +80,19 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.equal(siteSignIn.status, 200);
   assert.equal(siteSignIn.headers.get('access-control-allow-origin'), env.SITE_ORIGIN);
   assert.equal(siteSignIn.headers.get('set-cookie'), null);
+  const customOrigin = 'https://tagmails.com';
+  const customSignIn = await handleAccountRequest(request('/api/auth/google', 'POST',
+    { credential: 'test' }, null, customOrigin), env, options);
+  assert.equal(customSignIn.status, 200);
+  assert.equal(customSignIn.headers.get('access-control-allow-origin'), customOrigin);
+  assert.equal(customSignIn.headers.get('set-cookie'), null);
+  assert.equal((await handleAccountRequest(new Request('https://relay.test/api/auth/google', {
+    method: 'OPTIONS', headers: { Origin: 'https://www.tagmails.com' },
+  }), env, options)).status, 204);
+  const wrongOrigin = await handleAccountRequest(request('/api/auth/google', 'POST',
+    { credential: 'test' }, null, 'https://tagmails.com.attacker.test'), env, options);
+  assert.equal(wrongOrigin.status, 403);
+  assert.equal(wrongOrigin.headers.get('access-control-allow-origin'), null);
   assert.equal(sqlite.prepare('SELECT count(*) n FROM accounts WHERE google_sub = ?').get(identity.sub).n, 1);
   assert.equal((await handleAccountRequest(new Request('https://relay.test/api/auth/google', {
     method: 'OPTIONS', headers: { Origin: env.SITE_ORIGIN },
@@ -97,9 +111,10 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.equal(siteDefault.headers.get('access-control-allow-origin'), env.SITE_ORIGIN);
   assert.deepEqual(await siteDefault.json(), { defaultModel: 'gpt-6.1-sol' });
   const siteAccount = await handleAccountRequest(new Request('https://relay.test/api/site/account', {
-    headers: { Origin: env.SITE_ORIGIN, Authorization: 'Bearer test' },
+    headers: { Origin: customOrigin, Authorization: 'Bearer test' },
   }), env, options);
   assert.equal((await siteAccount.json()).defaultModel, 'gpt-6.1-sol');
+  assert.equal(siteAccount.headers.get('access-control-allow-origin'), customOrigin);
 
   const codeResponse = await handleAccountRequest(request('/api/account/pairing-code', 'POST', {}, cookie), env, options);
   const { code } = await codeResponse.json();
@@ -169,6 +184,9 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.equal((await handleAccountRequest(siteRequest('bad'), env, options)).status, 401);
   const siteRun = await handleAccountRequest(siteRequest(), env, options);
   assert.equal(siteRun.headers.get('access-control-allow-origin'), env.SITE_ORIGIN);
+  const customRun = await handleAccountRequest(siteRequest('test', 'https://tagmails.com'), env, options);
+  assert.equal(customRun.status, 200);
+  assert.equal(customRun.headers.get('access-control-allow-origin'), 'https://tagmails.com');
   assert.equal(siteRun.headers.get('cache-control'), 'no-store');
   const siteResult = await siteRun.json();
   assert.equal(siteResult.selectedModel, 'Selected model: Claude Code Sonnet 5.5 (medium; requested in this email).');

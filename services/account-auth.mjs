@@ -20,6 +20,20 @@ function json(value, status = 200, headers = {}) {
 export function sameOrigin(request) {
   return request.headers.get('origin') === new URL(request.url).origin;
 }
+export function siteOriginFor(request, env) {
+  const origin = request.headers.get('origin');
+  if (!origin) return null;
+  for (const value of [env.SITE_ORIGIN, ...(env.SITE_ALLOWED_ORIGINS ?? '').split(',')]) {
+    try {
+      const url = new URL(value.trim());
+      const local = ['localhost', '127.0.0.1'].includes(url.hostname);
+      if ((url.protocol === 'https:' || (local && url.protocol === 'http:' && url.port)) &&
+          url.pathname === '/' && !url.search && !url.hash && !url.username && !url.password &&
+          url.origin === origin) return origin;
+    } catch { /* Ignore an unset or malformed configured origin. */ }
+  }
+  return null;
+}
 function sessionToken(request) {
   const cookies = request.headers.get('cookie') ?? '';
   const value = cookies.split(';').map((part) => part.trim()).find((part) => part.startsWith(`${SESSION_COOKIE}=`))?.slice(SESSION_COOKIE.length + 1);
@@ -72,7 +86,7 @@ export async function accountFor(request, env) {
 }
 
 async function signIn(request, env, verifyIdentity) {
-  const fromSite = request.headers.get('origin') === env.SITE_ORIGIN;
+  const fromSite = Boolean(siteOriginFor(request, env));
   const headers = siteCors(request, env);
   if (!sameOrigin(request) && !fromSite) return json({ error: 'Invalid origin' }, 403);
   if (!env.GOOGLE_CLIENT_ID || !DOMAIN.test(env.AGENT_DOMAIN ?? '')) return json({ error: 'Google sign-in is not configured' }, 503, headers);
@@ -138,8 +152,8 @@ async function pair(request, env) {
 }
 
 export function siteCors(request, env) {
-  const origin = request.headers.get('origin');
-  return origin && origin === env.SITE_ORIGIN ? {
+  const origin = siteOriginFor(request, env);
+  return origin ? {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Headers': 'Authorization, Content-Type',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -264,9 +278,9 @@ async function changeParticipant(request, env, account, threadId, action, header
 async function siteAccountRequest(request, env, pathname, verifyIdentity) {
   const headers = siteCors(request, env);
   if (request.method === 'OPTIONS') return new Response(null, {
-    status: request.headers.get('origin') === env.SITE_ORIGIN ? 204 : 403, headers,
+    status: siteOriginFor(request, env) ? 204 : 403, headers,
   });
-  if (request.headers.get('origin') !== env.SITE_ORIGIN) return json({ error: 'Invalid origin' }, 403);
+  if (!siteOriginFor(request, env)) return json({ error: 'Invalid origin' }, 403);
   const owner = await siteOwnerFor(request, env, verifyIdentity);
   if (owner.error) return json({ error: owner.error }, owner.status, headers);
   const { account } = owner;
@@ -366,11 +380,11 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
   if (!pathname.startsWith('/api/auth/') && !pathname.startsWith('/api/account/') && pathname !== '/api/device/pair' && !runId && !receiptArtifact && !apiRunId && !apiArtifact) return null;
   if (!env.DB) throw new Error('Account database is not configured');
   if (pathname === '/api/auth/google' && request.method === 'OPTIONS') return new Response(null, {
-    status: request.headers.get('origin') === env.SITE_ORIGIN ? 204 : 403,
+    status: siteOriginFor(request, env) ? 204 : 403,
     headers: siteCors(request, env),
   });
   if ((apiRunId || apiArtifact) && request.method === 'OPTIONS') return new Response(null, {
-    status: request.headers.get('origin') === env.SITE_ORIGIN ? 204 : 403,
+    status: siteOriginFor(request, env) ? 204 : 403,
     headers: siteCors(request, env),
   });
   if ((apiRunId || apiArtifact) && request.method === 'GET') {

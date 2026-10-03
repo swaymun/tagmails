@@ -100,12 +100,14 @@ test('test Checkout credits once after a signed paid event and reverses a succes
 test('the private Site shows only its Gmail owner test credits and returns from test Checkout', async () => {
   const { env, sqlite } = fixture();
   env.SITE_ORIGIN = 'https://tagmails.chatgpt.site';
+  env.SITE_ALLOWED_ORIGINS = 'https://tagmails.com,https://www.tagmails.com';
   env.GOOGLE_CLIENT_ID = 'test-google-client';
   const site = (path, method = 'GET', bearer = 'owner-token', siteOrigin = env.SITE_ORIGIN) =>
     new Request(`${origin}${path}`, { method, headers: {
       Origin: siteOrigin, Authorization: `Bearer ${bearer}`,
     } });
   let checkout;
+  let checkoutCalls = 0;
   const call = (req) => handleTestWalletRequest(req, env, {
     verifyIdentity: async (credential) => {
       if (credential !== 'owner-token') throw new Error('Invalid token');
@@ -114,7 +116,8 @@ test('the private Site shows only its Gmail owner test credits and returns from 
     stripeFetch: async (url, options) => {
       assert.equal(url, 'https://api.stripe.com/v1/checkout/sessions');
       checkout = new URLSearchParams(options.body);
-      return Response.json({ id: 'cs_test_site_1', url: 'https://checkout.stripe.com/c/pay/cs_test_site_1' });
+      const id = `cs_test_site_${++checkoutCalls}`;
+      return Response.json({ id, url: `https://checkout.stripe.com/c/pay/${id}` });
     },
   });
   assert.equal((await call(site('/api/site/billing', 'OPTIONS'))).status, 204);
@@ -137,6 +140,11 @@ test('the private Site shows only its Gmail owner test credits and returns from 
   assert.equal(checkout.get('cancel_url'), `${env.SITE_ORIGIN}/setup?topup=canceled`);
   assert.equal(checkout.get('customer_email'), 'owner@gmail.com');
   assert.equal(sqlite.prepare('SELECT count(*) n FROM billing_checkouts').get().n, 1);
+  assert.equal((await call(site('/api/site/billing/checkout', 'POST', 'owner-token',
+    'https://tagmails.com'))).status, 200);
+  assert.equal(checkout.get('success_url'), 'https://tagmails.com/setup?topup=returned');
+  assert.equal(checkout.get('cancel_url'), 'https://tagmails.com/setup?topup=canceled');
+  assert.equal(sqlite.prepare('SELECT count(*) n FROM billing_checkouts').get().n, 2);
   env.BILLING_TEST_MODE = 'false';
   assert.equal((await (await call(site('/api/site/billing'))).json()).checkoutEnabled, false);
   assert.equal((await call(site('/api/site/billing/checkout', 'POST'))).status, 503);

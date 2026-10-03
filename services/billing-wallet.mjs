@@ -1,5 +1,5 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
-import { accountFor, sameOrigin, siteCors, siteOwnerFor, verifyGoogleCredential } from './account-auth.mjs';
+import { accountFor, sameOrigin, siteCors, siteOriginFor, siteOwnerFor, verifyGoogleCredential } from './account-auth.mjs';
 import { reservePendingTestEmails, testBillingEnabled, testWalletSnapshot } from './email-charges.mjs';
 
 const TOP_UP_CENTS = 1000;
@@ -8,17 +8,6 @@ const UUID = /^[0-9a-f-]{36}$/i;
 
 function json(value, status = 200, headers = {}) {
   return Response.json(value, { status, headers: { 'Cache-Control': 'no-store', ...headers } });
-}
-
-function siteOriginFor(request, env) {
-  try {
-    const configured = new URL(env.SITE_ORIGIN);
-    const local = ['localhost', '127.0.0.1'].includes(configured.hostname);
-    if ((configured.protocol !== 'https:' && !(local && configured.protocol === 'http:' && configured.port)) ||
-        configured.pathname !== '/' || configured.search || configured.hash ||
-        configured.username || configured.password || configured.origin !== request.headers.get('origin')) return null;
-    return configured.origin;
-  } catch { return null; }
 }
 
 function originFor(request, env) {
