@@ -208,9 +208,12 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
     WHERE j.thread_id = ? AND json_extract(j.model_json, '$.id') IS NOT NULL
     ORDER BY m.rowid DESC LIMIT 1`).bind(threadId).first() : null;
   const priorModel = previousJob?.model_json ? JSON.parse(previousJob.model_json) : null;
-  const model = threadUnavailable ? null : await routeModel(message.body, account.default_model, {
+  let model = threadUnavailable ? null : await routeModel(message.body, account.default_model, {
     apiKey: env.TYPESAFE_API_KEY, fetcher: fetchModel, priorModel, subject: message.subject,
   });
+  if (model?.id === 'claude-sonnet-5-5' && env.CLAUDE_ROUTE_ENABLED !== 'true') {
+    model = { error: 'Claude Code is unavailable in this pilot. Please ask for Codex or Luna.' };
+  }
   const unavailableResult = threadUnavailable ? {
     runtime: 'relay', state: 'failed',
     summary: owner

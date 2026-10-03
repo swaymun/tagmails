@@ -12,7 +12,7 @@ Delegated by the user: use the simplest suitable stack. The internal test site u
 
 ## Users
 
-People who already use Codex or Claude Code and want to send work to their existing agent from an email client, then continue by replying.
+People who already use a local coding agent and want to send work to it from an email client, then continue by replying.
 
 ## Product Purpose
 
@@ -20,7 +20,7 @@ Give a local agent an email address. Queue work while the computer is offline, r
 
 ## Positioning
 
-The customer's own local Codex or Claude Code session performs the task. The hosted service supplies address routing, durable delivery, and storage. Metered API-funded execution may follow the first beta.
+The owner-only development pilot runs Codex on the owner's Mac. The hosted service supplies address routing, durable delivery, and storage. Customer use of a personal model subscription is gated on the provider's supported commercial path or confirmation; Claude Code is a local lab adapter, not a customer beta route. Metered API-funded execution remains outside the first beta by user decision.
 
 ## Operating Context
 
@@ -29,9 +29,9 @@ The first beta uses Google sign-in with a verified Gmail address. Customers inst
 ## Capabilities and Constraints
 
 - Both the daemon and server are intended to be open source and self-hostable.
-- Codex and Claude Code are the first agent runtimes. The local subscription-backed path comes before managed API credits.
+- Codex is the current owner-only live runtime. Claude Code has a local adapter but is held from customer deployment pending an API-backed or provider-approved path. OpenAI's plan-usage documentation directs paid or remotely hosted apps to its interest form; a paid TagMails beta must clear that gate too. [OpenAI plan-usage overview](https://developers.openai.com/siwc/token-sharing-open-source) · [Anthropic account guidance](https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account)
 - Explicit model choices take precedence over defaults. Jev classifies an initial email without a `Model:` directive; replies keep that thread's model unless the sender explicitly changes it.
-- The owner grants thread-scoped participation by including an address in To, Cc, or Bcc on an email to the agent. Participants can reply within that thread but cannot add others; the owner can revoke access. Production must verify inbound mail provenance before trusting the sender address. Bcc identities stay private in visible reply headers. Sensitive actions retain local approval gates.
+- The owner-only pilot is the current scope. Thread-scoped participation remains implemented in local fixtures but is deferred for live beta testing, including its provider-plan implications. Production must verify inbound mail provenance before trusting the sender address. Bcc identities stay private in visible reply headers. Sensitive actions retain local approval gates.
 - Gmail users can react to an agent reply with a native emoji where Gmail offers the control. Inbound reaction mail is feedback on that message and does not start a task. Bcc recipients cannot react to the original Bcc message in Gmail.
 - Completion emails include a concise outcome, real checks and limitations, links and small previews where supported, and an accessible full trace.
 - The internal test site uses synthetic messages and must identify simulated work clearly.

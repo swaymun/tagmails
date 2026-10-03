@@ -252,9 +252,9 @@ document.addEventListener('DOMContentLoaded', () => {
     <p>Agent address<br><span id="agentEmail" class="address"></span></p><p id="delivery" class="muted"></p>
     <label for="defaultModel">Default model for new task emails</label>
     <select id="defaultModel"><option value="gpt-6.1-sol">Codex · GPT-6.1 Sol · medium</option>
-      <option value="claude-sonnet-5-5">Claude Code · Sonnet 5.5 · medium</option></select>
+      <option value="claude-sonnet-5-5" disabled>Claude Code · on hold</option></select>
     <button id="saveDefaultModel" class="secondary">Save default model</button>
-    <p class="muted">No model line is required. Ask naturally, such as “use Luna for this,” to switch models on a new email or reply. For exact control, put <code>Model: Codex</code>, <code>Model: Claude</code>, or <code>Model: Luna</code> on its own line before the request.</p>
+    <p class="muted">No model line is required. Ask naturally, such as “use Luna for this,” to switch models on a new email or reply. For exact control, put <code>Model: Codex</code> or <code>Model: Luna</code> on its own line before the request. Claude subscription requests return a no-charge notice in this pilot.</p>
     <button id="signOut" class="secondary">Sign out</button></section>
   <section class="card"><h2>Pair a Mac</h2><p>Create a one-time code, then run the setup command in your TagMails checkout. The device token stays in a file on your Mac.</p>
     <button id="pair">Create pairing code</button><p><code id="pairCode"></code></p><pre id="pairCommand"></pre>

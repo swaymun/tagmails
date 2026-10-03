@@ -52,6 +52,20 @@ test('Jev routes natural model requests in a thread and ordinary replies inherit
   ]);
 });
 
+test('the live pilot holds Claude subscription requests without charging or running an agent', async () => {
+  const { env, sqlite } = bindings();
+  delete env.CLAUDE_ROUTE_ENABLED;
+  env.BILLING_TEST_MODE = 'true';
+  const message = mail('claude-held', 'owner@gmail.com', { body: 'Model: Claude\nReview this.' });
+  assert.deepEqual(await deliver(env, message), { accepted: true, duplicate: false });
+  const job = sqlite.prepare('SELECT model_json, state FROM jobs').get();
+  assert.equal(job.state, 'queued');
+  assert.match(JSON.parse(job.model_json).error, /Claude Code is unavailable/);
+  assert.equal(await completeOneModelClarification(env), true);
+  assert.equal(sqlite.prepare('SELECT state FROM jobs').get().state, 'completed');
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM test_email_charges').get().count, 0);
+});
+
 test('old and new agent addresses keep one email thread after a domain move', async () => {
   const { env, sqlite } = bindings();
   sqlite.prepare('UPDATE accounts SET agent_email = ? WHERE id = ?')

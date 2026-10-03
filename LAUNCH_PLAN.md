@@ -1,12 +1,12 @@
 # TagMails launch plan
 
-Status: internal working plan, 2026-10-02. No public launch date is set. The local Gmail-style lab, account prototype, and relay are useful demonstrations; a real Gmail-to-agent-to-Gmail exchange has not yet been verified.
+Status: internal working plan, 2026-10-03. No public launch date is set. An owner-only, two-turn Gmail-to-Codex-to-Gmail exchange is verified. Customer subscription use and Claude customer routing are gated on provider terms.
 
 ## Positioning
 
-**Give your agent an email address.** Send a task to TagMails from Gmail, pick Codex or Claude when it matters, and get the result back in the same conversation. The connected Mac runs the work. The owner can bring someone into the thread by adding them in To or Cc; a later reply continues the agent session. The first public examples should focus on a catch-up from a messy thread, a concrete analysis task, and a follow-up decision. Show the agent's actual output, check results, and limitations.
+**Give your agent an email address.** Send a task to TagMails from Gmail and get the result back in the same conversation. The connected Mac runs the work. The verified development pilot is owner-only with Codex; a later reply continues its session. The first public examples should focus on a catch-up from a messy thread, a concrete analysis task, and a follow-up decision. Show the agent's actual output, check results, and limitations.
 
-The initial audience is developers and small teams already using Codex or Claude Code on a Mac. The first offer is a private beta with Google sign-in for personal Gmail addresses and a single selected local workspace. Keep the email and storage price separate from any later API-funded model cost. The [internal pricing model](PRICING_MODEL.md) uses current public rate cards to define what to measure; do not publish the proposed $0.05/task or 10% API margin as final until live usage and refunds are measured.
+The initial audience is developers already using Codex on a Mac. Keep the pilot to the owner's verified Gmail address and one selected local workspace. A customer beta using a personal Codex plan requires the provider's supported commercial path or confirmation; Claude Code customer execution requires API authentication or Anthropic approval. Keep the email and storage price separate from any later API-funded model cost. The [internal pricing model](PRICING_MODEL.md) uses current public rate cards to define what to measure; do not publish a task price until provider terms, live usage, and refunds are resolved.
 
 ## Release gates
 
@@ -14,17 +14,18 @@ The initial audience is developers and small teams already using Codex or Claude
 | --- | --- |
 | Address and signup | Own and verify the chosen domain; complete Google OAuth configuration; create an account, reserve its address, pair and revoke a Mac from the real account page. |
 | Email loop | From an owned Gmail account, send a task to the agent address and receive a correctly threaded, readable result in Gmail desktop and mobile. Repeat with a reply and a second agent turn. Preserve the raw MIME and screenshots. |
-| Multiplayer | Owner adds a second owned address in To/Cc; that participant's reply succeeds. A nonparticipant and a participant attempting to add a third address are refused. Do not advertise Bcc grants until a production verification path exists. |
-| Execution | Run one bounded Codex task and one bounded Claude task in the selected workspace; test offline queue recovery, interrupted work, approvals, and truthful failure mail. Record actual model, cost, and outcome. |
+| Participants (deferred) | Do not enable live guest turns for this beta. Before a later release, verify To/Cc grants, guest denials, Bcc handling, and the provider-plan implications. |
+| Execution | Continue bounded owner-only Codex tasks in the selected workspace; test offline queue recovery, interrupted work, approvals, and truthful failure mail. Record actual model, usage, and outcome. Keep live Claude subscription routing paused. |
+| Provider terms | Confirm a supported path for paid or remotely hosted Codex plan usage. Use Claude API authentication or obtain Anthropic approval before offering Claude to customers. [OpenAI plan-usage overview](https://developers.openai.com/siwc/token-sharing-open-source) · [Anthropic account guidance](https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account) |
 | Customer controls | Show run status, a private owner receipt, device revocation, and clear retention/deletion behavior. Test cross-account isolation, duplicate provider events, and one delivered plus one bounced recipient in the same reply. Confirm that the receipt distinguishes provider acceptance from inbox delivery. A receipt is a summary until full trace capture is implemented. |
 | Pricing and payments | Decide the measured service price; validate the test-mode primary-recipient failure credit release against real delivery events, including a mixed To/Cc outcome; reconcile an idempotent Stripe test-mode top-up and a duplicate webhook before any paid signup. Display a maximum for API-funded work if offered. |
-| Open source and setup | MIT is selected; publish the exact deployable source, self-host instructions, security and limitation notes, and a tested copyable Codex/Claude setup prompt. The license file alone is not a public source release. [GitHub licensing guide](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/licensing-a-repository) |
+| Open source and setup | MIT is selected; publish the exact deployable source, self-host instructions, security and limitation notes, and a tested copyable setup prompt for the permitted runtime. The license file alone is not a public source release. [GitHub licensing guide](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/licensing-a-repository) |
 
 The launch site, screenshots, examples, and video must be assembled from the same verified release candidate. Mark synthetic inbox fixtures as examples. Avoid launch claims about PR creation, artifact downloads, full traces, paid execution, or Bcc invitations until each works in the public build.
 
 ## Private pilot
 
-Recruit five to ten people who already use Gmail and a local coding agent. Start with owner accounts and workspaces under our control, then add external testers once setup and revocation work. Give each tester three specific tasks: catch up on a thread, ask for an analysis or draft in a selected workspace, and reply with a follow-up. Invite a second person on one thread with an owner-authored To/Cc grant.
+Continue owner-only development testing from Gmail and a selected local Codex workspace. Invite external testers only after the provider path, setup, and revocation work are verified. Give each permitted tester three specific tasks: catch up on a thread, ask for an analysis or draft in a selected workspace, and reply with a follow-up. Shared threads are postponed.
 
 For every attempted task, record: signup/pairing completion, delivery and reply latency, model and runtime, whether the result matched the run record, link validity, Gmail rendering, number of turns, retries/failures, provider cost, and support intervention. Ask the tester whether the answer was useful and what they expected to happen next. Keep raw mail and screenshots private and redact personal data before creating examples.
 
@@ -33,8 +34,8 @@ Go to public beta only when all release gates pass and the pilot has no unresolv
 ## Launch assets
 
 1. A text-forward landing page with one sentence, a real email thread, the actual supported Mac/Gmail scope, pricing, a copyable setup prompt, and a beta signup or working account link. The current local landing is a prototype.
-2. A short setup guide for Google sign-in, paired Mac, selected workspace, model selection, To/Cc sharing, reactions, and revocation. Explain that reacting to an agent message is feedback; it does not start or bill a task.
-3. Three redacted, reproducible example threads with exact prompts, actual result email, outcome, and run receipt. One should show a second authorized participant. Include a failed or waiting example so expectations are clear.
+2. A short setup guide for Google sign-in, paired Mac, selected workspace, supported model selection, reactions, and revocation. Explain that reacting to an agent message is feedback; it does not start or bill a task.
+3. Three redacted, reproducible owner-only example threads with exact prompts, actual result email, outcome, and run receipt. Include a failed or waiting example so expectations are clear.
 4. An open-source repository with license, self-host steps, architecture, contribution path, security reporting, and a changelog. A public repository without a license is not an open-source release. [GitHub licensing guide](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/licensing-a-repository)
 5. The [motion video brief](LAUNCH_VIDEO_BRIEF.md) for Claude Code. Produce the final cut only from verified scenes. A labeled concept animatic is acceptable internally before the live flow exists.
 
@@ -58,13 +59,13 @@ Send the short launch video and a real example thread to the channels where the 
 
 ### First two weeks
 
-Review first-task completion, time to first reply, second-turn rate, multiplayer use, reaction feedback, cost per completed exchange, refund requests, and support interventions. Read a sample of consented run receipts against their actual emails. Publish fixes and known limitations. Decide whether to broaden Gmail beta, change the proposed price, or keep the cohort capped based on that evidence.
+Review first-task completion, time to first reply, second-turn rate, reaction feedback, cost per completed exchange, refund requests, and support interventions. Read a sample of consented run receipts against their actual emails. Publish fixes and known limitations. Decide whether to broaden Gmail beta, change the proposed price, or keep the cohort capped based on that evidence.
 
 ## Decisions still needed
 
 - The user purchased `tagmails.com`. Resolve the active `TagMail` email-product naming risk and obtain trademark clearance before broadly launching the TagMails brand.
-- Choose production Bcc invitation behavior: verified Gmail Sent access or an authenticated owner invite; the current production path supports verified visible To/Cc grants.
+- Shared threads and Bcc invitations are deferred; revisit their access and provider-plan design in a later release.
 - Set retention and the final exchange price after measuring live delivery and model use.
-- Add API-funded model execution only after the subscription-backed beta proves local execution, delivery, and metering.
+- API-funded model execution remains outside the first beta by user decision. If a customer Claude route is still wanted, revisit that decision or obtain an approved alternative from Anthropic.
 
 Owner actions should be requested when a concrete purchase, terms acceptance, paid service, public deployment, or payment activation is ready for review. The current plan and local prototype do not require those actions to continue development.

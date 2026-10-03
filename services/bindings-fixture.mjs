@@ -37,7 +37,7 @@ export function bindings() {
       get: async (key) => objects.has(key) ? { arrayBuffer: async () => Uint8Array.from(objects.get(key)).buffer } : null,
       delete: async (key) => { objects.delete(key); },
     },
-    RESEND_API_KEY: 're_test', RESEND_WEBHOOK_SECRET: 'whsec_test',
+    RESEND_API_KEY: 're_test', RESEND_WEBHOOK_SECRET: 'whsec_test', CLAUDE_ROUTE_ENABLED: 'true',
   };
   return { env, sqlite, objects };
 }
