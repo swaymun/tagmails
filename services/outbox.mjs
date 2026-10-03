@@ -25,6 +25,13 @@ function sameRecipients(left, right) {
   return [...left].sort().every((email, index) => email === expected[index]);
 }
 
+function matchesSentAudience(payload, event) {
+  const cc = payload.cc ?? [];
+  if (sameRecipients(payload.to, event.to) && sameRecipients(cc, event.cc)) return true;
+  return event.to.length === 1 && event.cc.length === 0 &&
+    [...payload.to, ...cc].includes(event.to[0]);
+}
+
 function providerMailbox(value) {
   const addresses = addressParser(String(value ?? ''));
   if (addresses.length !== 1 || !addresses[0].address) throw new Error('Invalid provider mailbox');
@@ -44,7 +51,7 @@ export async function reconcileSentEvent(env, event) {
   catch { return { accepted: false }; }
   if (payload.tags?.some(({ name, value }) => name === 'tagmails_job' && value === event.jobId) !== true ||
       payload.from !== event.from || payload.subject !== event.subject ||
-      !sameRecipients(payload.to, event.to) || !sameRecipients(payload.cc ?? [], event.cc) ||
+      !matchesSentAudience(payload, event) ||
       (row.provider_email_id && row.provider_email_id !== event.providerEmailId)) return { accepted: false };
   if (row.state === 'sent') return { accepted: true, duplicate: true };
   const updated = await env.DB.prepare(`UPDATE outbox SET state = 'accepted', provider_email_id = ?, updated_at = CURRENT_TIMESTAMP
@@ -52,6 +59,32 @@ export async function reconcileSentEvent(env, event) {
       AND (provider_email_id IS NULL OR provider_email_id = ?) RETURNING job_id`)
     .bind(event.providerEmailId, event.jobId, event.providerEmailId).first();
   return { accepted: Boolean(updated), sentEvent: true };
+}
+
+export async function recordDeliveryOutcome(env, event) {
+  if (!['delivered', 'delayed', 'bounced', 'failed', 'suppressed'].includes(event.status)) {
+    return { accepted: false };
+  }
+  const row = await env.DB.prepare('SELECT state, payload_json, provider_email_id FROM outbox WHERE job_id = ?')
+    .bind(event.jobId).first();
+  if (!row || !['sending', 'uncertain', 'accepted', 'sent'].includes(row.state) ||
+      (row.provider_email_id && row.provider_email_id !== event.providerEmailId)) return { accepted: false };
+  let payload;
+  try { payload = JSON.parse(row.payload_json); }
+  catch { return { accepted: false }; }
+  if (payload.tags?.some(({ name, value }) => name === 'tagmails_job' && value === event.jobId) !== true ||
+      payload.from !== event.from || payload.subject !== event.subject ||
+      !Array.isArray(payload.to) ||
+      ![...payload.to, ...(payload.cc ?? [])].includes(event.recipient)) return { accepted: false };
+  await env.DB.prepare(`INSERT INTO delivery_recipients
+    (job_id, provider_email_id, recipient_email, status, event_at, event_id)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(job_id, provider_email_id, recipient_email) DO UPDATE SET
+      status = excluded.status, event_at = excluded.event_at, event_id = excluded.event_id
+      WHERE excluded.event_at > delivery_recipients.event_at`)
+    .bind(event.jobId, event.providerEmailId, event.recipient, event.status,
+      event.eventAt, event.eventId ?? null).run();
+  return { accepted: true, deliveryOutcome: true };
 }
 
 export async function reconcileOneUnknownOutbox(env, {

@@ -80,6 +80,24 @@ test('a signed sent event carries the job tag and provider identifiers', async (
     rawPayload: event.rawPayload + ' ' }));
 });
 
+test('a signed delivery event identifies one recipient without treating it as a new email', async () => {
+  const item = fixture();
+  const jobId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const createdAt = '2026-10-03T10:00:00.000Z';
+  const event = signed({ type: 'email.bounced', created_at: createdAt, data: {
+    email_id: id, message_id: '<sent@resend.dev>', from: agent,
+    to: ['Guest <guest@gmail.com>'], subject: 'Re: Shared review',
+    tags: { tagmails_job: jobId }, bounce: { type: 'Permanent', message: 'Unknown recipient' },
+  } });
+  assert.deepEqual(await inspectResendInbound({ ...options(item), ...event }), { deliveryOutcome: {
+    jobId, providerEmailId: id, recipient: 'guest@gmail.com', from: agent,
+    subject: 'Re: Shared review', status: 'bounced', eventAt: createdAt,
+    eventId: 'msg_synthetic_event_1',
+  } });
+  await assert.rejects(inspectResendInbound({ ...options(item), ...event,
+    rawPayload: event.rawPayload + ' ' }));
+});
+
 test('verified delivery accepts an agent who was Bcc on its own provider copy', async () => {
   const item = fixture({ hiddenAgent: true });
   const message = await inspectResendInbound(options(item));

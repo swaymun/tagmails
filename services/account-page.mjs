@@ -298,13 +298,15 @@ h1{font-size:clamp(2rem,6vw,3.25rem);line-height:1.1;margin:.35em 0}h2{font-size
 <h1>${escapeHtml(run.subject)}</h1><span class="status">${title}</span>
 <section class="card"><h2>Outcome</h2><p>${escapeHtml(run.result?.summary ?? 'The agent has not submitted a result yet.')}</p>
 ${run.delivery_state === 'uncertain' ? '<p class="muted">Email delivery needs review. This reply will not be sent again automatically.</p>' : ''}
+${run.delivery_state === 'sent' ? '<p class="muted">Resend accepted the reply. Inbox delivery is reported separately below when available.</p>' : ''}
+${run.deliveryRecipients?.length ? `<h2>Recipient delivery</h2>${list(run.deliveryRecipients.map((item) => `${item.recipient_email}: ${item.status}`))}<p class="muted">Only reported recipients are listed. Other recipients may still be pending or unconfirmed.</p>` : ''}
 ${details.length ? `<h2>What happened</h2>${list(details)}` : ''}
 ${checks.length ? `<h2>Checks and limits</h2>${list(checks)}` : ''}
 ${hasUsage ? `<h2>Model usage reported by the local CLI</h2><p>${escapeHtml(usage.inputTokens)} input tokens (${escapeHtml(usage.cachedInputTokens)} cached, ${escapeHtml(usage.cacheCreationInputTokens)} cache creation); ${escapeHtml(usage.outputTokens)} output tokens (${escapeHtml(usage.reasoningOutputTokens)} reasoning).</p>` : ''}
 ${typeof listCost === 'number' && Number.isFinite(listCost) && listCost >= 0 ? `<p>List-equivalent model cost reported by the CLI: $${escapeHtml(listCost.toFixed(6))}. This is not a TagMails charge.</p>` : ''}
 <div class="meta"><span><strong>Sender</strong>${escapeHtml(run.sender_email)}</span><span><strong>Received</strong>${escapeHtml(run.created_at)} UTC</span>
 ${run.selectedModel ? `<span><strong>Model route</strong>${escapeHtml(run.selectedModel)}</span>` : ''}
-<span><strong>Attempts</strong>${escapeHtml(run.attempts)}</span><span><strong>Email delivery</strong>${escapeHtml(run.delivery_state ?? 'Not queued')}</span></div></section>
+<span><strong>Attempts</strong>${escapeHtml(run.attempts)}</span><span><strong>Provider send</strong>${escapeHtml(run.delivery_state ?? 'Not queued')}</span></div></section>
 ${run.artifacts?.length ? `<section class="card"><h2>Files</h2><ul>${run.artifacts.map((file) => `<li><a href="/runs/${escapeHtml(run.id)}/artifacts/${escapeHtml(file.id)}">${escapeHtml(file.name)}</a> (${escapeHtml((file.byte_size / 1_000_000).toFixed(1))} MB)</li>`).join('')}</ul><p class="muted">Files expire seven days after upload.</p></section>` : ''}
 <section class="card"><h2>Run transcript</h2>
 ${transcript ? transcript.events.map((event) => `<div class="event ${event.kind === 'tool' ? 'tool' : ''}"><strong>${escapeHtml(event.kind === 'request' ? 'Email request' : event.kind === 'tool' ? 'Tool step' : 'Agent')}</strong><p>${escapeHtml(event.text)}</p></div>`).join('') : '<p class="muted">A transcript was not recorded for this run.</p>'}

@@ -282,7 +282,7 @@ async function siteAccountRequest(request, env, pathname, verifyIdentity) {
 
 async function runRow(env, runId, accountId) {
   const row = await env.DB.prepare(`SELECT j.id, j.state, j.attempts, j.created_at, j.result_key, j.model_json,
-    t.subject, m.sender_email, o.state AS delivery_state
+    t.subject, m.sender_email, o.state AS delivery_state, o.provider_email_id
     FROM jobs j JOIN threads t ON t.id = j.thread_id JOIN messages m ON m.id = j.message_id
     LEFT JOIN outbox o ON o.job_id = j.id
     WHERE j.id = ? AND t.account_id = ? LIMIT 1`).bind(runId, accountId).first();
@@ -290,7 +290,11 @@ async function runRow(env, runId, accountId) {
   const saved = row.result_key ? await env.MAIL.get(row.result_key) : null;
   const result = saved ? JSON.parse(new TextDecoder().decode(await saved.arrayBuffer())) : null;
   const artifacts = await selectedRunArtifacts(env, accountId, runId, result?.artifactIds);
-  return { ...row, selectedModel: selectedModelDetail(row.model_json), result, artifacts };
+  const deliveries = row.provider_email_id ? await env.DB.prepare(`SELECT recipient_email, status FROM delivery_recipients
+    WHERE job_id = ? AND provider_email_id = ? ORDER BY recipient_email`)
+    .bind(runId, row.provider_email_id).all() : { results: [] };
+  return { ...row, selectedModel: selectedModelDetail(row.model_json), result, artifacts,
+    deliveryRecipients: deliveries.results ?? deliveries };
 }
 
 async function artifactResponse(env, accountId, row, artifactId, headers = {}) {
@@ -340,6 +344,7 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
     return json({ id: row.id, state: row.state, subject: row.subject, sender: row.sender_email,
       selectedModel: row.selectedModel,
       createdAt: row.created_at, attempts: row.attempts, deliveryState: row.delivery_state,
+      deliveryRecipients: row.deliveryRecipients.map((item) => ({ email: item.recipient_email, status: item.status })),
       result: row.result, artifacts: row.artifacts.map((file) => ({ id: file.id, name: file.name,
         mimeType: file.mime_type, size: file.byte_size, expiresAt: file.expires_at })) }, 200, headers);
   }

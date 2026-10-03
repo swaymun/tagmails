@@ -216,6 +216,32 @@ test('a matching signed sent event reconciles an uncertain send without resendin
   assert.equal(sqlite.prepare("SELECT count(*) n FROM messages WHERE direction = 'outbound'").get().n, 1);
 });
 
+test('one intended recipient can reconcile a shared reply sent event', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  const jobId = '12121212-1212-4212-8212-121212121212';
+  const providerId = '34343434-3434-4434-8434-343434343434';
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'],
+    cc: ['guest@gmail.com'], jobId });
+  sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)').run('thread-1', 'guest@gmail.com');
+  assert.equal((await sendNextOutbox(env, {
+    sendEmail: async () => { throw new Error('Connection dropped after acceptance'); },
+  })).state, 'uncertain');
+  const notify = async (to) => (await handleInbound(new Request('https://relay.test/webhooks/resend', {
+    method: 'POST', body: '{}',
+  }), env, { inspect: async () => ({ sent: { jobId, providerEmailId: providerId,
+    messageId: '<shared@tagmails.test>', from: 'agent@wonder.test', to,
+    cc: [], subject: 'Re: Shared work' } }) })).json();
+  assert.deepEqual(await notify(['stranger@gmail.com']), { accepted: false });
+  assert.deepEqual(await notify(['guest@gmail.com']), { accepted: true, sentEvent: true });
+  assert.equal(sqlite.prepare('SELECT state FROM outbox WHERE job_id = ?').get(jobId).state, 'accepted');
+  assert.deepEqual(await sendNextOutbox(env, {
+    sendEmail: async () => { throw new Error('Must not resend'); },
+    getSentEmail: async () => ({ data: { message_id: '<shared@tagmails.test>' } }),
+  }), { state: 'sent', jobId, messageId: '<shared@tagmails.test>' });
+  assert.equal(sqlite.prepare("SELECT count(*) n FROM messages WHERE direction = 'outbound'").get().n, 1);
+});
+
 test('provider lookup reconciles only an exactly tagged uncertain reply', async () => {
   const fixture = bindings();
   const { env, sqlite } = fixture;
@@ -253,6 +279,41 @@ test('provider lookup reconciles only an exactly tagged uncertain reply', async 
   assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
   assert.equal(sqlite.prepare("SELECT count(*) n FROM messages WHERE direction = 'outbound'").get().n, 1);
   assert.equal(sqlite.prepare('SELECT state FROM outbox WHERE job_id = ?').get('job-2').state, 'queued');
+});
+
+test('recipient delivery events are isolated and older updates cannot overwrite them', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  const jobId = '99999999-9999-4999-8999-999999999999';
+  const providerId = '88888888-8888-4888-8888-888888888888';
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'],
+    cc: ['guest@gmail.com'], jobId });
+  sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)').run('thread-1', 'guest@gmail.com');
+  assert.equal((await sendNextOutbox(env, {
+    sendEmail: async () => ({ data: { id: providerId } }),
+    getSentEmail: async () => ({ data: { message_id: '<sent@tagmails.test>' } }),
+  })).state, 'sent');
+  const base = { jobId, providerEmailId: providerId, from: 'agent@wonder.test',
+    subject: 'Re: Shared work', eventId: 'msg_delivery_1' };
+  const notify = async (deliveryOutcome) => (await handleInbound(new Request('https://relay.test/webhooks/resend', {
+    method: 'POST', body: '{}',
+  }), env, { inspect: async () => ({ deliveryOutcome }) })).json();
+  assert.deepEqual(await notify({ ...base, recipient: 'other@gmail.com', status: 'delivered',
+    eventAt: '2026-10-03T10:00:00.000Z' }), { accepted: false });
+  assert.deepEqual(await notify({ ...base, providerEmailId: 'different-provider',
+    recipient: 'owner@gmail.com', status: 'delivered', eventAt: '2026-10-03T10:00:00.000Z' }),
+  { accepted: false });
+  assert.deepEqual(await notify({ ...base, recipient: 'owner@gmail.com', status: 'delivered',
+    eventAt: '2026-10-03T10:02:00.000Z' }), { accepted: true, deliveryOutcome: true });
+  assert.deepEqual(await notify({ ...base, recipient: 'owner@gmail.com', status: 'delayed',
+    eventAt: '2026-10-03T10:01:00.000Z' }), { accepted: true, deliveryOutcome: true });
+  assert.deepEqual(await notify({ ...base, recipient: 'guest@gmail.com', status: 'bounced',
+    eventAt: '2026-10-03T10:03:00.000Z' }), { accepted: true, deliveryOutcome: true });
+  assert.deepEqual(sqlite.prepare(`SELECT recipient_email, status FROM delivery_recipients
+    WHERE job_id = ? ORDER BY recipient_email`).all(jobId).map((row) => ({ ...row })), [
+    { recipient_email: 'guest@gmail.com', status: 'bounced' },
+    { recipient_email: 'owner@gmail.com', status: 'delivered' },
+  ]);
 });
 
 test('a sent event arriving before the send response cannot create a second reply', async () => {

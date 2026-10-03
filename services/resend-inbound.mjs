@@ -4,6 +4,10 @@ import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.m
 
 const MESSAGE_ID = /^<[^<>\s]+@[^<>\s]+>$/;
 const EMAIL_ID = /^[0-9a-f-]{36}$/i;
+const DELIVERY_EVENTS = new Map([
+  ['email.delivered', 'delivered'], ['email.delivery_delayed', 'delayed'],
+  ['email.bounced', 'bounced'], ['email.failed', 'failed'], ['email.suppressed', 'suppressed'],
+]);
 
 function mailbox(value) {
   const addresses = addressParser(String(value ?? ''));
@@ -59,6 +63,21 @@ export async function inspectResendInbound({ rawPayload, headers, webhookSecret,
         typeof data?.subject !== 'string') throw new Error('Resend sent event is incomplete');
     return { sent: { jobId, providerEmailId: data.email_id, messageId: data.message_id,
       from: mailbox(data.from), to: recipients(data.to), cc: recipients(data.cc), subject: data.subject } };
+  }
+  if (DELIVERY_EVENTS.has(event?.type)) {
+    const data = event.data;
+    const jobId = data?.tags?.tagmails_job;
+    if (!/^[0-9a-f-]{36}$/i.test(jobId || '')) return { ignored: true };
+    const to = recipients(data.to);
+    const eventAt = Date.parse(event.created_at);
+    if (!EMAIL_ID.test(data?.email_id || '') || !MESSAGE_ID.test(data?.message_id || '') ||
+        typeof data?.subject !== 'string' || to.length !== 1 || !Number.isFinite(eventAt)) {
+      throw new Error('Resend delivery event is incomplete');
+    }
+    return { deliveryOutcome: { jobId, providerEmailId: data.email_id,
+      recipient: to[0], from: mailbox(data.from), subject: data.subject,
+      status: DELIVERY_EVENTS.get(event.type), eventAt: new Date(eventAt).toISOString(),
+      eventId: header(headers, 'svix-id') } };
   }
   if (event?.type !== 'email.received') return { ignored: true };
   const metadata = event.data;

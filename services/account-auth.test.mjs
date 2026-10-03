@@ -173,8 +173,21 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   const siteResult = await siteRun.json();
   assert.equal(siteResult.selectedModel, 'Selected model: Claude Code Sonnet 5.5 (medium; requested in this email).');
   assert.equal(siteResult.deliveryState, 'uncertain');
+  assert.deepEqual(siteResult.deliveryRecipients, []);
   assert.equal(siteResult.result.transcript.events[0].text, 'Find <private> items');
   assert.equal(siteResult.artifacts[0].name, 'review <draft>.txt');
+  const providerId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  sqlite.prepare("UPDATE outbox SET state = 'sent', provider_email_id = ? WHERE job_id = ?")
+    .run(providerId, runId);
+  sqlite.prepare(`INSERT INTO delivery_recipients
+    (job_id, provider_email_id, recipient_email, status, event_at)
+    VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)`)
+    .run(runId, providerId, identity.email, 'delivered', '2026-10-03T10:00:00.000Z',
+      runId, providerId, 'guest@gmail.com', 'bounced', '2026-10-03T10:01:00.000Z');
+  const deliveredReceipt = await handleAccountRequest(request(`/runs/${runId}`, 'GET', undefined, cookie), env, options);
+  assert.match(await deliveredReceipt.text(), /guest@gmail\.com: bounced/);
+  assert.deepEqual((await (await handleAccountRequest(siteRequest(), env, options)).json()).deliveryRecipients,
+    [{ email: 'guest@gmail.com', status: 'bounced' }, { email: identity.email, status: 'delivered' }]);
   const receiptFile = await handleAccountRequest(request(`/runs/${runId}/artifacts/${artifactId}`, 'GET', undefined, cookie), env, options);
   assert.equal(await receiptFile.text(), 'memo');
   assert.equal(receiptFile.headers.get('content-type'), 'application/octet-stream');
