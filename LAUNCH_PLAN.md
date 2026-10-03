@@ -62,7 +62,7 @@ Review first-task completion, time to first reply, second-turn rate, multiplayer
 
 ## Decisions still needed
 
-- Confirm domain checkout and trademark clearance for TagMails before purchase or public branding of the address.
+- Resolve the active `TagMail` email-product naming risk before purchasing `tagmails.com` or broadly launching the TagMails brand; then confirm domain checkout and trademark clearance.
 - Choose production Bcc invitation behavior: verified Gmail Sent access or an authenticated owner invite; the current production path supports verified visible To/Cc grants.
 - Set retention and the final exchange price after measuring live delivery and model use.
 - Decide when API-funded model execution follows the subscription-backed local path.
