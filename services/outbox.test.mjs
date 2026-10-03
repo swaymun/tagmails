@@ -630,6 +630,37 @@ test('guest-only replies link to the Site transcript only after participant acce
   assert.doesNotMatch(payloads[2].html, /relay\.tagmails\.test\/runs/);
 });
 
+test('owner-only replies show remaining test credits without exposing them to guests', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  env.BILLING_TEST_MODE = 'true';
+  env.STRIPE_SECRET_KEY = 'sk_test_fixture';
+  env.STRIPE_WEBHOOK_SECRET = 'whsec_fixture';
+  sqlite.prepare(`INSERT INTO billing_checkouts (id, account_id, amount_cents)
+    VALUES ('checkout-1', 'account-1', 1000)`).run();
+  sqlite.prepare(`INSERT INTO credit_ledger (id, account_id, checkout_id, amount_cents, kind, source_id)
+    VALUES ('credit-1', 'account-1', 'checkout-1', 1000, 'test_top_up', 'session-1')`).run();
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  sqlite.prepare(`INSERT INTO test_email_charges (job_id, account_id, amount_cents, state)
+    VALUES ('job-1', 'account-1', 5, 'reserved')`).run();
+  const payloads = [];
+  const provider = {
+    sendEmail: async (payload) => { payloads.push(payload); return { data: { id: `sent-${payloads.length}` } }; },
+    getSentEmail: async (id) => ({ data: { message_id: `<${id}@tagmails.test>` } }),
+  };
+  assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
+  assert.match(payloads[0].text, /TagMails test credits remaining: \$9\.95\./);
+  assert.match(payloads[0].html, /TagMails test credits remaining: \$9\.95\./);
+
+  sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)').run('thread-1', 'reviewer@gmail.com');
+  await queuedTurn(fixture, { number: 2, from: 'reviewer@gmail.com',
+    to: ['agent@wonder.test', 'owner@gmail.com'] });
+  assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
+  assert.deepEqual(payloads[1].cc, ['owner@gmail.com']);
+  assert.doesNotMatch(payloads[1].text, /credits remaining/);
+  assert.doesNotMatch(payloads[1].html, /credits remaining/);
+});
+
 test('without a separate Site, an owner reply links to the Worker receipt', async () => {
   const fixture = bindings();
   fixture.env.PUBLIC_ORIGIN = 'https://relay.tagmails.test';

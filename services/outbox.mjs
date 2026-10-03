@@ -4,7 +4,7 @@ import { addressParser } from 'postal-mime';
 import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.mjs';
 import { knownAgentAddresses } from './agent-addresses.mjs';
 import { renderResult } from '../apps/mock-inbox/mail.mjs';
-import { releaseFailedPrimaryTestEmail, releaseTestEmail, settleTestEmail } from './email-charges.mjs';
+import { releaseFailedPrimaryTestEmail, releaseTestEmail, settleTestEmail, testBillingEnabled, testWalletSnapshot } from './email-charges.mjs';
 import { selectedModelDetail } from './model-route.mjs';
 
 const MESSAGE_ID = /^<[^<>\s]+@[^<>\s]+>$/;
@@ -229,10 +229,16 @@ async function prepare(env, row) {
     ? [`${result.artifactIds.length} file${result.artifactIds.length === 1 ? '' : 's'} available on the private run page for seven days.`]
     : [];
   const selectedModel = selectedModelDetail(inbound.model_json);
+  const ownerOnly = to.length === 1 && to[0] === owner && cc.length === 0;
+  const balance = ownerOnly && testBillingEnabled(env)
+    ? await testWalletSnapshot(env, row.account_id) : null;
+  const creditDetail = balance
+    ? `TagMails test credits remaining: $${(balance.balanceCents / 100).toFixed(2)}.` : null;
   const writeRun = ['codex-app-server-write', 'claude-cli-write'].includes(result.runtime);
   const rendered = renderResult({
     state: result.state, summary: result.summary,
-    details: [...(selectedModel ? [selectedModel] : []), ...(result.details ?? []), ...fileNote], checks: result.checks,
+    details: [...(selectedModel ? [selectedModel] : []), ...(result.details ?? []), ...fileNote,
+      ...(creditDetail ? [creditDetail] : [])], checks: result.checks,
     links: transcriptUrl && (ownerCanOpen || participantTranscriptReady)
       ? [{ label: sharedWithParticipant && !participantTranscriptReady ? `${runLinkLabel} (owner only)` : runLinkLabel,
         url: transcriptUrl }] : [],
