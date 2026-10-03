@@ -2,9 +2,11 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { stageAgentAttachments } from './agent-attachments.mjs';
 import { renewClaim } from './claim-renew.mjs';
+import { addRunEvent, claudeRunEvents, finishRunTranscript, runTranscript } from './run-transcript.mjs';
 
 const RUNTIME = 'claude-cli-readonly';
 const MODEL = 'claude-sonnet-5-5';
@@ -102,7 +104,7 @@ function reportedUsage(event) {
 
 async function runClaude(claim, workspace, sessionId, staged) {
   const args = [
-    '--print', '--output-format', 'json', '--safe-mode', '--restricted',
+    '--print', '--output-format', 'stream-json', '--verbose', '--safe-mode', '--restricted',
     '--strict-mcp-config', '--disable-slash-commands', '--no-chrome',
     '--tools', 'Read,Glob,Grep', '--disallowedTools', 'mcp__*', '--permission-mode', 'dontAsk',
     '--permission-prompts', 'none', '--model', MODEL, '--effort', 'medium',
@@ -116,11 +118,20 @@ async function runClaude(claim, workspace, sessionId, staged) {
   child.stdin.on('error', () => {});
   child.stdin.end(promptFor(claim, staged.prompt));
 
-  let output = '';
+  const transcript = runTranscript(claim.request);
+  let resultEvent;
+  let outputBytes = 0;
   let outputExceeded = false;
-  child.stdout.on('data', (chunk) => {
-    if (output.length + chunk.length > 2 * 1024 * 1024) { outputExceeded = true; child.kill(); }
-    else output += chunk;
+  let invalidOutput = false;
+  const lines = readline.createInterface({ input: child.stdout });
+  lines.on('line', (line) => {
+    outputBytes += Buffer.byteLength(line);
+    if (outputBytes > 2 * 1024 * 1024) { outputExceeded = true; child.kill(); return; }
+    let event;
+    try { event = JSON.parse(line); }
+    catch { invalidOutput = true; child.kill(); return; }
+    for (const item of claudeRunEvents(event)) addRunEvent(transcript, item.kind, item.text);
+    if (event.type === 'result') resultEvent = event;
   });
   child.stderr.resume();
   let leaseLost = false;
@@ -143,15 +154,18 @@ async function runClaude(claim, workspace, sessionId, staged) {
     if (leaseLost) return { result: fail('The local claim lease was lost while Claude was running.') };
     if (timedOut) return { result: fail('Claude did not finish within the three-minute prototype limit.') };
     if (outputExceeded) return { result: fail('Claude produced too much output for this prototype.') };
+    if (invalidOutput) return { result: fail('Claude returned an unreadable event stream.') };
     if (code !== 0) return { result: fail(`Claude stopped without a completed turn (exit ${code}).`) };
-    const event = JSON.parse(output);
-    if (event.type !== 'result' || event.subtype !== 'success' || event.is_error || !SESSION_ID.test(event.session_id || '')) {
+    const event = resultEvent;
+    if (event?.type !== 'result' || event.subtype !== 'success' || event.is_error || !SESSION_ID.test(event.session_id || '')) {
       return { result: { ...fail('Claude did not report a completed turn and session ID.'), ...reportedUsage(event) } };
     }
-    return { result: { ...resultFromAnswer(event.result || ''), ...reportedUsage(event) }, sessionId: event.session_id };
+    return { result: { ...resultFromAnswer(event.result || ''), ...reportedUsage(event),
+      transcript: finishRunTranscript(transcript, event.result || '') }, sessionId: event.session_id };
   } finally {
     clearInterval(renew);
     clearTimeout(timeout);
+    lines.close();
   }
 }
 

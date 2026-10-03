@@ -92,8 +92,13 @@ function validResult(value) {
   if (!value || !['completed', 'failed', 'needs_approval', 'needs_clarification'].includes(value.state) ||
       typeof value.summary !== 'string' || !value.summary.trim() || value.summary.length > 500) return false;
   const tokens = ['inputTokens', 'cachedInputTokens', 'cacheCreationInputTokens', 'outputTokens', 'reasoningOutputTokens'];
+  const transcript = value.transcript;
   return ['details', 'checks'].every((key) => value[key] === undefined ||
     (Array.isArray(value[key]) && value[key].length <= 12 && value[key].every((item) => typeof item === 'string' && item.length <= 300))) &&
+    (transcript === undefined || (transcript?.version === 1 && typeof transcript.truncated === 'boolean' &&
+      Array.isArray(transcript.events) && transcript.events.length <= 48 &&
+      transcript.events.every((event) => event && ['request', 'assistant', 'tool'].includes(event.kind) &&
+        typeof event.text === 'string' && event.text.length > 0 && event.text.length <= 800))) &&
     (value.usage === undefined || (value.usage && typeof value.usage === 'object' &&
       tokens.every((key) => Number.isSafeInteger(value.usage[key]) && value.usage[key] >= 0 && value.usage[key] <= 1_000_000_000))) &&
     (value.reportedListCostUsd === undefined || (typeof value.reportedListCostUsd === 'number' &&

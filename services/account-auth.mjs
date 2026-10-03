@@ -68,21 +68,23 @@ export async function accountFor(request, env) {
 }
 
 async function signIn(request, env, verifyIdentity) {
-  if (!sameOrigin(request)) return json({ error: 'Invalid origin' }, 403);
-  if (!env.GOOGLE_CLIENT_ID || !DOMAIN.test(env.AGENT_DOMAIN ?? '')) return json({ error: 'Google sign-in is not configured' }, 503);
+  const fromSite = request.headers.get('origin') === env.SITE_ORIGIN;
+  const headers = siteCors(request, env);
+  if (!sameOrigin(request) && !fromSite) return json({ error: 'Invalid origin' }, 403);
+  if (!env.GOOGLE_CLIENT_ID || !DOMAIN.test(env.AGENT_DOMAIN ?? '')) return json({ error: 'Google sign-in is not configured' }, 503, headers);
   let identity;
   try {
     const body = await bodyJson(request);
     identity = await verifyIdentity(body.credential, env.GOOGLE_CLIENT_ID);
-  } catch { return json({ error: 'Google sign-in failed' }, 401); }
+  } catch { return json({ error: 'Google sign-in failed' }, 401, headers); }
   const existing = await env.DB.prepare('SELECT id, active FROM accounts WHERE google_sub = ?')
     .bind(identity.sub).first();
-  if (existing && !existing.active) return json({ error: 'Account is inactive' }, 403);
+  if (existing && !existing.active) return json({ error: 'Account is inactive' }, 403, headers);
   if (existing) {
     try {
       await env.DB.prepare('UPDATE accounts SET owner_email = ? WHERE id = ?')
         .bind(identity.email, existing.id).run();
-    } catch { return json({ error: 'Gmail address is already assigned' }, 409); }
+    } catch { return json({ error: 'Gmail address is already assigned' }, 409, headers); }
   } else {
     const agent = `u-${randomUUID().replaceAll('-', '').slice(0, 20)}@${env.AGENT_DOMAIN}`;
     try {
@@ -92,16 +94,18 @@ async function signIn(request, env, verifyIdentity) {
       // A concurrent sign-in for the same Google account may have won.
       const raced = await env.DB.prepare('SELECT id FROM accounts WHERE google_sub = ?')
         .bind(identity.sub).first();
-      if (!raced) return json({ error: 'Gmail address is already assigned' }, 409);
+      if (!raced) return json({ error: 'Gmail address is already assigned' }, 409, headers);
     }
   }
   const account = await env.DB.prepare('SELECT id, owner_email, agent_email FROM accounts WHERE google_sub = ? AND active = 1')
     .bind(identity.sub).first();
-  if (!account || account.owner_email !== identity.email) return json({ error: 'Account could not be created' }, 409);
+  if (!account || account.owner_email !== identity.email) return json({ error: 'Account could not be created' }, 409, headers);
+  if (fromSite) return json({ ownerEmail: account.owner_email, agentEmail: account.agent_email }, 200, headers);
   const token = randomBytes(32).toString('base64url');
   await env.DB.prepare("INSERT INTO sessions (token_hash, account_id, expires_at) VALUES (?, ?, datetime('now', '+30 days'))")
     .bind(hash(token), account.id).run();
   return json({ ownerEmail: account.owner_email, agentEmail: account.agent_email }, 200, {
+    ...headers,
     'Set-Cookie': `${SESSION_COOKIE}=${token}; Path=/; Max-Age=2592000; HttpOnly; Secure; SameSite=Lax`,
   });
 }
@@ -129,30 +133,69 @@ async function pair(request, env) {
   return json({ paired: true, deviceId }, 201);
 }
 
+function siteCors(request, env) {
+  const origin = request.headers.get('origin');
+  return origin && origin === env.SITE_ORIGIN ? {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Vary': 'Origin',
+  } : {};
+}
+
+async function runRow(env, runId, accountId) {
+  const row = await env.DB.prepare(`SELECT j.id, j.state, j.attempts, j.created_at, j.result_key,
+    t.subject, m.sender_email, o.state AS delivery_state
+    FROM jobs j JOIN threads t ON t.id = j.thread_id JOIN messages m ON m.id = j.message_id
+    LEFT JOIN outbox o ON o.job_id = j.id
+    WHERE j.id = ? AND t.account_id = ? LIMIT 1`).bind(runId, accountId).first();
+  if (!row) return null;
+  const saved = row.result_key ? await env.MAIL.get(row.result_key) : null;
+  const result = saved ? JSON.parse(new TextDecoder().decode(await saved.arrayBuffer())) : null;
+  return { ...row, result };
+}
+
 export async function handleAccountRequest(request, env, { verifyIdentity = verifyGoogleCredential } = {}) {
   const { pathname } = new URL(request.url);
   const runId = pathname.match(/^\/runs\/([0-9a-f-]{36})$/i)?.[1];
-  if (!pathname.startsWith('/api/auth/') && !pathname.startsWith('/api/account/') && pathname !== '/api/device/pair' && !runId) return null;
+  const apiRunId = pathname.match(/^\/api\/runs\/([0-9a-f-]{36})$/i)?.[1];
+  if (!pathname.startsWith('/api/auth/') && !pathname.startsWith('/api/account/') && pathname !== '/api/device/pair' && !runId && !apiRunId) return null;
   if (!env.DB) throw new Error('Account database is not configured');
+  if (pathname === '/api/auth/google' && request.method === 'OPTIONS') return new Response(null, {
+    status: request.headers.get('origin') === env.SITE_ORIGIN ? 204 : 403,
+    headers: siteCors(request, env),
+  });
+  if (apiRunId && request.method === 'OPTIONS') return new Response(null, {
+    status: request.headers.get('origin') === env.SITE_ORIGIN ? 204 : 403,
+    headers: siteCors(request, env),
+  });
+  if (apiRunId && request.method === 'GET') {
+    const headers = siteCors(request, env);
+    const credential = request.headers.get('authorization')?.match(/^Bearer (\S+)$/)?.[1];
+    let identity;
+    try { identity = await verifyIdentity(credential, env.GOOGLE_CLIENT_ID); }
+    catch { return json({ error: 'Google sign-in required' }, 401, headers); }
+    const owner = await env.DB.prepare('SELECT id FROM accounts WHERE google_sub = ? AND active = 1')
+      .bind(identity.sub).first();
+    const row = owner ? await runRow(env, apiRunId, owner.id) : null;
+    if (!row) return json({ error: 'Run not found' }, 404, headers);
+    return json({ id: row.id, state: row.state, subject: row.subject, sender: row.sender_email,
+      createdAt: row.created_at, attempts: row.attempts, deliveryState: row.delivery_state,
+      result: row.result }, 200, headers);
+  }
   if (pathname === '/api/auth/config' && request.method === 'GET') {
     return env.GOOGLE_CLIENT_ID && DOMAIN.test(env.AGENT_DOMAIN ?? '')
-      ? json({ clientId: env.GOOGLE_CLIENT_ID })
-      : json({ error: 'Google sign-in is not configured' }, 503);
+      ? json({ clientId: env.GOOGLE_CLIENT_ID }, 200, siteCors(request, env))
+      : json({ error: 'Google sign-in is not configured' }, 503, siteCors(request, env));
   }
   if (pathname === '/api/auth/google' && request.method === 'POST') return signIn(request, env, verifyIdentity);
   if (pathname === '/api/device/pair' && request.method === 'POST') return pair(request, env);
   const account = await accountFor(request, env);
   if (runId && request.method === 'GET') {
     if (!account) return Response.redirect(`${new URL(request.url).origin}/account?next=${encodeURIComponent(pathname)}`, 302);
-    const row = await env.DB.prepare(`SELECT j.id, j.state, j.attempts, j.created_at, j.result_key,
-      t.subject, m.sender_email, o.state AS delivery_state
-      FROM jobs j JOIN threads t ON t.id = j.thread_id JOIN messages m ON m.id = j.message_id
-      LEFT JOIN outbox o ON o.job_id = j.id
-      WHERE j.id = ? AND t.account_id = ? LIMIT 1`).bind(runId, account.id).first();
+    const row = await runRow(env, runId, account.id);
     if (!row) return new Response('Run not found', { status: 404 });
-    const saved = row.result_key ? await env.MAIL.get(row.result_key) : null;
-    const result = saved ? JSON.parse(new TextDecoder().decode(await saved.arrayBuffer())) : null;
-    return runReceiptPage({ ...row, result });
+    return runReceiptPage(row);
   }
   if (pathname === '/api/account/me' && request.method === 'GET') {
     return account ? json({ ownerEmail: account.owner_email, agentEmail: account.agent_email,

@@ -62,6 +62,10 @@ test('a paired device receives a signed, account-scoped claim and completes it o
   const lease = { jobId: signedJob.jobId, leaseId: signedJob.leaseId };
   assert.equal((await call(env, paired.token, 'renew', lease)).body.renewed, true);
   const result = { state: 'completed', summary: 'The local agent read the status.',
+    transcript: { version: 1, truncated: false, events: [
+      { kind: 'request', text: 'Read the status.' },
+      { kind: 'tool', text: 'Read requested.' },
+      { kind: 'assistant', text: 'The local agent read the status.' }] },
     usage: { inputTokens: 1200, cachedInputTokens: 300, cacheCreationInputTokens: 0,
       outputTokens: 40, reasoningOutputTokens: 12 } };
   assert.equal((await call(env, paired.token, 'complete', { ...lease,
@@ -78,6 +82,7 @@ test('a paired device receives a signed, account-scoped claim and completes it o
   assert.equal(sqlite.prepare('SELECT job_id FROM outbox').get().job_id, signedJob.jobId);
   assert.equal(sqlite.prepare('SELECT state FROM outbox').get().state, 'queued');
   assert.equal(JSON.parse(objects.get(job.result_key).toString()).summary, result.summary);
+  assert.deepEqual(JSON.parse(objects.get(job.result_key).toString()).transcript, result.transcript);
 });
 
 test('expired leases are reclaimed and a stale or different device cannot complete them', async () => {

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { stageAgentAttachments } from './agent-attachments.mjs';
 import { prepareCodexProfile, PROFILE } from './codex-profile.mjs';
 import { renewClaim } from './claim-renew.mjs';
+import { addRunEvent, codexRunEvent, finishRunTranscript, runTranscript } from './run-transcript.mjs';
 
 const MODELS = new Set(['gpt-6-luna', 'gpt-6.1-sol']);
 const RUNTIME = 'codex-app-server-readonly';
@@ -125,6 +126,7 @@ async function runCodex(claim, workspace, home, sessionId, staged) {
   let approvals = 0;
   let answer = '';
   let usage = null;
+  const transcript = runTranscript(claim.request);
   let finish;
   let rejectTurn;
   const turnDone = new Promise((resolve, reject) => { finish = resolve; rejectTurn = reject; });
@@ -167,6 +169,8 @@ async function runCodex(claim, workspace, home, sessionId, staged) {
     }
     if (message.method === 'item/completed' && message.params?.item?.type === 'agentMessage' &&
         message.params.item.phase === 'final_answer') answer = message.params.item.text || '';
+    const event = codexRunEvent(message);
+    if (event && message.params?.item?.phase !== 'final_answer') addRunEvent(transcript, event.kind, event.text);
     if (message.method === 'thread/tokenUsage/updated') usage = reportedUsage(message.params?.tokenUsage?.last) ?? usage;
     if (message.method === 'turn/completed') finish(message.params?.turn?.status);
   });
@@ -199,7 +203,8 @@ async function runCodex(claim, workspace, home, sessionId, staged) {
     const status = await turnDone;
     if (leaseLost) return { result: fail('The local claim lease was lost while Codex was running.') };
     if (status !== 'completed') return { result: fail('Codex did not complete this turn.') };
-    return { result: resultFromAnswer(answer, claim.model.id, approvals, usage), threadId };
+    return { result: { ...resultFromAnswer(answer, claim.model.id, approvals, usage),
+      transcript: finishRunTranscript(transcript, answer) }, threadId };
   } finally {
     clearInterval(renew);
     clearTimeout(timeout);

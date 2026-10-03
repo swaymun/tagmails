@@ -57,6 +57,10 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       send({ method: 'thread/tokenUsage/updated', params: { tokenUsage: { last: {
         inputTokens: 1200, cachedInputTokens: 300, cacheWriteInputTokens: 0,
         outputTokens: 40, reasoningOutputTokens: 12 } } } });
+      send({ method: 'item/completed', params: { item: { type: 'reasoning', summary: 'SECRET_REASONING' } } });
+      send({ method: 'item/completed', params: { item: { type: 'commandExecution', command: 'cat secret.txt',
+        aggregatedOutput: 'SECRET_FILE', status: 'completed', exitCode: 0 } } });
+      send({ method: 'item/completed', params: { item: { type: 'agentMessage', phase: 'commentary', text: 'Checking the workspace.' } } });
       send({ method: 'item/completed', params: { item: { type: 'agentMessage', phase: 'final_answer',
         text: resumed ? 'First turn plus second turn.' : 'First turn.' } } });
       send({ method: 'turn/completed', params: { turn: { status: 'completed' } } });
@@ -95,6 +99,13 @@ test('Codex app-server resumes the restricted thread, reads an attachment, and c
   assert.match(first.summary, /First turn/);
   assert.deepEqual(first.usage, { inputTokens: 1200, cachedInputTokens: 300,
     cacheCreationInputTokens: 0, outputTokens: 40, reasoningOutputTokens: 12 });
+  assert.deepEqual(first.transcript.events, [
+    { kind: 'request', text: 'Summarize this workspace.' },
+    { kind: 'tool', text: 'Local command completed (exit 0).' },
+    { kind: 'assistant', text: 'Checking the workspace.' },
+    { kind: 'assistant', text: 'First turn.' },
+  ]);
+  assert.doesNotMatch(JSON.stringify(first.transcript), /SECRET_REASONING|SECRET_FILE|secret\.txt/);
   assert.deepEqual(await runClaim(claim('job-1', 'thread-1')), first);
   const second = await runClaim(claim('job-2', 'thread-1', 'Continue the summary.'));
   assert.match(second.summary, /second turn/);

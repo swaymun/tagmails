@@ -51,8 +51,12 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   const { env, sqlite } = bindings();
   env.GOOGLE_CLIENT_ID = clientId;
   env.AGENT_DOMAIN = 'tagmails.test';
+  env.SITE_ORIGIN = 'https://tagmails.chatgpt.site';
   const identity = { sub: 'google-user-2', email: 'new.owner@gmail.com' };
-  const options = { verifyIdentity: async () => identity };
+  const options = { verifyIdentity: async (credential) => {
+    if (credential !== 'test') throw new Error('Invalid credential');
+    return identity;
+  } };
   assert.equal((await handleAccountRequest(request('/api/account/me'), env, options)).status, 401);
   assert.equal((await handleAccountRequest(request('/api/auth/google', 'POST', { credential: 'test' }, null, 'https://attacker.test'), env, options)).status, 403);
   const signedIn = await handleAccountRequest(request('/api/auth/google', 'POST', { credential: 'test' }), env, options);
@@ -67,6 +71,17 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   const second = await handleAccountRequest(request('/api/auth/google', 'POST', { credential: 'test' }), env, options);
   assert.equal((await second.json()).agentEmail, profile.agentEmail);
   assert.equal(sqlite.prepare('SELECT count(*) n FROM accounts WHERE google_sub = ?').get(identity.sub).n, 1);
+  const siteSignIn = await handleAccountRequest(new Request('https://relay.test/api/auth/google', {
+    method: 'POST', headers: { Origin: env.SITE_ORIGIN, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ credential: 'test' }),
+  }), env, options);
+  assert.equal(siteSignIn.status, 200);
+  assert.equal(siteSignIn.headers.get('access-control-allow-origin'), env.SITE_ORIGIN);
+  assert.equal(siteSignIn.headers.get('set-cookie'), null);
+  assert.equal(sqlite.prepare('SELECT count(*) n FROM accounts WHERE google_sub = ?').get(identity.sub).n, 1);
+  assert.equal((await handleAccountRequest(new Request('https://relay.test/api/auth/google', {
+    method: 'OPTIONS', headers: { Origin: env.SITE_ORIGIN },
+  }), env, options)).status, 204);
 
   const codeResponse = await handleAccountRequest(request('/api/account/pairing-code', 'POST', {}, cookie), env, options);
   const { code } = await codeResponse.json();
@@ -101,6 +116,9 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
     VALUES (?, ?, ?, 'completed', ?)`).run(runId, 'receipt-thread', 'receipt-message', 'results/receipt.json');
   await env.MAIL.put('results/receipt.json', JSON.stringify({ state: 'completed', summary: 'Checked <safely>',
     details: ['Found one item.'], checks: ['No external action.'],
+    transcript: { version: 1, truncated: false, events: [
+      { kind: 'request', text: 'Find <private> items' }, { kind: 'tool', text: 'Read completed.' },
+      { kind: 'assistant', text: 'Found one item.' }] },
     usage: { inputTokens: 302, cachedInputTokens: 100, cacheCreationInputTokens: 200,
       outputTokens: 30, reasoningOutputTokens: 4 }, reportedListCostUsd: 0.010528 }));
   const receipt = await handleAccountRequest(request(`/runs/${runId}`, 'GET', undefined, cookie), env, options);
@@ -109,10 +127,26 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.match(html, /Checked &lt;safely&gt;/);
   assert.doesNotMatch(html, /<safely>/);
   assert.match(html, /Private &lt;review&gt;/);
+  assert.match(html, /Find &lt;private&gt; items/);
+  assert.doesNotMatch(html, /<private>/);
   assert.match(html, /302 input tokens/);
   assert.match(html, /\$0\.010528/);
   assert.match(html, /not a TagMails charge/);
   assert.equal(receipt.headers.get('cache-control'), 'no-store');
+  const siteRequest = (credential = 'test', origin = env.SITE_ORIGIN) => new Request(`https://relay.test/api/runs/${runId}`, {
+    headers: { Authorization: `Bearer ${credential}`, Origin: origin },
+  });
+  assert.equal((await handleAccountRequest(siteRequest('bad'), env, options)).status, 401);
+  const siteRun = await handleAccountRequest(siteRequest(), env, options);
+  assert.equal(siteRun.headers.get('access-control-allow-origin'), env.SITE_ORIGIN);
+  assert.equal(siteRun.headers.get('cache-control'), 'no-store');
+  assert.equal((await siteRun.json()).result.transcript.events[0].text, 'Find <private> items');
+  assert.equal((await handleAccountRequest(siteRequest('test', 'https://attacker.test'), env, options))
+    .headers.get('access-control-allow-origin'), null);
+  const preflight = await handleAccountRequest(new Request(`https://relay.test/api/runs/${runId}`, {
+    method: 'OPTIONS', headers: { Origin: env.SITE_ORIGIN, 'Access-Control-Request-Method': 'GET' },
+  }), env, options);
+  assert.equal(preflight.status, 204);
   const redirect = await handleAccountRequest(request(`/runs/${runId}`), env, options);
   assert.equal(redirect.status, 302);
   assert.match(redirect.headers.get('location'), /\/account\?next=/);
@@ -121,6 +155,9 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   });
   const otherCookie = other.headers.get('set-cookie').split(';')[0];
   assert.equal((await handleAccountRequest(request(`/runs/${runId}`, 'GET', undefined, otherCookie), env, options)).status, 404);
+  assert.equal((await handleAccountRequest(siteRequest(), env, {
+    verifyIdentity: async () => ({ sub: 'google-sub-1', email: 'owner@gmail.com' }),
+  })).status, 404);
 
   assert.equal((await handleAccountRequest(request(`/api/account/devices/${deviceId}/revoke`, 'POST', {}, cookie), env, options)).status, 200);
   assert.equal((await handleDeviceRequest(new Request('https://relay.test/api/device/claim', {

@@ -255,6 +255,8 @@ export function runReceiptPage(run) {
   const title = ({ queued: 'Queued', running: 'Running', completed: 'Completed', failed: 'Failed' })[run.state] ?? 'Run';
   const details = Array.isArray(run.result?.details) ? run.result.details : [];
   const checks = Array.isArray(run.result?.checks) ? run.result.checks : [];
+  const transcript = run.result?.transcript?.version === 1 && Array.isArray(run.result.transcript.events)
+    ? run.result.transcript : null;
   const usage = run.result?.usage;
   const hasUsage = usage && ['inputTokens', 'cachedInputTokens', 'cacheCreationInputTokens', 'outputTokens', 'reasoningOutputTokens']
     .every((key) => Number.isSafeInteger(usage[key]) && usage[key] >= 0);
@@ -266,7 +268,7 @@ export function runReceiptPage(run) {
 a{color:#255d53}a:focus-visible{outline:3px solid #b98432;outline-offset:3px}.eyebrow{letter-spacing:.12em;text-transform:uppercase;font-size:.72rem;font-weight:700;color:#57776f}
 h1{font-size:clamp(2rem,6vw,3.25rem);line-height:1.1;margin:.35em 0}h2{font-size:1.05rem;margin:28px 0 8px}p{margin:8px 0 16px}.card{background:#fff;border:1px solid #ddd9cf;border-radius:14px;padding:24px;margin:24px 0}
 .status{display:inline-block;background:#e5eee8;color:#225440;border-radius:30px;padding:4px 11px;font-size:.8rem;font-weight:700}.muted{color:#62625c}.meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 24px;margin-top:24px;font-size:.9rem}
-.meta strong{display:block;color:#242424}.meta span{overflow-wrap:anywhere}li{margin:6px 0}@media(max-width:520px){.meta{grid-template-columns:1fr}}
+.meta strong{display:block;color:#242424}.meta span{overflow-wrap:anywhere}li{margin:6px 0}.event{border-top:1px solid #e5e2db;padding:14px 0}.event:first-child{border-top:0}.event strong{display:block;font-size:.8rem;color:#526960;text-transform:uppercase;letter-spacing:.07em}.event p{white-space:pre-wrap;overflow-wrap:anywhere;margin:5px 0 0}.event.tool{color:#555;background:#f7f7f4;padding:12px;border-radius:8px;margin:8px 0}@media(max-width:520px){.meta{grid-template-columns:1fr}}
 </style></head><body><main><p class="eyebrow">tagmails. / run receipt</p><a href="/account">Account</a>
 <h1>${escapeHtml(run.subject)}</h1><span class="status">${title}</span>
 <section class="card"><h2>Outcome</h2><p>${escapeHtml(run.result?.summary ?? 'The agent has not submitted a result yet.')}</p>
@@ -276,7 +278,10 @@ ${hasUsage ? `<h2>Model usage reported by the local CLI</h2><p>${escapeHtml(usag
 ${typeof listCost === 'number' && Number.isFinite(listCost) && listCost >= 0 ? `<p>List-equivalent model cost reported by the CLI: $${escapeHtml(listCost.toFixed(6))}. This is not a TagMails charge.</p>` : ''}
 <div class="meta"><span><strong>Sender</strong>${escapeHtml(run.sender_email)}</span><span><strong>Received</strong>${escapeHtml(run.created_at)} UTC</span>
 <span><strong>Attempts</strong>${escapeHtml(run.attempts)}</span><span><strong>Email delivery</strong>${escapeHtml(run.delivery_state ?? 'Not queued')}</span></div></section>
-<p class="muted">This receipt shows the recorded outcome and delivery state. A step-by-step agent trace is not stored yet.</p>
+<section class="card"><h2>Run transcript</h2>
+${transcript ? transcript.events.map((event) => `<div class="event ${event.kind === 'tool' ? 'tool' : ''}"><strong>${escapeHtml(event.kind === 'request' ? 'Email request' : event.kind === 'tool' ? 'Tool step' : 'Agent')}</strong><p>${escapeHtml(event.text)}</p></div>`).join('') : '<p class="muted">A transcript was not recorded for this run.</p>'}
+${transcript?.truncated ? '<p class="muted">Long content and later steps were shortened to fit this receipt.</p>' : ''}
+<p class="muted">Private reasoning, setup prompts, and raw tool output are excluded.</p></section>
 </main></body></html>`;
   return new Response(html, { headers: {
     'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',

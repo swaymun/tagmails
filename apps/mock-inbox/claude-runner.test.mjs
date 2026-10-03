@@ -32,12 +32,17 @@ process.stdin.on('end', () => {
   fs.appendFileSync(path.join(process.cwd(), 'calls.jsonl'), JSON.stringify({ args, prompt, attachment, attachmentText, hadApiKey: Boolean(process.env.ANTHROPIC_API_KEY) }) + '\\n');
   const resumed = args.includes('--resume');
   const budgetFail = prompt.includes('[budget-fail]');
+  process.stdout.write(JSON.stringify({ type: 'assistant', message: { content: [
+    { type: 'thinking', thinking: 'SECRET_REASONING' },
+    { type: 'tool_use', name: 'Read', input: { file_path: 'secret.txt' } },
+    { type: 'text', text: 'Checking the workspace.' } ] } }) + '\\n');
   process.stdout.write(JSON.stringify({ type: 'result', subtype: budgetFail ? 'error_max_budget_usd' : 'success', is_error: budgetFail,
     session_id: '33333333-3333-4333-8333-333333333333', result: resumed ? 'Second turn.' : 'First turn.',
     modelUsage: { 'claude-sonnet-5-5': { inputTokens: 2, cacheReadInputTokens: 100,
       cacheCreationInputTokens: 200, outputTokens: 30, thinkingTokens: 4, costUSD: 0.010528, costBasis: 'list' },
       'claude-haiku-helper': { inputTokens: 3, cacheReadInputTokens: 0,
         cacheCreationInputTokens: 0, outputTokens: 2, costUSD: 0.000012, costBasis: 'list' } } }));
+  process.stdout.write('\\n');
 });
 `, { mode: 0o755 });
   const keys = ['TAGMAILS_WORKSPACE', 'TAGMAILS_CLAUDE_SESSION_FILE', 'TAGMAILS_CLAUDE_BIN', 'ANTHROPIC_API_KEY'];
@@ -63,6 +68,13 @@ process.stdin.on('end', () => {
   assert.deepEqual(first.usage, { inputTokens: 305, cachedInputTokens: 100,
     cacheCreationInputTokens: 200, outputTokens: 32, reasoningOutputTokens: 4 });
   assert.ok(Math.abs(first.reportedListCostUsd - 0.01054) < 1e-10);
+  assert.deepEqual(first.transcript.events, [
+    { kind: 'request', text: 'Summarize this workspace.' },
+    { kind: 'tool', text: 'Read requested.' },
+    { kind: 'assistant', text: 'Checking the workspace.' },
+    { kind: 'assistant', text: 'First turn.' },
+  ]);
+  assert.doesNotMatch(JSON.stringify(first.transcript), /SECRET_REASONING|secret\.txt/);
   assert.deepEqual(await runClaim(claim('job-1')), first);
   const second = await runClaim(claim('job-2', 'Continue the summary.'));
   assert.equal(second.state, 'completed');
