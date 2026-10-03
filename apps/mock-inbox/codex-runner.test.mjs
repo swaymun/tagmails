@@ -33,6 +33,8 @@ let resumed = false;
 function send(value) { process.stdout.write(JSON.stringify(value) + '\\n'); }
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   const message = JSON.parse(line);
+  if (message.id === 900 && message.result) fs.appendFileSync(log,
+    JSON.stringify({ method: 'approval-response', decision: message.result.decision }) + '\\n');
   if (message.method === 'initialize') send({ id: message.id, result: {} });
   if (message.method === 'config/read') send({ id: message.id, result: {
     config: { web_search: 'disabled', sandbox_mode: null, mcp_servers: mode === 'external-tool' ? { rogue: {} } : {} },
@@ -43,7 +45,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     fs.appendFileSync(log, JSON.stringify({ method: message.method, params: message.params,
       codexHome: process.env.CODEX_HOME, hadApiKey: Boolean(process.env.OPENAI_API_KEY) }) + '\\n');
     send({ id: message.id, result: { thread: { id }, activePermissionProfile: {
-      id: mode === 'wrong-profile' ? ':danger-full-access' : 'tagmails-read' } } });
+      id: mode === 'wrong-profile' ? ':danger-full-access' : message.params.permissions } } });
   }
   if (message.method === 'turn/start') {
     const prompt = message.params.input[0].text;
@@ -53,6 +55,8 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     fs.appendFileSync(log, JSON.stringify({ method: message.method, params: message.params,
       attachment, attachmentText }) + '\\n');
     send({ id: message.id, result: { turn: { id: 'turn-1', status: 'inProgress' } } });
+    if (mode === 'approval-request') send({ id: 900, method: 'item/commandExecution/requestApproval',
+      params: { threadId: id, turnId: 'turn-1', command: 'curl https://example.com' } });
     setTimeout(() => {
       send({ method: 'thread/tokenUsage/updated', params: { tokenUsage: { last: {
         inputTokens: 1200, cachedInputTokens: 300, cacheWriteInputTokens: 0,
@@ -64,7 +68,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       send({ method: 'item/completed', params: { item: { type: 'agentMessage', phase: 'final_answer',
         text: resumed ? 'First turn plus second turn.' : 'First turn.' } } });
       send({ method: 'turn/completed', params: { turn: { status: 'completed' } } });
-    }, mode === 'slow' ? 160 : 0);
+    }, mode === 'slow' ? 160 : mode === 'approval-request' ? 20 : 0);
   }
 });
 `, { mode: 0o755 });
@@ -133,7 +137,7 @@ test('Codex app-server resumes the restricted thread, reads an attachment, and c
 
 test('Codex adapter refuses to run a turn when the restricted profile is not active', async (t) => {
   const { calls } = setup(t, 'wrong-profile');
-  await assert.rejects(runClaim(claim('job-1', 'thread-1')), /restricted read profile/);
+  await assert.rejects(runClaim(claim('job-1', 'thread-1')), /tagmails-read profile/);
   const events = fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(events.length, 1);
 });
@@ -175,4 +179,28 @@ test('a longer Codex app-server turn renews its lab claim', async (t) => {
   });
   assert.equal((await runClaim(claim('job-slow', 'thread-slow'))).state, 'completed');
   assert.ok(renewals >= 1);
+});
+
+test('opt-in Codex write mode uses its restricted profile and prompt', async (t) => {
+  const { workspace, home, calls } = setup(t);
+  const result = await runClaim(claim('job-write', 'thread-write', 'Edit a file in this workspace.'), { write: true });
+  assert.equal(result.state, 'completed');
+  assert.equal(result.runtime, 'codex-app-server-write');
+  assert.match(result.checks[0], /selected-workspace writes and no command network/);
+  const events = fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(events[0].params.permissions, 'tagmails-write');
+  assert.equal(events[1].params.cwd, fs.realpathSync(workspace));
+  assert.match(events[1].params.input[0].text, /You may read and change files only in the selected workspace/);
+  assert.match(fs.readFileSync(path.join(home, 'config.toml'), 'utf8'), /"\." = "write"/);
+});
+
+test('Codex write mode declines access expansion and reports a waiting result', async (t) => {
+  const { calls } = setup(t, 'approval-request');
+  const result = await runClaim(claim('job-approval', 'thread-approval', 'Use the network.'), { write: true });
+  assert.equal(result.state, 'needs_approval');
+  assert.equal(result.runtime, 'codex-app-server-write');
+  assert.match(result.checks.join(' '), /request\(s\) to expand permissions were declined/);
+  assert.match(result.checks.join(' '), /Local edits may already have occurred/);
+  const events = fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(events.find((item) => item.method === 'approval-response')?.decision, 'decline');
 });

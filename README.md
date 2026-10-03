@@ -1,6 +1,6 @@
 # TagMails
 
-TagMails gives an existing local coding agent an email address. This repository currently contains the product plan and an **internal, synthetic Gmail-style test inbox**. A [private TagMails Site](https://tagmails.saimun-h-shahee.chatgpt.site) hosts the landing preview, owner-only Google sign-in and device setup, and run transcripts from a separate source checkout in `site/`; it does not deliver live email yet. By default the local prototype sends no email, invokes no model, changes no files on behalf of a message, and charges no money. Explicit one-job Codex and Claude read-only modes are available for local testing.
+TagMails gives an existing local coding agent an email address. This repository currently contains the product plan and an **internal, synthetic Gmail-style test inbox**. A [private TagMails Site](https://tagmails.saimun-h-shahee.chatgpt.site) hosts the landing preview, owner-only Google sign-in and device setup, and run transcripts from a separate source checkout in `site/`; it does not deliver live email yet. By default the local prototype sends no email, invokes no model, changes no files on behalf of a message, and charges no money. Explicit one-job Codex and Claude read-only modes are available for local testing, plus an opt-in Codex mode that can edit one selected workspace.
 
 ## Run the internal inbox
 
@@ -45,6 +45,19 @@ cargo run -p tagmails-daemon -- --once
 The adapter accepts Luna and GPT-6.1 Sol routes. It starts Codex app-server with a dedicated `tagmails-read` permission profile and a separate runtime home at `~/.tagmails/codex-readonly`. That private directory holds the per-thread session IDs and completed job results; the adapter resumes the same session for later selected jobs and reuses a saved result on retry. It renews the lab claim during a long turn and stops the run after three minutes. The lab labels these replies as local Codex runs. The selected job ID and `--once` are required because this synthetic localhost inbox has no authenticated sender or production provider verification. Existing sessions saved by the older CLI adapter in `.local/codex-sessions.json` do not carry over to this isolated runtime.
 
 This mode stages bounded inbound attachments inside the selected workspace so the restricted agent can inspect them, then removes the files after the turn. The named profile permits reads in that workspace, denies writes and outside reads, disables command network access and Codex web search, and declines permission-expansion requests. The runner checks that project settings are untrusted and external tools are absent before starting a turn. The Codex auth link and session store stay outside the workspace. In scratch-folder Luna runs, the new route read a note and recalled it on a second turn after the note was removed, then read a staged text attachment in a separate turn and removed its staging directory. A Rust worker also claimed one synthetic lab email through this route and rendered `indigo 51` in its threaded reply. Direct sandbox checks denied a workspace write, an outside read, an outside read through a workspace symlink, and access to Codex auth. Run `node scripts/check-codex-permissions.mjs` to repeat the filesystem checks. Use only synthetic test mail and a disposable workspace while runtime approvals and production isolation are reviewed. Image, PDF, and other file interpretation still need live checks.
+
+### Opt-in local Codex workspace-write run
+
+Select a **disposable** workspace and one queued lab `job-...` ID. This mode can change files in that workspace:
+
+```sh
+TAGMAILS_RUNTIME=codex-write \
+TAGMAILS_WORKSPACE=/absolute/path/to/disposable-workspace \
+TAGMAILS_JOB_ID=job-123 \
+cargo run -p tagmails-daemon -- --once
+```
+
+It uses a separate `tagmails-write` profile and runtime home. The profile permits reads and writes in the selected workspace, denies outside reads and writes, and disables command network access. Permission-expansion requests are declined and reported as waiting; the lab's **Approve simulated action** button cannot requeue a real agent request. Run `node scripts/check-codex-permissions.mjs --write` for the sandbox preflight. A real Luna two-turn scratch run created and then appended to a file; a separate synthetic email passed through Rust to Luna, changed a scratch file, and rendered the result in the Gmail-style lab. This is local synthetic testing only. The remote relay continues to select read-only adapters, and no real provider email was sent.
 
 ### Opt-in local Claude read-only run
 

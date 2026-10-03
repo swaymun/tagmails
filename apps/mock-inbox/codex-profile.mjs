@@ -3,37 +3,44 @@ import os from 'node:os';
 import path from 'node:path';
 
 export const PROFILE = 'tagmails-read';
+export const WRITE_PROFILE = 'tagmails-write';
 
-export const CODEX_CONFIG = `web_search = "disabled"
-default_permissions = "${PROFILE}"
+function codexConfig(profile, access) {
+  return `web_search = "disabled"
+default_permissions = "${profile}"
 approval_policy = "on-request"
 
-[permissions.${PROFILE}]
+[permissions.${profile}]
 extends = ":read-only"
 
-[permissions.${PROFILE}.filesystem]
+[permissions.${profile}.filesystem]
 ":root" = "deny"
 ":minimal" = "read"
 ":tmpdir" = "deny"
 ":slash_tmp" = "deny"
 
-[permissions.${PROFILE}.filesystem.":workspace_roots"]
-"." = "read"
+[permissions.${profile}.filesystem.":workspace_roots"]
+"." = "${access}"
 
-[permissions.${PROFILE}.network]
+[permissions.${profile}.network]
 enabled = false
 `;
+}
+
+export const CODEX_CONFIG = codexConfig(PROFILE, 'read');
+export const WRITE_CODEX_CONFIG = codexConfig(WRITE_PROFILE, 'write');
 
 function overlaps(a, b) {
   const relative = path.relative(a, b);
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
-export async function prepareCodexProfile(workspace) {
+export async function prepareCodexProfile(workspace, write = false) {
+  const config = write ? WRITE_CODEX_CONFIG : CODEX_CONFIG;
   const source = process.env.TAGMAILS_CODEX_AUTH_FILE ||
     path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'auth.json');
   const destination = process.env.TAGMAILS_CODEX_RUNTIME_HOME ||
-    path.join(os.homedir(), '.tagmails', 'codex-readonly');
+    path.join(os.homedir(), '.tagmails', write ? 'codex-write' : 'codex-readonly');
   if (!path.isAbsolute(source) || !path.isAbsolute(destination)) throw new Error('Codex auth and runtime home must be absolute paths');
   const auth = await fs.realpath(source);
   await fs.mkdir(destination, { recursive: true, mode: 0o700 });
@@ -43,9 +50,9 @@ export async function prepareCodexProfile(workspace) {
     throw new Error('Codex authentication and runtime home must be outside the selected workspace');
   }
   const configFile = path.join(home, 'config.toml');
-  try { await fs.writeFile(configFile, CODEX_CONFIG, { flag: 'wx', mode: 0o600 }); }
+  try { await fs.writeFile(configFile, config, { flag: 'wx', mode: 0o600 }); }
   catch (error) { if (error.code !== 'EEXIST') throw error; }
-  if (await fs.readFile(configFile, 'utf8') !== CODEX_CONFIG) throw new Error('Codex runtime configuration was changed');
+  if (await fs.readFile(configFile, 'utf8') !== config) throw new Error('Codex runtime configuration was changed');
   const authLink = path.join(home, 'auth.json');
   try { await fs.symlink(auth, authLink); }
   catch (error) { if (error.code !== 'EEXIST') throw error; }

@@ -3,7 +3,10 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CODEX_CONFIG, PROFILE } from '../apps/mock-inbox/codex-profile.mjs';
+import { CODEX_CONFIG, PROFILE, WRITE_CODEX_CONFIG, WRITE_PROFILE } from '../apps/mock-inbox/codex-profile.mjs';
+
+const write = process.argv.includes('--write');
+const profile = write ? WRITE_PROFILE : PROFILE;
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tagmails-permissions-'));
 const workspace = path.join(root, 'workspace');
@@ -14,11 +17,11 @@ fs.mkdirSync(home);
 fs.writeFileSync(path.join(workspace, 'inside.txt'), 'synthetic inside marker\n');
 fs.writeFileSync(outside, 'synthetic outside marker\n');
 fs.symlinkSync(outside, path.join(workspace, 'outside-link.txt'));
-fs.writeFileSync(path.join(home, 'config.toml'), CODEX_CONFIG);
+fs.writeFileSync(path.join(home, 'config.toml'), write ? WRITE_CODEX_CONFIG : CODEX_CONFIG);
 
 function sandbox(command) {
   return spawnSync(process.env.TAGMAILS_CODEX_BIN || 'codex',
-    ['sandbox', '-P', PROFILE, '-C', workspace, ...command],
+    ['sandbox', '-P', profile, '-C', workspace, ...command],
     { cwd: workspace, env: { ...process.env, CODEX_HOME: home }, encoding: 'utf8', timeout: 10_000 });
 }
 
@@ -27,9 +30,9 @@ try {
   assert.equal(inside.status, 0, inside.stderr);
   assert.match(inside.stdout, /synthetic inside marker/);
 
-  const insideWrite = sandbox(['sh', '-c', 'printf forbidden > new-inside.txt']);
-  assert.notEqual(insideWrite.status, 0, 'A workspace file was writable');
-  assert.equal(fs.existsSync(path.join(workspace, 'new-inside.txt')), false);
+  const insideWrite = sandbox(['sh', '-c', 'printf synthetic > new-inside.txt']);
+  assert.equal(insideWrite.status === 0, write, `Unexpected selected-workspace write permission: ${insideWrite.stderr}`);
+  assert.equal(fs.existsSync(path.join(workspace, 'new-inside.txt')), write);
 
   const outsideRead = sandbox(['cat', outside]);
   assert.notEqual(outsideRead.status, 0, 'An outside file was readable');
@@ -48,7 +51,7 @@ try {
     const authRead = sandbox(['test', '-r', auth]);
     assert.notEqual(authRead.status, 0, 'Codex authentication was readable from the sandbox');
   }
-  console.log('Codex permission preflight passed: workspace read allowed; workspace write, outside read/write, symlink escape, and auth read denied.');
+  console.log(`Codex ${profile} preflight passed: workspace write ${write ? 'allowed' : 'denied'}; outside read/write, symlink escape, and auth read denied.`);
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

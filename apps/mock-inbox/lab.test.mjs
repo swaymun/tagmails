@@ -324,6 +324,28 @@ test('a real Claude result keeps its runtime label in the email thread', (t) => 
   assert.match(lab.state.threads[0].messages.at(-1).text, /Claude completed locally in read-only mode/);
 });
 
+test('an opt-in Codex write result is labeled with its workspace access', (t) => {
+  const { lab } = freshLab(t);
+  lab.send({ from: 'owner@gmail.com', subject: 'Local edit', body: 'Edit the selected file.' });
+  const claim = lab.claimNext();
+  assert.equal(lab.completeClaim(claim.jobId, claim.claimId, {
+    runtime: 'codex-app-server-write', state: 'completed', summary: 'Codex edited the selected file.',
+  }).state, 'completed');
+  assert.equal(lab.state.jobs[0].runtime, 'codex-app-server-write');
+  assert.match(lab.state.threads[0].messages.at(-1).text, /Codex completed locally with selected-workspace write access/);
+});
+
+test('the mock approval button cannot requeue a real agent permission request', (t) => {
+  const { lab } = freshLab(t);
+  lab.send({ from: 'owner@gmail.com', subject: 'Needs local access', body: 'Check a file outside this workspace.' });
+  const claim = lab.claimNext();
+  assert.equal(lab.completeClaim(claim.jobId, claim.claimId, {
+    runtime: 'codex-app-server-write', state: 'needs_approval', summary: 'Codex requested outside access.',
+  }).state, 'needs_approval');
+  assert.throws(() => lab.approveJob(claim.jobId), /cannot be approved by the mock daemon/);
+  assert.equal(lab.state.jobs[0].state, 'needs_approval');
+});
+
 test('the real-run worker can claim only the selected queued job', (t) => {
   const { lab } = freshLab(t);
   const first = lab.send({ from: 'owner@gmail.com', subject: 'First', body: 'First task.' });

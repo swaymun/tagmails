@@ -1,6 +1,8 @@
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 const icon = (name) => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
+const runtimeLabel = (runtime) => runtime === 'claude-cli-readonly' ? 'local Claude read-only'
+  : runtime === 'codex-app-server-write' ? 'local Codex workspace write' : 'local Codex read-only';
 
 let data;
 let currentThread = null;
@@ -102,7 +104,7 @@ function renderThread(thread) {
     const canReact = outgoing && visibleRecipients.includes(data.owner) && recipientCount <= 20;
     const reactionButtons = canReact ? `<div class="reaction-picker" aria-label="Simulate Gmail emoji reaction"><span>React</span>${['👍', '❤️', '👀'].map((emoji) => `<button type="button" data-react="${emoji}" data-message="${encodeURIComponent(message.id)}" aria-label="React ${emoji} to this agent email">${emoji}</button>`).join('')}</div>` : '';
     return `<article class="thread-message"><div class="message-header"><span class="sender-avatar${outgoing ? ' agent' : ''}">${esc(label.slice(0, 1).toUpperCase())}</span><div class="sender-meta"><strong>${esc(label)}</strong><small>to ${esc(message.to)}${message.cc.length ? `, cc ${esc(message.cc.join(', '))}` : ''}${message.from === data.owner && message.bcc?.length ? `, bcc ${esc(message.bcc.join(', '))}` : ''}</small></div><time class="message-date" datetime="${esc(message.at)}">${esc(new Date(message.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}</time></div><div class="message-body">${preview}</div>${attachments ? `<div class="attachment-list">${attachments}</div>` : ''}${reactions ? `<div class="reaction-list">${reactions}</div>` : ''}${reactionButtons}${outgoing ? `<div class="message-actions"><a href="/api/mime?messageId=${encodeURIComponent(message.id)}" target="_blank" rel="noopener">View raw MIME</a><span>HTML + plain text</span></div>` : ''}</article>`;
-  }).join('')}<p class="thread-status">${lastJob ? `Latest task: <strong>${esc(lastJob.state.replaceAll('_', ' '))}</strong> · ${esc(lastJob.model.id ?? 'model unclear')}${lastJob.runtime ? ' · local Codex read-only' : ' · synthetic'}` : ''}</p><button class="reply-trigger" id="replyButton">${icon('reply')} Reply</button>`;
+  }).join('')}<p class="thread-status">${lastJob ? `Latest task: <strong>${esc(lastJob.state.replaceAll('_', ' '))}</strong> · ${esc(lastJob.model.id ?? 'model unclear')}${lastJob.runtime ? ` · ${esc(runtimeLabel(lastJob.runtime))}` : ' · synthetic'}` : ''}</p><button class="reply-trigger" id="replyButton">${icon('reply')} Reply</button>`;
   $('#threadView').querySelectorAll('iframe').forEach((frame) => {
     frame.addEventListener('load', () => fitPreview(frame));
     if (frame.contentDocument?.readyState === 'complete') fitPreview(frame);
@@ -131,7 +133,7 @@ function renderLab() {
   const thread = data.threads.find((item) => item.id === currentThread);
   const guests = thread ? Object.entries(thread.guests) : [];
   $('#guestControls').innerHTML = guests.length ? `<h2>Participants on this thread</h2>${guests.map(([email, invite]) => `<div class="invite-item"><strong>${esc(email)}</strong><br>${invite.hidden ? 'Added by owner in Bcc' : 'Added by owner in To or Cc'} · ${(invite.authorized ?? (invite.verified && invite.approved)) ? 'Can reply to agent' : 'Access revoked'}<br>${(invite.authorized ?? (invite.verified && invite.approved)) ? `<button data-guest-action="revoke" data-email="${esc(email)}">Revoke access</button>` : ''}</div>`).join('')}` : '';
-  $('#approvalControls').innerHTML = awaiting ? `<h2>Needs your decision</h2>${data.jobs.filter((job) => job.state === 'needs_approval').map((job) => `<div class="approval-item">${esc(data.threads.find((item) => item.id === job.threadId)?.subject ?? job.id)}<br><button data-approve="${esc(job.id)}">Approve simulated action</button></div>`).join('')}` : '';
+  $('#approvalControls').innerHTML = awaiting ? `<h2>Needs your decision</h2>${data.jobs.filter((job) => job.state === 'needs_approval').map((job) => `<div class="approval-item">${esc(data.threads.find((item) => item.id === job.threadId)?.subject ?? job.id)}<br>${job.runtime ? 'A local agent requested more access. Review the run and change local permissions before sending a new email.' : `<button data-approve="${esc(job.id)}">Approve simulated action</button>`}</div>`).join('')}` : '';
   $('#eventList').innerHTML = data.events.slice(0, 9).map((event) => `<li><time datetime="${esc(event.at)}">${esc(timeLabel(event.at))}</time>${esc(event.description)}</li>`).join('');
 }
 

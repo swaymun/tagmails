@@ -108,7 +108,7 @@ fn mock_result(claim: &Value, attachment_evidence: Vec<String>) -> Value {
 
 fn agent_result(claim: &Value, base: &str, runtime: &str) -> Result<Value, Box<dyn Error>> {
     let file = match runtime {
-        "codex-readonly" => "codex-runner.mjs",
+        "codex-readonly" | "codex-write" => "codex-runner.mjs",
         "claude-readonly" => "claude-runner.mjs",
         _ => return Err("Unsupported local agent runtime".into()),
     };
@@ -118,6 +118,7 @@ fn agent_result(claim: &Value, base: &str, runtime: &str) -> Result<Value, Box<d
     let mut child = Command::new("node")
         .arg(runner)
         .env("TAGMAILS_LAB_URL", base)
+        .env("TAGMAILS_RUNTIME", runtime)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -133,6 +134,14 @@ fn agent_result(claim: &Value, base: &str, runtime: &str) -> Result<Value, Box<d
     }
     let result: Value = serde_json::from_slice(&output.stdout)?;
     Ok(result)
+}
+
+fn runtime_label(runtime: &str) -> &'static str {
+    match runtime {
+        "codex-write" => "codex-app-server-write",
+        "codex-readonly" => "codex-app-server-readonly",
+        _ => "claude-cli-readonly",
+    }
 }
 
 fn relay_post(
@@ -262,7 +271,7 @@ fn relay_result(claim: &Value, base: &str) -> Result<Value, Box<dyn Error>> {
         Ok(result) => result,
         Err(error) => {
             eprintln!("Local agent adapter failed: {error}");
-            json!({"runtime":if runtime == "codex-readonly" { "codex-app-server-readonly" } else { "claude-cli-readonly" },"state":"failed","summary":"The local agent adapter could not complete this turn."})
+            json!({"runtime":runtime_label(runtime),"state":"failed","summary":"The local agent adapter could not complete this turn."})
         }
     })
 }
@@ -476,12 +485,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let once = env::args().any(|arg| arg == "--once");
     let runtime = env::var("TAGMAILS_RUNTIME").unwrap_or_else(|_| "mock".into());
-    if runtime != "mock" && runtime != "codex-readonly" && runtime != "claude-readonly" {
-        return Err("TAGMAILS_RUNTIME must be mock, codex-readonly, or claude-readonly".into());
+    if runtime != "mock"
+        && runtime != "codex-readonly"
+        && runtime != "codex-write"
+        && runtime != "claude-readonly"
+    {
+        return Err(
+            "TAGMAILS_RUNTIME must be mock, codex-readonly, codex-write, or claude-readonly".into(),
+        );
     }
     let selected_job = if runtime != "mock" {
         if !once {
-            return Err("Read-only agent prototypes require --once".into());
+            return Err("Local agent prototypes require --once".into());
         }
         let job = env::var("TAGMAILS_JOB_ID")?;
         if !job.starts_with("job-")
@@ -508,7 +523,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         Ok(result) => result,
                         Err(error) => {
                             eprintln!("Local agent adapter failed: {error}");
-                            json!({"runtime":if runtime == "codex-readonly" { "codex-app-server-readonly" } else { "claude-cli-readonly" },"state":"failed","summary":"The local agent adapter could not complete this turn."})
+                            json!({"runtime":runtime_label(&runtime),"state":"failed","summary":"The local agent adapter could not complete this turn."})
                         }
                     }
                 } else {

@@ -231,7 +231,7 @@ export class Lab {
     if (job.state !== 'running') return { duplicate: true, state: job.state };
     if (!claimId || claimId !== job.claimId) throw new Error('Mock claim has expired or been replaced');
     if (!input || !['completed', 'failed', 'needs_approval', 'needs_clarification'].includes(input.state)) throw new Error('Invalid mock result state');
-    const realAgent = ['codex-cli-readonly', 'codex-app-server-readonly', 'claude-cli-readonly'].includes(input.runtime);
+    const realAgent = ['codex-cli-readonly', 'codex-app-server-readonly', 'codex-app-server-write', 'claude-cli-readonly'].includes(input.runtime);
     if (input.runtime && !realAgent) throw new Error('Unknown local runtime');
     const agent = input.runtime === 'claude-cli-readonly' ? 'Claude' : 'Codex';
     const result = {
@@ -241,7 +241,7 @@ export class Lab {
       checks: Array.isArray(input.checks) ? input.checks.slice(0, 12).map((item) => short(item, 300)) : [],
       links: [{ label: realAgent ? 'View local run' : 'View simulated run', url: `${this.origin}/trace/${job.id}` }],
       note: realAgent
-        ? `${input.state === 'completed' ? `${agent} completed locally in read-only mode.` : `The local ${agent} route did not complete.`} This lab has not sent or received a real email.`
+        ? `${input.state === 'completed' ? `${agent} completed locally ${input.runtime === 'codex-app-server-write' ? 'with selected-workspace write access' : 'in read-only mode'}.` : `The local ${agent} route did not complete.`} This lab has not sent or received a real email.`
         : 'Synthetic response from the local Rust mock daemon. No model was called and no files were changed.',
     };
     if (!result.summary) throw new Error('Mock result needs a summary');
@@ -298,6 +298,7 @@ export class Lab {
   approveJob(jobId) {
     const job = this.state.jobs.find((item) => item.id === jobId);
     if (!job || job.state !== 'needs_approval') throw new Error('No approval is pending for this job');
+    if (job.runtime) throw new Error('A real agent permission request cannot be approved by the mock daemon');
     job.approved = true;
     job.state = 'queued';
     this.event('approval', 'Owner approved the simulated side effect.', job.threadId, job.id);
