@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { addRunEvent, finishRunTranscript, runTranscript } from './run-transcript.mjs';
+import { addRunEvent, codexRunEvent, finishRunTranscript, runTranscript } from './run-transcript.mjs';
+
+test('Codex projection ignores non-visible assistant phases', () => {
+  assert.equal(codexRunEvent({ method: 'item/completed', params: {
+    item: { type: 'agentMessage', phase: 'analysis', text: 'SECRET_REASONING' },
+  } }), null);
+  assert.equal(codexRunEvent({ method: 'item/completed', params: {
+    item: { type: 'agentMessage', phase: 'final_answer', text: 'Done.' },
+  } }), null);
+});
 
 test('the linked transcript retains a long final answer beyond the email summary', () => {
   const answer = Array.from({ length: 700 }, (_, index) => `point${index}`).join(' ');

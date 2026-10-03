@@ -55,6 +55,27 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
           text: mode === 'legacy-phase' ? 'First turn.' : 'Recovered answer.' },
       ] }] } });
   }
+  if (message.method === 'thread/items/list') {
+    const turnId = mode === 'history-wrong-turn' ? 'older-turn' : 'turn-1';
+    const finalText = ['missing-final-event', 'unphased-progress'].includes(mode) ? 'Recovered answer.'
+      : resumed ? 'First turn plus second turn.' : 'First turn.';
+    const entries = [
+      { turnId, item: { id: 'user-1', type: 'userMessage', content: [{ type: 'text', text: 'SECRET_PROMPT' }] } },
+      { turnId, item: { id: 'reason-1', type: 'reasoning', summary: 'SECRET_REASONING' } },
+      { turnId, item: { id: 'command-1', type: 'commandExecution', command: 'cat secret.txt',
+        aggregatedOutput: 'SECRET_FILE', status: 'completed', exitCode: 0 } },
+      { turnId, item: { id: 'message-1', type: 'agentMessage', phase: 'commentary', text: 'Checking the workspace.' } },
+      { turnId, item: { id: 'message-2', type: 'agentMessage',
+        phase: mode === 'legacy-phase' ? undefined : 'final_answer', text: finalText } },
+    ];
+    if (mode === 'history-paged' && !message.params.cursor) send({ id: message.id,
+      result: { data: entries.slice(0, 4), nextCursor: 'page-2' } });
+    else if (mode === 'history-paged') send({ id: message.id,
+      result: { data: [entries[3], entries[4]], nextCursor: null } });
+    else if (mode === 'history-repeated-cursor') send({ id: message.id,
+      result: { data: entries.slice(0, 2), nextCursor: 'repeat' } });
+    else send({ id: message.id, result: { data: entries, nextCursor: null } });
+  }
   if (message.method === 'thread/start' || message.method === 'thread/resume') {
     resumed = message.method === 'thread/resume';
     fs.appendFileSync(log, JSON.stringify({ method: message.method, params: message.params,
@@ -83,7 +104,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       send({ method: 'item/completed', params: { item: { type: 'reasoning', summary: 'SECRET_REASONING' } } });
       send({ method: 'item/completed', params: { item: { type: 'commandExecution', command: 'cat secret.txt',
         aggregatedOutput: 'SECRET_FILE', status: 'completed', exitCode: 0 } } });
-      send({ method: 'item/completed', params: { item: { type: 'agentMessage',
+      if (mode !== 'history-paged') send({ method: 'item/completed', params: { item: { type: 'agentMessage',
         ...(mode === 'unphased-progress' ? {} : { phase: 'commentary' }), text: 'Checking the workspace.' } } });
       if (!['missing-final-event', 'history-wrong-turn', 'unphased-progress'].includes(mode)) send({ method: 'item/completed', params: { item: { type: 'agentMessage',
         ...(mode === 'legacy-phase' ? {} : { phase: 'final_answer' }),
@@ -186,6 +207,27 @@ test('Codex adapter recovers a missed final event from the completed turn summar
     kind: 'assistant', phase: 'final_answer', text: 'Recovered answer.',
   });
   assert.doesNotMatch(JSON.stringify(result), /SECRET_PROMPT/);
+});
+
+test('Codex history fills a missed progress event across pages without leaking raw items', async (t) => {
+  setup(t, 'history-paged');
+  const result = await runClaim(claim('job-paged', 'thread-paged'));
+  assert.equal(result.state, 'completed');
+  assert.deepEqual(result.transcript.events, [
+    { kind: 'request', text: 'Summarize this workspace.' },
+    { kind: 'tool', text: 'Local command completed (exit 0).' },
+    { kind: 'assistant', phase: 'commentary', text: 'Checking the workspace.' },
+    { kind: 'assistant', phase: 'final_answer', text: 'First turn.' },
+  ]);
+  assert.doesNotMatch(JSON.stringify(result), /SECRET_PROMPT|SECRET_REASONING|SECRET_FILE|secret\.txt/);
+});
+
+test('a repeated Codex history cursor leaves the live transcript intact', async (t) => {
+  setup(t, 'history-repeated-cursor');
+  const result = await runClaim(claim('job-cursor', 'thread-cursor'));
+  assert.equal(result.state, 'completed');
+  assert.equal(result.transcript.events.at(-1).text, 'First turn.');
+  assert.equal(result.transcript.events.some((event) => event.text === 'Checking the workspace.'), true);
 });
 
 test('an unphased progress message does not replace a saved final answer', async (t) => {

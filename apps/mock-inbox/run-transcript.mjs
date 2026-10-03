@@ -65,7 +65,8 @@ export function finishRunTranscript(transcript, answer) {
 export function codexRunEvent(message) {
   if (message?.method !== 'item/completed') return null;
   const item = message.params?.item;
-  if (item?.type === 'agentMessage') return { kind: 'assistant', text: item.text };
+  if (item?.type === 'agentMessage') return item.phase === 'commentary' || item.phase == null
+    ? { kind: 'assistant', text: item.text } : null;
   if (item?.type === 'commandExecution') {
     return { kind: 'tool', text: `Local command ${item.status || 'finished'}${Number.isInteger(item.exitCode) ? ` (exit ${item.exitCode})` : ''}.` };
   }

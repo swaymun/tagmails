@@ -13,6 +13,9 @@ const MODELS = new Set(['gpt-6-luna', 'gpt-6.1-sol']);
 const runtimeFor = (write) => write ? 'codex-app-server-write' : 'codex-app-server-readonly';
 const MAX_EVENTS = 2 * 1024 * 1024;
 const MAX_CLAIM = 8 * 1024 * 1024;
+const HISTORY_PAGE_SIZE = 25;
+const MAX_HISTORY_PAGES = 8;
+const HISTORY_TIMEOUT_MS = 4000;
 const SESSION_ID = /^[0-9a-f-]{36}$/i;
 
 function fail(summary, write = false) {
@@ -124,6 +127,56 @@ function savedFinalAnswer(value, turnId) {
     typeof item.text === 'string' && item.text.trim());
   return messages.findLast((item) => item.phase === 'final_answer')?.text ||
     messages.findLast((item) => item.phase == null)?.text || '';
+}
+
+async function savedRunTranscript(request, threadId, turnId, requestRpc) {
+  const transcript = runTranscript(request);
+  const cursors = new Set();
+  const itemIds = new Set();
+  let cursor = null;
+  let savedAnswer = '';
+  const deadline = Date.now() + HISTORY_TIMEOUT_MS;
+  for (let pageNumber = 0; pageNumber < MAX_HISTORY_PAGES; pageNumber++) {
+    let timeout;
+    let page;
+    try {
+      page = await Promise.race([
+        requestRpc('thread/items/list', {
+          threadId, turnId, cursor, limit: HISTORY_PAGE_SIZE, sortDirection: 'asc',
+        }),
+        new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Codex history timed out')),
+          Math.max(1, deadline - Date.now())); }),
+      ]);
+    } finally { clearTimeout(timeout); }
+    if (!Array.isArray(page?.data)) throw new Error('Codex history items are unavailable');
+    for (const entry of page.data) {
+      const item = entry?.item;
+      if (entry?.turnId !== turnId || typeof item?.id !== 'string' || !item.id) {
+        throw new Error('Codex history contains an item from another turn');
+      }
+      if (itemIds.has(item.id)) continue;
+      itemIds.add(item.id);
+      if (item.type === 'agentMessage' && item.phase === 'final_answer' &&
+          typeof item.text === 'string' && item.text.trim()) {
+        savedAnswer = item.text;
+        continue;
+      }
+      const event = codexRunEvent({ method: 'item/completed', params: { item } });
+      if (event) addRunEvent(transcript, event.kind, event.text);
+    }
+    if (page.nextCursor == null) {
+      return savedAnswer ? { answer: savedAnswer,
+        transcript: finishRunTranscript(transcript, savedAnswer) } : null;
+    }
+    if (typeof page.nextCursor !== 'string' || !page.nextCursor || cursors.has(page.nextCursor)) {
+      throw new Error('Codex history cursor repeated');
+    }
+    cursors.add(page.nextCursor);
+    cursor = page.nextCursor;
+  }
+  if (!savedAnswer) return null;
+  transcript.truncated = true;
+  return { answer: savedAnswer, transcript: finishRunTranscript(transcript, savedAnswer) };
 }
 
 function codexEnvironment(home) {
@@ -270,9 +323,16 @@ async function runCodex(claim, workspace, home, sessionId, staged, write) {
       finally { clearTimeout(historyTimeout); }
     }
     finalAnswer ||= unphasedAnswer;
+    let completedTranscript = transcript;
+    if (typeof startedTurn?.turn?.id === 'string') {
+      try {
+        const saved = await savedRunTranscript(claim.request, threadId, startedTurn.turn.id, request);
+        if (saved) { finalAnswer = saved.answer; completedTranscript = saved.transcript; }
+      } catch { /* Keep the live transcript if saved history is unavailable. */ }
+    }
     return { result: { ...resultFromAnswer(finalAnswer, claim.model.id, approvals, usage, write),
       ...(codexAllowance ? { codexAllowance } : {}),
-      transcript: finishRunTranscript(transcript, finalAnswer) }, threadId };
+      transcript: finishRunTranscript(completedTranscript, finalAnswer) }, threadId };
   } finally {
     clearInterval(renew);
     clearTimeout(timeout);
