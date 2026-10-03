@@ -14,9 +14,11 @@ function claim(jobId, body = 'Summarize this workspace.') {
 }
 
 test('Claude read-only adapter resumes only its saved thread and caches completed jobs', async (t) => {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'tagmails-claude-test-'));
-  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
-  const fakeBin = path.join(workspace, 'fake-claude');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tagmails-claude-test-'));
+  const workspace = path.join(root, 'workspace');
+  fs.mkdirSync(workspace);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fakeBin = path.join(root, 'fake-claude');
   fs.writeFileSync(fakeBin, `#!/usr/bin/env node
 const fs = require('node:fs');
 const path = require('node:path');
@@ -42,7 +44,7 @@ process.stdin.on('end', () => {
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   Object.assign(process.env, {
     TAGMAILS_WORKSPACE: workspace,
-    TAGMAILS_CLAUDE_SESSION_FILE: path.join(workspace, 'sessions.json'),
+    TAGMAILS_CLAUDE_SESSION_FILE: path.join(root, 'sessions.json'),
     TAGMAILS_CLAUDE_BIN: fakeBin,
     ANTHROPIC_API_KEY: 'FAKE_TEST_KEY',
   });
@@ -70,14 +72,16 @@ process.stdin.on('end', () => {
   assert.ok(calls[0].args.includes('--restricted'));
   assert.ok(calls[0].args.includes('--safe-mode'));
   assert.ok(calls[0].args.includes('Read,Glob,Grep'));
+  assert.ok(calls[0].args.includes('mcp__*'));
   assert.equal(calls[0].attachmentText, 'Claude test note.');
-  assert.equal(calls[0].args[calls[0].args.indexOf('--add-dir') + 1], path.dirname(calls[0].attachment));
+  assert.ok(!calls[0].args.includes('--add-dir'));
+  assert.equal(calls[0].attachment.startsWith(fs.realpathSync(workspace)), true);
   assert.equal(fs.existsSync(calls[0].attachment), false);
   assert.ok(!calls[0].args.includes('--resume'));
   assert.ok(calls[1].args.includes('33333333-3333-4333-8333-333333333333'));
   assert.ok(calls[1].prompt.includes('Continue the summary.'));
   assert.equal(calls[0].hadApiKey, false);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(workspace, 'sessions.json'))).threads['thread-1'].workspace, workspace);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'sessions.json'))).threads['thread-1'].workspace, fs.realpathSync(workspace));
 
   const budgetFailure = await runClaim(claim('job-3', '[budget-fail]'));
   assert.equal(budgetFailure.state, 'failed');
@@ -87,4 +91,21 @@ process.stdin.on('end', () => {
 
   assert.equal((await runClaim({ ...claim('job-4'), model: { id: 'claude-opus-5-5', effort: 'medium' } })).state, 'failed');
   assert.equal(fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').length, 3);
+});
+
+test('Claude adapter keeps its session store outside the selected workspace', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tagmails-claude-store-test-'));
+  const workspace = path.join(root, 'workspace');
+  fs.mkdirSync(workspace);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const previous = { workspace: process.env.TAGMAILS_WORKSPACE, store: process.env.TAGMAILS_CLAUDE_SESSION_FILE };
+  process.env.TAGMAILS_WORKSPACE = workspace;
+  process.env.TAGMAILS_CLAUDE_SESSION_FILE = path.join(workspace, 'sessions.json');
+  t.after(() => {
+    if (previous.workspace === undefined) delete process.env.TAGMAILS_WORKSPACE;
+    else process.env.TAGMAILS_WORKSPACE = previous.workspace;
+    if (previous.store === undefined) delete process.env.TAGMAILS_CLAUDE_SESSION_FILE;
+    else process.env.TAGMAILS_CLAUDE_SESSION_FILE = previous.store;
+  });
+  await assert.rejects(runClaim(claim('job-1')), /session store must be outside/);
 });

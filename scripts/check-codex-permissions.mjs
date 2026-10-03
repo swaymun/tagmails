@@ -13,6 +13,7 @@ fs.mkdirSync(workspace);
 fs.mkdirSync(home);
 fs.writeFileSync(path.join(workspace, 'inside.txt'), 'synthetic inside marker\n');
 fs.writeFileSync(outside, 'synthetic outside marker\n');
+fs.symlinkSync(outside, path.join(workspace, 'outside-link.txt'));
 fs.writeFileSync(path.join(home, 'config.toml'), CODEX_CONFIG);
 
 function sandbox(command) {
@@ -34,6 +35,10 @@ try {
   assert.notEqual(outsideRead.status, 0, 'An outside file was readable');
   assert.equal(outsideRead.stdout.includes('synthetic outside marker'), false);
 
+  const outsideLinkRead = sandbox(['cat', path.join(workspace, 'outside-link.txt')]);
+  assert.notEqual(outsideLinkRead.status, 0, 'An outside file was readable through a workspace symlink');
+  assert.equal(outsideLinkRead.stdout.includes('synthetic outside marker'), false);
+
   const outsideWrite = sandbox(['sh', '-c', 'printf forbidden > "$1"', 'sh', path.join(root, 'new-outside.txt')]);
   assert.notEqual(outsideWrite.status, 0, 'An outside file was writable');
   assert.equal(fs.existsSync(path.join(root, 'new-outside.txt')), false);
@@ -43,7 +48,7 @@ try {
     const authRead = sandbox(['test', '-r', auth]);
     assert.notEqual(authRead.status, 0, 'Codex authentication was readable from the sandbox');
   }
-  console.log('Codex permission preflight passed: workspace read allowed; workspace write, outside read/write, and auth read denied.');
+  console.log('Codex permission preflight passed: workspace read allowed; workspace write, outside read/write, symlink escape, and auth read denied.');
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }
