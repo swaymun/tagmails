@@ -43,7 +43,7 @@ const fixtures = [
     links: [{ label: 'Watch review cut', url: 'https://example.test/private/video/1' }],
   },
   {
-    id: 'approval', title: 'Waiting for approval',
+    id: 'approval', title: 'Needs your attention',
     result: { state: 'needs_approval', summary: 'Publishing is waiting for the owner.',
       checks: ['No site was published.'] },
     phrases: ['waiting for the owner', 'No site was published.'], absent: ['Task completed'],

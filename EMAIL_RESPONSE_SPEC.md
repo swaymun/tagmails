@@ -6,7 +6,7 @@ The agent returns a structured outcome. The relay, not the model, builds the HTM
 
 | Field | Purpose |
 | --- | --- |
-| `state` | `completed`, `failed`, `needs_approval`, or `needs_clarification`. The heading must reflect the state. |
+| `state` | `completed`, `failed`, `needs_approval`, or `needs_clarification`. The heading must reflect the state; `needs_approval` says “Needs your attention” because a local approval screen is not yet available. |
 | `summary` | One concrete outcome or the one thing the recipient must decide. Never claim an unverified side effect. |
 | `details` | Short items describing work or findings. Omit when empty. |
 | `checks` | Verification, uncertainty, and material limits. Omit when empty. |

@@ -6,6 +6,7 @@
     "lab": "node apps/mock-inbox/server.mjs",
     "eval:email": "node scripts/evaluate-email.mjs",
     "smoke:answer-export": "node scripts/smoke-answer-export.mjs",
+    "smoke:file-export": "node scripts/smoke-file-export.mjs",
     "test": "node --test"
   },
   "dependencies": {

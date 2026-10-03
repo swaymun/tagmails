@@ -113,6 +113,22 @@ test('development sender replies to the account owner through the inbound alias'
   })).state, 'blocked');
 });
 
+test('a denied local action asks for review without inventing an approval screen', async () => {
+  const fixture = bindings();
+  const { env } = fixture;
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  await env.MAIL.put('results/1.json', JSON.stringify({ state: 'needs_approval',
+    summary: 'The requested file is outside the selected workspace.' }));
+  let payload;
+  assert.equal((await sendNextOutbox(env, {
+    sendEmail: async (value) => { payload = value; return { data: { id: 'review-1' } }; },
+    getSentEmail: async () => ({ data: { message_id: '<review-1@tagmails.test>' } }),
+  })).state, 'sent');
+  assert.match(payload.text, /^Needs your attention/m);
+  assert.match(payload.text, /Review the request and local permissions/);
+  assert.doesNotMatch(payload.text, /waiting for your approval in the connected app/i);
+});
+
 test('an uncertain send is not retried; an accepted send can finish Message-ID lookup later', async () => {
   const fixture = bindings();
   const { env, sqlite } = fixture;

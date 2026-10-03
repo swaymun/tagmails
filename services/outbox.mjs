@@ -74,7 +74,7 @@ async function prepare(env, row) {
     state: result.state, summary: result.summary, details: [...(result.details ?? []), ...fileNote], checks: result.checks,
     links: transcriptUrl && ownerCanOpen ? [{ label: 'Run transcript', url: transcriptUrl }] : [],
     note: result.state === 'needs_approval'
-      ? 'The agent is waiting for your approval in the connected app.'
+      ? 'No action was approved automatically. Review the request and local permissions before replying or retrying.'
       : 'This summary came from your connected local agent.',
   });
   if (/[\r\n]/.test(inbound.subject)) throw new Error('Outbox subject contains a line break');

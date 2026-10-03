@@ -7,10 +7,10 @@ use std::env;
 use std::error::Error;
 use std::fs;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::Path;
+use std::path::{Component, Path};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
@@ -295,6 +295,75 @@ fn wants_answer_file(claim: &Value) -> bool {
             .unwrap_or(false)
 }
 
+fn requested_workspace_file(claim: &Value) -> Result<Option<String>, &'static str> {
+    if claim["request"]["fromOwner"] != true {
+        return Ok(None);
+    }
+    let Some(line) = claim["request"]["body"]
+        .as_str()
+        .and_then(|body| body.lines().next())
+    else {
+        return Ok(None);
+    };
+    let Some(name) = line.strip_prefix("TagMails-File:") else {
+        return Ok(None);
+    };
+    let name = name.trim();
+    let path = Path::new(name);
+    let valid_path = !name.is_empty()
+        && !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)));
+    let valid_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| {
+            value.len() <= 120
+                && value != "."
+                && value != ".."
+                && value.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b' ')
+                })
+        });
+    if !valid_path || !valid_name {
+        return Err("TagMails-File needs a relative workspace path with a simple filename.");
+    }
+    Ok(Some(name.to_owned()))
+}
+
+fn workspace_file_bytes(workspace: &Path, name: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    const MAX_FILE_BYTES: u64 = 24_000_000;
+    let root = workspace.canonicalize()?;
+    let source = root.join(name).canonicalize()?;
+    if !source.starts_with(&root) || !source.is_file() {
+        return Err("Requested file is outside the selected workspace or is not a file".into());
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(source)?
+        .take(MAX_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.is_empty() || bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err("Requested file is empty or exceeds 24 MB".into());
+    }
+    Ok(bytes)
+}
+
+fn workspace_file_type(name: &str) -> &'static str {
+    match Path::new(name).extension().and_then(|value| value.to_str()) {
+        Some("txt") => "text/plain",
+        Some("md") => "text/markdown",
+        Some("csv") => "text/csv",
+        Some("html") => "text/html",
+        Some("pdf") => "application/pdf",
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("mp4") => "video/mp4",
+        Some("zip") => "application/zip",
+        _ => "application/octet-stream",
+    }
+}
+
 fn answer_file(result: &Value) -> Vec<u8> {
     let mut lines = Vec::new();
     if let Some(summary) = result["summary"].as_str() {
@@ -312,31 +381,32 @@ fn answer_file(result: &Value) -> Vec<u8> {
     format!("{}\n", lines.join("\n\n")).into_bytes()
 }
 
-fn upload_answer_file(
+fn upload_file(
     client: &Client,
     base: &str,
     token: &str,
     job_id: &str,
     lease_id: &str,
-    result: &Value,
+    filename: &str,
+    mime_type: &str,
+    bytes: Vec<u8>,
 ) -> Result<(), Box<dyn Error>> {
-    let bytes = answer_file(result);
     let response: Value = client
         .post(format!(
             "{}/api/device/artifacts?jobId={job_id}&leaseId={lease_id}",
             base.trim_end_matches('/')
         ))
         .bearer_auth(token)
-        .header("Content-Type", "text/plain")
+        .header("Content-Type", mime_type)
         .header("Content-Length", bytes.len().to_string())
-        .header("X-TagMails-Filename", "answer.txt")
+        .header("X-TagMails-Filename", filename)
         .header("X-TagMails-Upload-Id", lease_id)
         .body(bytes)
         .send()?
         .error_for_status()?
         .json()?;
     if response["id"] != lease_id {
-        return Err("Relay returned a different answer file ID".into());
+        return Err("Relay returned a different file ID".into());
     }
     Ok(())
 }
@@ -362,10 +432,55 @@ fn relay_iteration(
         .to_owned();
     claim["claimId"] = json!(lease_id);
     claim["claimed"] = json!(true);
-    let mut result = relay_result(&claim, base, access)?;
+    let file_request = requested_workspace_file(&claim);
+    let mut result = match &file_request {
+        Err(message) => {
+            json!({"runtime":"tagmails-router","state":"needs_clarification","summary":message})
+        }
+        Ok(_) => relay_result(&claim, base, access)?,
+    };
     if result["state"] == "completed" && wants_answer_file(&claim) {
-        upload_answer_file(client, base, token, &job_id, &lease_id, &result)?;
+        upload_file(
+            client,
+            base,
+            token,
+            &job_id,
+            &lease_id,
+            "answer.txt",
+            "text/plain",
+            answer_file(&result),
+        )?;
         result["artifactIds"] = json!([lease_id]);
+    } else if result["state"] == "completed" {
+        if let Ok(Some(name)) = file_request {
+            let workspace = Path::new(&env::var("TAGMAILS_WORKSPACE")?).to_path_buf();
+            match workspace_file_bytes(&workspace, &name) {
+                Ok(bytes) => {
+                    let filename = Path::new(&name)
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .ok_or("Requested file has no filename")?;
+                    upload_file(
+                        client,
+                        base,
+                        token,
+                        &job_id,
+                        &lease_id,
+                        filename,
+                        workspace_file_type(filename),
+                        bytes,
+                    )?;
+                    result["artifactIds"] = json!([lease_id]);
+                }
+                Err(error) => {
+                    eprintln!("Requested file could not be exported: {error}");
+                    result["state"] = json!("failed");
+                    result["summary"] = json!("The requested file was missing, empty, outside the selected workspace, or over 24 MB.");
+                    result["checks"] =
+                        json!(["No file was uploaded. Local edits from this turn may remain."]);
+                }
+            }
+        }
     }
     let completion = relay_post(
         client,
@@ -506,6 +621,66 @@ mod tests {
             String::from_utf8(answer_file(&result)).unwrap(),
             "Done.\n\nFound two items.\n\nNo files changed.\n"
         );
+    }
+
+    #[test]
+    fn workspace_export_requires_owner_and_a_safe_relative_path() {
+        let owner = |body| json!({"request":{"fromOwner":true,"body":body}});
+        assert_eq!(
+            requested_workspace_file(&owner(
+                "TagMails-File: reports/result.pdf\nCreate a report."
+            ))
+            .unwrap(),
+            Some("reports/result.pdf".into())
+        );
+        assert_eq!(
+            requested_workspace_file(&json!({"request":{"fromOwner":false,
+                "body":"TagMails-File: report.txt"}}))
+            .unwrap(),
+            None
+        );
+        assert_eq!(
+            requested_workspace_file(&owner("Please send report.txt\nTagMails-File: report.txt"))
+                .unwrap(),
+            None
+        );
+        for name in [
+            "",
+            "../secret.txt",
+            "/tmp/secret.txt",
+            "dir/../../secret.txt",
+            "file%.txt",
+            "dir\\secret.txt",
+        ] {
+            let request =
+                json!({"request":{"fromOwner":true,"body":format!("TagMails-File: {name}")}});
+            assert!(requested_workspace_file(&request).is_err());
+        }
+    }
+
+    #[test]
+    fn workspace_export_does_not_follow_a_link_outside_the_workspace() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = env::temp_dir().join(format!("tagmails-file-test-{nonce}"));
+        let workspace = root.join("workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::write(workspace.join("inside.txt"), b"safe").unwrap();
+        fs::write(root.join("outside.txt"), b"private").unwrap();
+        assert_eq!(
+            workspace_file_bytes(&workspace, "inside.txt").unwrap(),
+            b"safe"
+        );
+        assert!(workspace_file_bytes(&workspace, "../outside.txt").is_err());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("outside.txt"), workspace.join("link.txt"))
+                .unwrap();
+            assert!(workspace_file_bytes(&workspace, "link.txt").is_err());
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 }
 
