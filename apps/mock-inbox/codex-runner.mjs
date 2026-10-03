@@ -41,7 +41,7 @@ async function saveStore(file, value) {
   await fs.rename(temporary, file);
 }
 
-function promptFor(claim) {
+export function promptFor(claim) {
   const request = claim.request;
   return [
     'You are handling an email sent to TagMails in a read-only local prototype.',
