@@ -63,6 +63,7 @@ test('two sent turns preserve threading and only visible recipients may react', 
   assert.deepEqual(payloads[0].payload.cc, ['reviewer@gmail.com']);
   assert.equal(payloads[0].payload.headers['In-Reply-To'], '<inbound-1@gmail.com>');
   assert.equal(payloads[0].payload.headers.References, '<inbound-1@gmail.com>');
+  assert.deepEqual(payloads[0].payload.tags, [{ name: 'tagmails_job', value: 'job-1' }]);
   assert.equal(payloads[0].options.idempotencyKey, 'tagmails-job-job-1');
   assert.equal(payloads[0].payload.replyTo, undefined);
   assert.deepEqual(await reaction(env, { providerEmailId: 'react-1', from: 'reviewer@gmail.com', targetId: '<sent-1@tagmails.test>' }),
@@ -169,6 +170,96 @@ test('an uncertain send is not retried; an accepted send can finish Message-ID l
   }), { state: 'sent', jobId: 'job-2', messageId: '<sent-2@tagmails.test>' });
   assert.equal(sends, 1);
   assert.equal(sqlite.prepare("SELECT count(*) n FROM messages WHERE direction = 'outbound'").get().n, 1);
+});
+
+test('an interrupted provider send becomes uncertain after the scheduled run limit', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  sqlite.prepare("UPDATE outbox SET state = 'sending', updated_at = datetime('now', '-10 minutes') WHERE job_id = ?")
+    .run('job-1');
+  const provider = { sendEmail: async () => { throw new Error('Never retry an unknown send'); } };
+  assert.equal((await sendNextOutbox(env, provider)).state, 'idle');
+  sqlite.prepare("UPDATE outbox SET updated_at = datetime('now', '-21 minutes') WHERE job_id = ?")
+    .run('job-1');
+  assert.deepEqual(await sendNextOutbox(env, provider), { state: 'uncertain', jobId: 'job-1' });
+  assert.equal(sqlite.prepare('SELECT state FROM outbox WHERE job_id = ?').get('job-1').state, 'uncertain');
+  assert.equal((await sendNextOutbox(env, provider)).state, 'idle');
+});
+
+test('a matching signed sent event reconciles an uncertain send without resending', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  const jobId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const providerId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'], jobId });
+  assert.equal((await sendNextOutbox(env, {
+    sendEmail: async () => { throw new Error('Connection dropped after acceptance'); },
+  })).state, 'uncertain');
+  const event = { jobId, providerEmailId: providerId, messageId: '<sent@tagmails.test>',
+    from: 'agent@wonder.test', to: ['owner@gmail.com'], cc: [], subject: 'Re: Shared work' };
+  const notify = (sent) => handleInbound(new Request('https://relay.test/webhooks/resend', {
+    method: 'POST', body: '{}',
+  }), env, { inspect: async () => ({ sent }) });
+  assert.deepEqual(await (await notify({ ...event, to: ['stranger@gmail.com'] })).json(), { accepted: false });
+  assert.equal(sqlite.prepare('SELECT state FROM outbox WHERE job_id = ?').get(jobId).state, 'uncertain');
+  assert.deepEqual(await (await notify(event)).json(), { accepted: true, sentEvent: true });
+  assert.equal(sqlite.prepare('SELECT state FROM outbox WHERE job_id = ?').get(jobId).state, 'accepted');
+  assert.deepEqual(await sendNextOutbox(env, {
+    sendEmail: async () => { throw new Error('Must not resend'); },
+    getSentEmail: async (id) => {
+      assert.equal(id, providerId);
+      return { data: { message_id: event.messageId } };
+    },
+  }), { state: 'sent', jobId, messageId: event.messageId });
+  assert.deepEqual(await (await notify(event)).json(), { accepted: true, duplicate: true });
+  assert.equal(sqlite.prepare("SELECT count(*) n FROM messages WHERE direction = 'outbound'").get().n, 1);
+});
+
+test('a sent event arriving before the send response cannot create a second reply', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  const jobId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const providerId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'], jobId });
+  const first = await sendNextOutbox(env, {
+    sendEmail: async (payload) => {
+      const response = await handleInbound(new Request('https://relay.test/webhooks/resend', {
+        method: 'POST', body: '{}',
+      }), env, { inspect: async () => ({ sent: {
+        jobId, providerEmailId: providerId, messageId: '<early@tagmails.test>',
+        from: payload.from, to: payload.to, cc: payload.cc ?? [], subject: payload.subject,
+      } }) });
+      assert.deepEqual(await response.json(), { accepted: true, sentEvent: true });
+      return { data: { id: providerId } };
+    },
+  });
+  assert.deepEqual(first, { state: 'accepted', jobId });
+  assert.deepEqual(await sendNextOutbox(env, {
+    sendEmail: async () => { throw new Error('Must not send twice'); },
+    getSentEmail: async () => ({ data: { message_id: '<early@tagmails.test>' } }),
+  }), { state: 'sent', jobId, messageId: '<early@tagmails.test>' });
+  assert.equal(sqlite.prepare("SELECT count(*) n FROM messages WHERE direction = 'outbound'").get().n, 1);
+});
+
+test('an accepted send finalizes when its outbound message was already recorded', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  sqlite.prepare("UPDATE outbox SET state = 'accepted', provider_email_id = ? WHERE job_id = ?")
+    .run('sent-1', 'job-1');
+  sqlite.prepare(`INSERT INTO messages
+    (id, account_id, thread_id, provider_email_id, message_id, direction, sender_email, object_key)
+    VALUES (?, ?, ?, ?, ?, 'outbound', ?, ?)`)
+    .run('outbound-1', 'account-1', 'thread-1', 'sent-1', '<sent-1@tagmails.test>',
+      'agent@wonder.test', 'outbound/account-1/job-1.json');
+  const provider = {
+    sendEmail: async () => { throw new Error('An accepted send must not be repeated'); },
+    getSentEmail: async () => ({ data: { message_id: '<sent-1@tagmails.test>' } }),
+  };
+  assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
+  assert.equal(sqlite.prepare("SELECT count(*) n FROM messages WHERE direction = 'outbound'").get().n, 1);
+  assert.equal(sqlite.prepare("SELECT state FROM outbox WHERE job_id = ?").get('job-1').state, 'sent');
 });
 
 test('a revoked participant receives no queued result', async () => {

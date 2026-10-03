@@ -51,6 +51,15 @@ export async function inspectResendInbound({ rawPayload, headers, webhookSecret,
     },
     webhookSecret,
   });
+  if (event?.type === 'email.sent') {
+    const data = event.data;
+    const jobId = data?.tags?.tagmails_job;
+    if (!/^[0-9a-f-]{36}$/i.test(jobId || '')) return { ignored: true };
+    if (!EMAIL_ID.test(data?.email_id || '') || !MESSAGE_ID.test(data?.message_id || '') ||
+        typeof data?.subject !== 'string') throw new Error('Resend sent event is incomplete');
+    return { sent: { jobId, providerEmailId: data.email_id, messageId: data.message_id,
+      from: mailbox(data.from), to: recipients(data.to), cc: recipients(data.cc), subject: data.subject } };
+  }
   if (event?.type !== 'email.received') return { ignored: true };
   const metadata = event.data;
   if (!EMAIL_ID.test(metadata?.email_id || '') || !MESSAGE_ID.test(metadata?.message_id || '')) {

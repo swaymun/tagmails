@@ -133,6 +133,7 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   sqlite.prepare(`INSERT INTO jobs (id, thread_id, message_id, state, result_key, model_json)
     VALUES (?, ?, ?, 'completed', ?, ?)`).run(runId, 'receipt-thread', 'receipt-message', 'results/receipt.json',
       JSON.stringify({ id: 'claude-sonnet-5-5', effort: 'medium', source: 'explicit' }));
+  sqlite.prepare("INSERT INTO outbox (job_id, state) VALUES (?, 'uncertain')").run(runId);
   const artifactId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
   sqlite.prepare(`INSERT INTO run_artifacts
     (id, account_id, job_id, lease_id, object_key, name, mime_type, byte_size)
@@ -154,6 +155,7 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.match(html, /Private &lt;review&gt;/);
   assert.match(html, /Find &lt;private&gt; items/);
   assert.match(html, /Selected model: Claude Code Sonnet 5\.5 \(medium; requested in this email\)/);
+  assert.match(html, /Email delivery needs review\. This reply will not be sent again automatically/);
   assert.doesNotMatch(html, /<private>/);
   assert.match(html, /302 input tokens/);
   assert.match(html, /\$0\.010528/);
@@ -170,6 +172,7 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.equal(siteRun.headers.get('cache-control'), 'no-store');
   const siteResult = await siteRun.json();
   assert.equal(siteResult.selectedModel, 'Selected model: Claude Code Sonnet 5.5 (medium; requested in this email).');
+  assert.equal(siteResult.deliveryState, 'uncertain');
   assert.equal(siteResult.result.transcript.events[0].text, 'Find <private> items');
   assert.equal(siteResult.artifacts[0].name, 'review <draft>.txt');
   const receiptFile = await handleAccountRequest(request(`/runs/${runId}/artifacts/${artifactId}`, 'GET', undefined, cookie), env, options);

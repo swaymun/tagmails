@@ -64,6 +64,22 @@ test('verified Resend metadata and raw MIME yield a task without granting unobse
   assert.equal(message.rawMime.toString(), item.raw);
 });
 
+test('a signed sent event carries the job tag and provider identifiers', async () => {
+  const item = fixture();
+  const jobId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const event = signed({ type: 'email.sent', data: {
+    email_id: id, message_id: '<sent@resend.dev>', from: agent,
+    to: ['owner@gmail.com'], cc: [], subject: 'Re: Shared review',
+    tags: { tagmails_job: jobId },
+  } });
+  assert.deepEqual(await inspectResendInbound({ ...options(item), ...event }), { sent: {
+    jobId, providerEmailId: id, messageId: '<sent@resend.dev>', from: agent,
+    to: ['owner@gmail.com'], cc: [], subject: 'Re: Shared review',
+  } });
+  await assert.rejects(inspectResendInbound({ ...options(item), ...event,
+    rawPayload: event.rawPayload + ' ' }));
+});
+
 test('verified delivery accepts an agent who was Bcc on its own provider copy', async () => {
   const item = fixture({ hiddenAgent: true });
   const message = await inspectResendInbound(options(item));

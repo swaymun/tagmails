@@ -3,7 +3,7 @@ import { Resend } from 'resend';
 import { chooseModel } from '../apps/mock-inbox/model.mjs';
 import { inspectResendInbound } from './resend-inbound.mjs';
 import { handleDeviceRequest } from './device-jobs.mjs';
-import { sendNextOutbox } from './outbox.mjs';
+import { reconcileSentEvent, sendNextOutbox } from './outbox.mjs';
 import { handleAccountRequest } from './account-auth.mjs';
 import { accountPage } from './account-page.mjs';
 import { handleTestWalletRequest, reconcileDueRefunds } from './billing-wallet.mjs';
@@ -122,6 +122,7 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
     getReceivedEmail, fetchRaw,
   });
   if (message.ignored) return Response.json({ accepted: false });
+  if (message.sent) return Response.json(await reconcileSentEvent(env, message.sent));
   const agent = (message.agentAddress ?? '').trim().toLowerCase();
   const account = await env.DB.prepare('SELECT id, owner_email, default_model FROM accounts WHERE agent_email = ? AND active = 1')
     .bind(agent).first();

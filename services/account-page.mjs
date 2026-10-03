@@ -297,6 +297,7 @@ h1{font-size:clamp(2rem,6vw,3.25rem);line-height:1.1;margin:.35em 0}h2{font-size
 </style></head><body><main><p class="eyebrow">tagmails. / run receipt</p><a href="/account">Account</a>
 <h1>${escapeHtml(run.subject)}</h1><span class="status">${title}</span>
 <section class="card"><h2>Outcome</h2><p>${escapeHtml(run.result?.summary ?? 'The agent has not submitted a result yet.')}</p>
+${run.delivery_state === 'uncertain' ? '<p class="muted">Email delivery needs review. This reply will not be sent again automatically.</p>' : ''}
 ${details.length ? `<h2>What happened</h2>${list(details)}` : ''}
 ${checks.length ? `<h2>Checks and limits</h2>${list(checks)}` : ''}
 ${hasUsage ? `<h2>Model usage reported by the local CLI</h2><p>${escapeHtml(usage.inputTokens)} input tokens (${escapeHtml(usage.cachedInputTokens)} cached, ${escapeHtml(usage.cacheCreationInputTokens)} cache creation); ${escapeHtml(usage.outputTokens)} output tokens (${escapeHtml(usage.reasoningOutputTokens)} reasoning).</p>` : ''}

@@ -18,6 +18,31 @@ function publicOrigin(value) {
   } catch { return null; }
 }
 
+function sameRecipients(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+  const expected = [...right].sort();
+  return [...left].sort().every((email, index) => email === expected[index]);
+}
+
+export async function reconcileSentEvent(env, event) {
+  const row = await env.DB.prepare('SELECT state, payload_json, provider_email_id FROM outbox WHERE job_id = ?')
+    .bind(event.jobId).first();
+  if (!row || !['sending', 'uncertain', 'accepted', 'sent'].includes(row.state)) return { accepted: false };
+  let payload;
+  try { payload = JSON.parse(row.payload_json); }
+  catch { return { accepted: false }; }
+  if (payload.tags?.some(({ name, value }) => name === 'tagmails_job' && value === event.jobId) !== true ||
+      payload.from !== event.from || payload.subject !== event.subject ||
+      !sameRecipients(payload.to, event.to) || !sameRecipients(payload.cc ?? [], event.cc) ||
+      (row.provider_email_id && row.provider_email_id !== event.providerEmailId)) return { accepted: false };
+  if (row.state === 'sent') return { accepted: true, duplicate: true };
+  const updated = await env.DB.prepare(`UPDATE outbox SET state = 'accepted', provider_email_id = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE job_id = ? AND state IN ('sending', 'uncertain', 'accepted')
+      AND (provider_email_id IS NULL OR provider_email_id = ?) RETURNING job_id`)
+    .bind(event.providerEmailId, event.jobId, event.providerEmailId).first();
+  return { accepted: Boolean(updated), sentEvent: true };
+}
+
 async function prepare(env, row) {
   const inbound = await env.DB.prepare(`SELECT m.object_key, m.message_id, m.sender_email,
       t.subject, a.owner_email, a.agent_email, j.model_json
@@ -86,6 +111,7 @@ async function prepare(env, row) {
     to, ...(cc.length ? { cc } : {}),
     subject: /^re\s*:/i.test(inbound.subject) ? inbound.subject : `Re: ${inbound.subject}`,
     html: rendered.html, text: rendered.text,
+    tags: [{ name: 'tagmails_job', value: row.job_id }],
     headers: { 'In-Reply-To': request.messageId, References: references.join(' ') },
   };
 }
@@ -113,7 +139,8 @@ async function finalize(env, row, getSentEmail) {
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO messages
       (id, account_id, thread_id, provider_email_id, message_id, direction, sender_email, object_key)
-      VALUES (?, ?, ?, ?, ?, 'outbound', ?, ?)`)
+      VALUES (?, ?, ?, ?, ?, 'outbound', ?, ?)
+      ON CONFLICT(account_id, provider_email_id) DO NOTHING`)
       .bind(randomUUID(), account.account_id, row.thread_id, row.provider_email_id, data.message_id,
         account.agent_email, `outbound/${account.account_id}/${row.job_id}.json`),
     env.DB.prepare("UPDATE outbox SET state = 'sent', updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'accepted'")
@@ -122,11 +149,29 @@ async function finalize(env, row, getSentEmail) {
   return { state: 'sent', jobId: row.job_id, messageId: data.message_id };
 }
 
+async function holdUnknownSend(env, jobId) {
+  const changed = await env.DB.prepare(`UPDATE outbox SET state = 'uncertain', updated_at = CURRENT_TIMESTAMP
+    WHERE job_id = ? AND state = 'sending' RETURNING job_id`).bind(jobId).first();
+  if (changed) return { state: 'uncertain', jobId };
+  const current = await env.DB.prepare('SELECT state FROM outbox WHERE job_id = ?').bind(jobId).first();
+  return { state: current?.state ?? 'uncertain', jobId };
+}
+
 export async function sendNextOutbox(env, {
   sendEmail = (payload, options) => new Resend(env.RESEND_API_KEY).emails.send(payload, options),
   getSentEmail = (id) => new Resend(env.RESEND_API_KEY).emails.get(id),
 } = {}) {
   if (!env.DB || !env.MAIL || !env.RESEND_API_KEY) throw new Error('Outbound bindings are incomplete');
+  // Scheduled invocations cannot run beyond 15 minutes. A send still marked
+  // in progress after 20 minutes might already have reached the provider.
+  const stale = await env.DB.prepare(`UPDATE outbox SET state = 'uncertain', updated_at = CURRENT_TIMESTAMP
+    WHERE job_id = (SELECT job_id FROM outbox WHERE state = 'sending'
+      AND updated_at <= datetime('now', '-20 minutes') ORDER BY updated_at, job_id LIMIT 1)
+    AND state = 'sending' RETURNING job_id`).bind().first();
+  if (stale) {
+    console.error('Outbox send needs reconciliation after interrupted Worker', stale.job_id);
+    return { state: 'uncertain', jobId: stale.job_id };
+  }
   const accepted = await env.DB.prepare(`SELECT o.job_id, o.provider_email_id, j.thread_id
     FROM outbox o JOIN jobs j ON j.id = o.job_id
     JOIN threads t ON t.id = j.thread_id JOIN accounts a ON a.id = t.account_id
@@ -174,16 +219,20 @@ export async function sendNextOutbox(env, {
   } catch {
     // A network error might happen after provider acceptance. Hold for
     // reconciliation rather than risk a duplicate when its 24h key expires.
-    await env.DB.prepare("UPDATE outbox SET state = 'uncertain', updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'sending'")
-      .bind(row.job_id).run();
-    return { state: 'uncertain', jobId: row.job_id };
+    return holdUnknownSend(env, row.job_id);
   }
   if (sent.error || !sent.data?.id) {
-    await env.DB.prepare("UPDATE outbox SET state = 'uncertain', updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'sending'")
-      .bind(row.job_id).run();
-    return { state: 'uncertain', jobId: row.job_id };
+    return holdUnknownSend(env, row.job_id);
   }
-  await env.DB.prepare("UPDATE outbox SET state = 'accepted', provider_email_id = ?, updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'sending'")
-    .bind(sent.data.id, row.job_id).run();
+  const acceptedSend = await env.DB.prepare("UPDATE outbox SET state = 'accepted', provider_email_id = ?, updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'sending' RETURNING job_id")
+    .bind(sent.data.id, row.job_id).first();
+  if (!acceptedSend) {
+    const current = await env.DB.prepare('SELECT state, provider_email_id FROM outbox WHERE job_id = ?')
+      .bind(row.job_id).first();
+    if (current?.provider_email_id === sent.data.id && ['accepted', 'sent'].includes(current.state)) {
+      return { state: current.state, jobId: row.job_id };
+    }
+    throw new Error('Outbox provider acceptance conflicts with stored state');
+  }
   return finalize(env, { ...row, provider_email_id: sent.data.id }, getSentEmail);
 }
