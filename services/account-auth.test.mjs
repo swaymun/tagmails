@@ -130,8 +130,9 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   sqlite.prepare(`INSERT INTO messages (id, account_id, thread_id, message_id, direction, sender_email, object_key)
     VALUES (?, ?, ?, ?, 'inbound', ?, ?)`).run('receipt-message', accountId, 'receipt-thread',
     '<receipt@gmail.com>', identity.email, 'inbound/receipt.eml');
-  sqlite.prepare(`INSERT INTO jobs (id, thread_id, message_id, state, result_key)
-    VALUES (?, ?, ?, 'completed', ?)`).run(runId, 'receipt-thread', 'receipt-message', 'results/receipt.json');
+  sqlite.prepare(`INSERT INTO jobs (id, thread_id, message_id, state, result_key, model_json)
+    VALUES (?, ?, ?, 'completed', ?, ?)`).run(runId, 'receipt-thread', 'receipt-message', 'results/receipt.json',
+      JSON.stringify({ id: 'claude-sonnet-5-5', effort: 'medium', source: 'explicit' }));
   const artifactId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
   sqlite.prepare(`INSERT INTO run_artifacts
     (id, account_id, job_id, lease_id, object_key, name, mime_type, byte_size)
@@ -152,6 +153,7 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.doesNotMatch(html, /<safely>/);
   assert.match(html, /Private &lt;review&gt;/);
   assert.match(html, /Find &lt;private&gt; items/);
+  assert.match(html, /Selected model: Claude Code Sonnet 5\.5 \(medium; requested in this email\)/);
   assert.doesNotMatch(html, /<private>/);
   assert.match(html, /302 input tokens/);
   assert.match(html, /\$0\.010528/);
@@ -167,6 +169,7 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.equal(siteRun.headers.get('access-control-allow-origin'), env.SITE_ORIGIN);
   assert.equal(siteRun.headers.get('cache-control'), 'no-store');
   const siteResult = await siteRun.json();
+  assert.equal(siteResult.selectedModel, 'Selected model: Claude Code Sonnet 5.5 (medium; requested in this email).');
   assert.equal(siteResult.result.transcript.events[0].text, 'Find <private> items');
   assert.equal(siteResult.artifacts[0].name, 'review <draft>.txt');
   const receiptFile = await handleAccountRequest(request(`/runs/${runId}/artifacts/${artifactId}`, 'GET', undefined, cookie), env, options);

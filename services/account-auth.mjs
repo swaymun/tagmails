@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { ACCOUNT_DEFAULT_MODELS } from '../apps/mock-inbox/model.mjs';
 import { runReceiptPage } from './account-page.mjs';
+import { selectedModelDetail } from './model-route.mjs';
 import { artifactForDownload, selectedRunArtifacts } from './run-artifacts.mjs';
 
 const googleKeys = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
@@ -280,7 +281,7 @@ async function siteAccountRequest(request, env, pathname, verifyIdentity) {
 }
 
 async function runRow(env, runId, accountId) {
-  const row = await env.DB.prepare(`SELECT j.id, j.state, j.attempts, j.created_at, j.result_key,
+  const row = await env.DB.prepare(`SELECT j.id, j.state, j.attempts, j.created_at, j.result_key, j.model_json,
     t.subject, m.sender_email, o.state AS delivery_state
     FROM jobs j JOIN threads t ON t.id = j.thread_id JOIN messages m ON m.id = j.message_id
     LEFT JOIN outbox o ON o.job_id = j.id
@@ -289,7 +290,7 @@ async function runRow(env, runId, accountId) {
   const saved = row.result_key ? await env.MAIL.get(row.result_key) : null;
   const result = saved ? JSON.parse(new TextDecoder().decode(await saved.arrayBuffer())) : null;
   const artifacts = await selectedRunArtifacts(env, accountId, runId, result?.artifactIds);
-  return { ...row, result, artifacts };
+  return { ...row, selectedModel: selectedModelDetail(row.model_json), result, artifacts };
 }
 
 async function artifactResponse(env, accountId, row, artifactId, headers = {}) {
@@ -337,6 +338,7 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
     if (!row) return json({ error: 'Run not found' }, 404, headers);
     if (apiArtifact) return artifactResponse(env, owner.id, row, apiArtifact[2], headers);
     return json({ id: row.id, state: row.state, subject: row.subject, sender: row.sender_email,
+      selectedModel: row.selectedModel,
       createdAt: row.created_at, attempts: row.attempts, deliveryState: row.delivery_state,
       result: row.result, artifacts: row.artifacts.map((file) => ({ id: file.id, name: file.name,
         mimeType: file.mime_type, size: file.byte_size, expiresAt: file.expires_at })) }, 200, headers);

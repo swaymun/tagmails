@@ -302,6 +302,7 @@ ${checks.length ? `<h2>Checks and limits</h2>${list(checks)}` : ''}
 ${hasUsage ? `<h2>Model usage reported by the local CLI</h2><p>${escapeHtml(usage.inputTokens)} input tokens (${escapeHtml(usage.cachedInputTokens)} cached, ${escapeHtml(usage.cacheCreationInputTokens)} cache creation); ${escapeHtml(usage.outputTokens)} output tokens (${escapeHtml(usage.reasoningOutputTokens)} reasoning).</p>` : ''}
 ${typeof listCost === 'number' && Number.isFinite(listCost) && listCost >= 0 ? `<p>List-equivalent model cost reported by the CLI: $${escapeHtml(listCost.toFixed(6))}. This is not a TagMails charge.</p>` : ''}
 <div class="meta"><span><strong>Sender</strong>${escapeHtml(run.sender_email)}</span><span><strong>Received</strong>${escapeHtml(run.created_at)} UTC</span>
+${run.selectedModel ? `<span><strong>Model route</strong>${escapeHtml(run.selectedModel)}</span>` : ''}
 <span><strong>Attempts</strong>${escapeHtml(run.attempts)}</span><span><strong>Email delivery</strong>${escapeHtml(run.delivery_state ?? 'Not queued')}</span></div></section>
 ${run.artifacts?.length ? `<section class="card"><h2>Files</h2><ul>${run.artifacts.map((file) => `<li><a href="/runs/${escapeHtml(run.id)}/artifacts/${escapeHtml(file.id)}">${escapeHtml(file.name)}</a> (${escapeHtml((file.byte_size / 1_000_000).toFixed(1))} MB)</li>`).join('')}</ul><p class="muted">Files expire seven days after upload.</p></section>` : ''}
 <section class="card"><h2>Run transcript</h2>

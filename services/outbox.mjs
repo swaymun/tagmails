@@ -3,24 +3,9 @@ import { Resend } from 'resend';
 import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.mjs';
 import { renderResult } from '../apps/mock-inbox/mail.mjs';
 import { releaseTestEmail, settleTestEmail } from './email-charges.mjs';
+import { selectedModelDetail } from './model-route.mjs';
 
 const MESSAGE_ID = /^<[^<>\s]+@[^<>\s]+>$/;
-const MODEL_LABELS = {
-  'gpt-6.1-sol': ['Codex GPT-6.1 Sol', 'medium'],
-  'claude-sonnet-5-5': ['Claude Code Sonnet 5.5', 'medium'],
-  'gpt-6-luna': ['Codex GPT-6 Luna', 'low'],
-};
-
-function selectedModelDetail(json) {
-  if (!json) return null;
-  try {
-    const model = JSON.parse(json);
-    const [label, effort] = MODEL_LABELS[model.id] ?? [];
-    if (!label || model.effort !== effort || !['default', 'explicit'].includes(model.source)) return null;
-    const source = model.source === 'explicit' ? 'requested in this email' : 'account default';
-    return `Selected model: ${label} (${effort}; ${source}).`;
-  } catch { return null; }
-}
 
 function publicOrigin(value) {
   if (!value) return null;
