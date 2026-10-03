@@ -21,4 +21,4 @@ The login agent watches for new email jobs. Its logs are in `~/Library/Logs/TagM
 
 Stop the login agent before moving this folder. A new build stays in a separate folder until you have tested it. The existing LaunchAgent plist contains an absolute binary path and does not update itself; install a new plist only after stopping and removing the old one. Keep the owner-only device token file at `~/.config/tagmails/device-token` so the existing pairing can be reused. Do not send that file with the bundle.
 
-The development relay and Site are currently for a private pilot. Live provider email delivery and paid billing are separate launch gates.
+The development relay and Site are currently for a private pilot. An owner Gmail request completed through the paired read-only Mac and Codex Luna; the reply arrived in the same Gmail thread and linked to the saved private run transcript. The daemon is installed as a macOS login agent for the selected disposable workspace. Verified-domain sending, participant trials, and paid billing remain separate launch gates.
