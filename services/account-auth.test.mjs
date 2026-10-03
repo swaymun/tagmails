@@ -188,6 +188,34 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.match(await deliveredReceipt.text(), /guest@gmail\.com: bounced/);
   assert.deepEqual((await (await handleAccountRequest(siteRequest(), env, options)).json()).deliveryRecipients,
     [{ email: 'guest@gmail.com', status: 'bounced' }, { email: identity.email, status: 'delivered' }]);
+  sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)')
+    .run('receipt-thread', 'guest@gmail.com');
+  sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)')
+    .run('receipt-thread', 'bystander@gmail.com');
+  sqlite.prepare('UPDATE outbox SET payload_json = ? WHERE job_id = ?')
+    .run(JSON.stringify({ to: [identity.email], cc: ['guest@gmail.com'] }), runId);
+  const guestOptions = { verifyIdentity: async () => ({ sub: 'guest-sub', email: 'guest@gmail.com' }) };
+  const guestRun = await handleAccountRequest(siteRequest(), env, guestOptions);
+  assert.equal(guestRun.status, 200);
+  const guestResult = await guestRun.json();
+  assert.equal(guestResult.result.transcript.events[0].text, 'Find <private> items');
+  assert.deepEqual(guestResult.artifacts, []);
+  assert.equal(guestResult.result.artifactIds, undefined);
+  assert.equal(guestResult.result.reportedListCostUsd, undefined);
+  assert.equal(guestResult.attempts, undefined);
+  assert.deepEqual(guestResult.deliveryRecipients, [{ email: 'guest@gmail.com', status: 'bounced' }]);
+  assert.equal(sqlite.prepare("SELECT count(*) n FROM accounts WHERE google_sub = 'guest-sub'").get().n, 0);
+  const siteFileRequest = new Request(`https://relay.test/api/runs/${runId}/artifacts/${artifactId}`, {
+    headers: { Authorization: 'Bearer test', Origin: env.SITE_ORIGIN },
+  });
+  assert.equal((await handleAccountRequest(siteFileRequest, env, guestOptions)).status, 404);
+  assert.equal((await handleAccountRequest(siteRequest(), env, {
+    verifyIdentity: async () => ({ sub: 'bystander-sub', email: 'bystander@gmail.com' }),
+  })).status, 404);
+  sqlite.prepare('UPDATE participants SET revoked_at = CURRENT_TIMESTAMP WHERE thread_id = ? AND email = ?')
+    .run('receipt-thread', 'guest@gmail.com');
+  assert.equal((await handleAccountRequest(siteRequest(), env, guestOptions)).status, 404);
+  assert.equal((await handleAccountRequest(siteRequest(), env, options)).status, 200);
   const receiptFile = await handleAccountRequest(request(`/runs/${runId}/artifacts/${artifactId}`, 'GET', undefined, cookie), env, options);
   assert.equal(await receiptFile.text(), 'memo');
   assert.equal(receiptFile.headers.get('content-type'), 'application/octet-stream');

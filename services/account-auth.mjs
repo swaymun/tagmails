@@ -297,6 +297,32 @@ async function runRow(env, runId, accountId) {
     deliveryRecipients: deliveries.results ?? deliveries };
 }
 
+async function runViewer(env, runId, identity) {
+  const viewer = await env.DB.prepare(`SELECT t.account_id, a.google_sub, a.owner_email,
+    p.email AS participant_email, o.payload_json
+    FROM jobs j JOIN threads t ON t.id = j.thread_id JOIN accounts a ON a.id = t.account_id
+    LEFT JOIN participants p ON p.thread_id = t.id AND p.email = ? AND p.revoked_at IS NULL
+    LEFT JOIN outbox o ON o.job_id = j.id
+    WHERE j.id = ? AND a.active = 1 LIMIT 1`).bind(identity.email, runId).first();
+  if (!viewer) return null;
+  if (viewer.google_sub === identity.sub && viewer.owner_email === identity.email) {
+    return { accountId: viewer.account_id, owner: true };
+  }
+  if (viewer.participant_email !== identity.email || !viewer.payload_json) return null;
+  let payload;
+  try { payload = JSON.parse(viewer.payload_json); }
+  catch { return null; }
+  const recipients = [...(Array.isArray(payload.to) ? payload.to : []),
+    ...(Array.isArray(payload.cc) ? payload.cc : [])];
+  return recipients.includes(identity.email) ? { accountId: viewer.account_id, owner: false } : null;
+}
+
+function participantResult(result) {
+  if (!result) return null;
+  const { state, summary, details, checks, runtime, transcript } = result;
+  return { state, summary, details, checks, runtime, transcript };
+}
+
 async function artifactResponse(env, accountId, row, artifactId, headers = {}) {
   if (!row.result?.artifactIds?.includes(artifactId)) return json({ error: 'File not found' }, 404, headers);
   const file = await artifactForDownload(env, accountId, row.id, artifactId);
@@ -335,18 +361,21 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
     let identity;
     try { identity = await verifyIdentity(credential, env.GOOGLE_CLIENT_ID); }
     catch { return json({ error: 'Google sign-in required' }, 401, headers); }
-    const owner = await env.DB.prepare('SELECT id FROM accounts WHERE google_sub = ? AND active = 1')
-      .bind(identity.sub).first();
     const jobId = apiRunId ?? apiArtifact[1];
-    const row = owner ? await runRow(env, jobId, owner.id) : null;
+    const viewer = await runViewer(env, jobId, identity);
+    if (apiArtifact && !viewer?.owner) return json({ error: 'Run not found' }, 404, headers);
+    const row = viewer ? await runRow(env, jobId, viewer.accountId) : null;
     if (!row) return json({ error: 'Run not found' }, 404, headers);
-    if (apiArtifact) return artifactResponse(env, owner.id, row, apiArtifact[2], headers);
+    if (apiArtifact) return artifactResponse(env, viewer.accountId, row, apiArtifact[2], headers);
     return json({ id: row.id, state: row.state, subject: row.subject, sender: row.sender_email,
       selectedModel: row.selectedModel,
-      createdAt: row.created_at, attempts: row.attempts, deliveryState: row.delivery_state,
-      deliveryRecipients: row.deliveryRecipients.map((item) => ({ email: item.recipient_email, status: item.status })),
-      result: row.result, artifacts: row.artifacts.map((file) => ({ id: file.id, name: file.name,
-        mimeType: file.mime_type, size: file.byte_size, expiresAt: file.expires_at })) }, 200, headers);
+      createdAt: row.created_at, attempts: viewer.owner ? row.attempts : undefined,
+      deliveryState: row.delivery_state,
+      deliveryRecipients: row.deliveryRecipients.filter((item) => viewer.owner || item.recipient_email === identity.email)
+        .map((item) => ({ email: item.recipient_email, status: item.status })),
+      result: viewer.owner ? row.result : participantResult(row.result),
+      artifacts: viewer.owner ? row.artifacts.map((file) => ({ id: file.id, name: file.name,
+        mimeType: file.mime_type, size: file.byte_size, expiresAt: file.expires_at })) : [] }, 200, headers);
   }
   if (pathname === '/api/auth/config' && request.method === 'GET') {
     return env.GOOGLE_CLIENT_ID && DOMAIN.test(env.AGENT_DOMAIN ?? '')
