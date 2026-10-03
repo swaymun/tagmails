@@ -117,6 +117,15 @@ function reportedAllowance(value) {
   return windows.length ? { observedAt: now, windows } : null;
 }
 
+function savedFinalAnswer(value, turnId) {
+  const turn = value?.data?.find((item) => item?.id === turnId && item.status === 'completed');
+  if (!Array.isArray(turn?.items)) return '';
+  const messages = turn.items.filter((item) => item?.type === 'agentMessage' &&
+    typeof item.text === 'string' && item.text.trim());
+  return messages.findLast((item) => item.phase === 'final_answer')?.text ||
+    messages.findLast((item) => item.phase == null)?.text || '';
+}
+
 function codexEnvironment(home) {
   const allowed = ['HOME', 'USER', 'PATH', 'TMPDIR', 'LANG', 'LC_ALL', 'SSL_CERT_FILE'];
   return { ...Object.fromEntries(allowed.filter((key) => process.env[key]).map((key) => [key, process.env[key]])),
@@ -228,7 +237,7 @@ async function runCodex(claim, workspace, home, sessionId, staged, write) {
     if (!SESSION_ID.test(threadId || '') || started.activePermissionProfile?.id !== profile) {
       throw new Error(`Codex did not activate the ${profile} profile`);
     }
-    await request('turn/start', { threadId, cwd: workspace, model: claim.model.id, effort: claim.model.effort,
+    const startedTurn = await request('turn/start', { threadId, cwd: workspace, model: claim.model.id, effort: claim.model.effort,
       approvalPolicy: 'on-request', input: [{ type: 'text', text: promptFor(claim, staged.prompt, write) }] });
     const status = await turnDone;
     if (leaseLost) return { result: { ...fail('The local claim lease was lost while Codex was running.', write), transcript } };
@@ -248,7 +257,18 @@ async function runCodex(claim, workspace, home, sessionId, staged, write) {
       } catch { /* A usage read cannot fail a completed task. */ }
       finally { clearTimeout(allowanceTimeout); }
     }
-    const finalAnswer = answer || unphasedAnswer;
+    let finalAnswer = answer || unphasedAnswer;
+    if (!finalAnswer && typeof startedTurn?.turn?.id === 'string') {
+      let historyTimeout;
+      try {
+        const saved = await Promise.race([
+          request('thread/turns/list', { threadId, limit: 1, itemsView: 'summary' }),
+          new Promise((_, reject) => { historyTimeout = setTimeout(() => reject(new Error('Codex history timed out')), 2000); }),
+        ]);
+        finalAnswer = savedFinalAnswer(saved, startedTurn.turn.id);
+      } catch { /* Live events remain the fallback if history is unavailable. */ }
+      finally { clearTimeout(historyTimeout); }
+    }
     return { result: { ...resultFromAnswer(finalAnswer, claim.model.id, approvals, usage, write),
       ...(codexAllowance ? { codexAllowance } : {}),
       transcript: finishRunTranscript(transcript, finalAnswer) }, threadId };

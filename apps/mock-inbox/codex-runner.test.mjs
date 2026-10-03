@@ -47,6 +47,13 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     rateLimits: { primary: { usedPercent: 34, windowDurationMins: 10080,
       resetsAt: Math.floor(Date.now() / 1000) + 86400 } },
   } });
+  if (message.method === 'thread/turns/list') {
+    send({ id: message.id, result: { data: [{ id: mode === 'history-wrong-turn' ? 'older-turn' : 'turn-1',
+      status: 'completed', items: [
+        { type: 'userMessage', content: [{ type: 'text', text: 'SECRET_PROMPT' }] },
+        { type: 'agentMessage', phase: 'final_answer', text: 'Recovered answer.' },
+      ] }] } });
+  }
   if (message.method === 'thread/start' || message.method === 'thread/resume') {
     resumed = message.method === 'thread/resume';
     fs.appendFileSync(log, JSON.stringify({ method: message.method, params: message.params,
@@ -76,7 +83,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       send({ method: 'item/completed', params: { item: { type: 'commandExecution', command: 'cat secret.txt',
         aggregatedOutput: 'SECRET_FILE', status: 'completed', exitCode: 0 } } });
       send({ method: 'item/completed', params: { item: { type: 'agentMessage', phase: 'commentary', text: 'Checking the workspace.' } } });
-      send({ method: 'item/completed', params: { item: { type: 'agentMessage',
+      if (!['missing-final-event', 'history-wrong-turn'].includes(mode)) send({ method: 'item/completed', params: { item: { type: 'agentMessage',
         ...(mode === 'legacy-phase' ? {} : { phase: 'final_answer' }),
         text: resumed ? 'First turn plus second turn.' : 'First turn.' } } });
       send({ method: 'turn/completed', params: { turn: { status: mode === 'turn-failed' ? 'failed' : 'completed' } } });
@@ -166,6 +173,24 @@ test('Codex adapter accepts an unphased legacy answer as the final response', as
   assert.deepEqual(result.transcript.events.at(-1), {
     kind: 'assistant', phase: 'final_answer', text: 'First turn.',
   });
+});
+
+test('Codex adapter recovers a missed final event from the completed turn summary', async (t) => {
+  setup(t, 'missing-final-event');
+  const result = await runClaim(claim('job-history', 'thread-history'));
+  assert.equal(result.state, 'completed');
+  assert.equal(result.summary, 'Recovered answer.');
+  assert.deepEqual(result.transcript.events.at(-1), {
+    kind: 'assistant', phase: 'final_answer', text: 'Recovered answer.',
+  });
+  assert.doesNotMatch(JSON.stringify(result), /SECRET_PROMPT/);
+});
+
+test('Codex adapter does not use a different turn as its final answer', async (t) => {
+  setup(t, 'history-wrong-turn');
+  const result = await runClaim(claim('job-wrong-history', 'thread-wrong-history'));
+  assert.equal(result.state, 'failed');
+  assert.match(result.summary, /without a readable answer/);
 });
 
 test('Codex adapter refuses to run a turn when the restricted profile is not active', async (t) => {
