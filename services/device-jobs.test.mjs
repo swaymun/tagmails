@@ -159,6 +159,23 @@ test('a run file is uploaded under its lease, privately downloaded, and deleted 
   assert.equal(objects.has(objectKey), false);
 });
 
+test('run file uploads accept the 24 MB boundary and enforce the combined limit', async () => {
+  const { env, sqlite } = bindings();
+  const paired = device(sqlite);
+  await inbound(env);
+  const lease = envelope((await call(env, paired.token, 'claim')).body);
+  const upload = async (bytes) => handleDeviceRequest(new Request(
+    `https://relay.test/api/device/artifacts?jobId=${lease.jobId}&leaseId=${lease.leaseId}`, {
+      method: 'POST', headers: { Authorization: `Bearer ${paired.token}`,
+        'Content-Type': 'application/octet-stream', 'Content-Length': String(bytes.length),
+        'X-TagMails-Filename': 'output.bin' }, body: bytes,
+    }), env);
+  assert.equal((await upload(Buffer.alloc(24_000_000))).status, 201);
+  assert.equal((await upload(Buffer.alloc(1_000_000))).status, 201);
+  assert.equal((await upload(Buffer.from('x'))).status, 409);
+  assert.equal(sqlite.prepare('SELECT SUM(byte_size) n FROM run_artifacts').get().n, 25_000_000);
+});
+
 test('a device cannot claim another account and revocation blocks access', async () => {
   const { env, sqlite } = bindings();
   sqlite.prepare('INSERT INTO accounts (id, google_sub, owner_email, agent_email) VALUES (?, ?, ?, ?)')
