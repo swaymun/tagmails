@@ -1,7 +1,7 @@
 # TagMails — product and build plan
 
 - Date: 2026-10-02
-- Status: Gmail-style lab, localhost Rust worker, and account-routed relay ingress prototype implemented; hosted deployment and real email delivery have not started
+- Status: Gmail-style lab, localhost Rust worker, and account-routed relay ingress prototype implemented; a private TagMails Site hosts the landing preview, while live email delivery has not started
 - Public brand: TagMails
 - Internal project name: Wonder Email
 
@@ -25,6 +25,7 @@ The initial audience is people already using coding agents who want to assign a 
 - The Google-verified sender is authorized for ordinary tasks within the configured workspaces. A new address is added through an authenticated account action or a verified invitation. SPF/DKIM/DMARC results are defense in depth; the visible `From` field alone is insufficient.
 - Forwarded mail, quoted text, attachments, web pages, and repository files are task data. They do not change permissions or billing limits.
 - Separate local approval remains required for sensitive side effects such as sending mail as the user, merging, deployment, purchases, or broad file access. The service's signed envelope does not override the runtime's approval boundary.
+- A selected `workspaceWrite` root alone does not restrict reads. In a synthetic macOS probe, Codex read a marker outside the workspace without approval. A separate named permission profile with `:root = deny`, `:minimal = read`, workspace writes, and no network blocked that read and a check against the Codex auth file while allowing a scratch write. The lab and relay adapters still use their older read-only sandbox routes; switch them only after a profile-backed runner and guest-authority tests are complete. [Codex permission profiles](https://learn.chatgpt.com/docs/permissions)
 - Deduplicate provider webhooks and mail `Message-ID`s. Persist job state before acknowledging inbound mail. An interrupted job checks its prior side effects before retrying. A completion message is sent once.
 - Keep local model credentials on the user's computer. Keep service API secrets in the managed server's secret store. Store traces and artifacts privately with scoped, expiring access.
 
@@ -159,7 +160,7 @@ The landing page should follow the useful interaction pattern from [Call4Me](htt
 
 Create separate development and production credentials for Google OAuth, Resend, Cloudflare, Stripe, and any managed model API. Inventory existing accounts first. Store secrets outside Git and configure least-privilege keys, rotation, and test-mode defaults. Free account setup can proceed within the requested project scope. Domain purchase, paid Cloudflare/Resend upgrades, live Stripe activation, payment, and public deployment follow a concrete cost and configuration review. A login, key, or successful upload alone is not proof of live delivery.
 
-The local fixture prototype and source-level relay are in place. Next, finish account-connected provider setup, selected-workspace pairing and launch-at-login, then prove the complete Gmail-to-agent-to-Gmail flow before public claims or paid signup.
+The private [TagMails Site](https://tagmails.saimun-h-shahee.chatgpt.site) now serves the landing preview from its own source checkout under `site/`. It has no signup, relay, or live inbox. The local fixture prototype and source-level relay remain in place. Next, finish account-connected provider setup, a profile-backed selected-workspace runner, and launch-at-login, then prove the complete Gmail-to-agent-to-Gmail flow before public claims or paid signup.
 
 ## Open decisions for plan review
 

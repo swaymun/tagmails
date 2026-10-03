@@ -1,6 +1,6 @@
 # TagMails
 
-TagMails gives an existing local coding agent an email address. This repository currently contains the product plan and an **internal, synthetic Gmail-style test inbox**. By default it sends no email, invokes no model, changes no files on behalf of a message, and charges no money. Explicit one-job Codex and Claude read-only modes are available for local testing.
+TagMails gives an existing local coding agent an email address. This repository currently contains the product plan and an **internal, synthetic Gmail-style test inbox**. A [private TagMails Site](https://tagmails.saimun-h-shahee.chatgpt.site) hosts the landing preview from a separate source checkout in `site/`; it does not provide signup or live email. By default the local prototype sends no email, invokes no model, changes no files on behalf of a message, and charges no money. Explicit one-job Codex and Claude read-only modes are available for local testing.
 
 ## Run the internal inbox
 
@@ -44,7 +44,7 @@ cargo run -p tagmails-daemon -- --once
 
 The adapter accepts Luna and GPT-6.1 Sol routes, uses Codex's read-only sandbox, saves the Codex session ID per email thread in ignored `.local/codex-sessions.json`, and resumes it for later selected jobs on that thread. It saves completed job results before returning them to the lab, so a retry can reuse the result. It renews the lab claim during a long turn and stops the CLI after three minutes. The lab labels these replies as local Codex runs. The selected job ID and `--once` are required because this synthetic localhost inbox has no authenticated sender or production provider verification.
 
-This mode stages bounded inbound attachments in a temporary directory for the read-only agent to inspect, then removes the files after the turn. A real Luna turn read a text attachment through the local relay. Image, PDF, and other file interpretation still need live checks. It cannot change project files. The planned app-server integration, runtime approval flow, and production workspace boundary are still outstanding. Do not point this prototype at a private workspace you would not want the locally signed-in Codex CLI to read.
+This mode stages bounded inbound attachments in a temporary directory for the read-only agent to inspect, then removes the files after the turn. A real Luna turn read a text attachment through the local relay. Image, PDF, and other file interpretation still need live checks. It cannot change project files. **Read-only limits writes, not reads:** the current CLI route can read other local files accessible to this macOS user. Use only synthetic test mail and a disposable workspace. A named permission profile blocked a synthetic outside read and allowed a scratch write in a separate probe; that safer profile is not yet connected to inbound tasks. Run `node scripts/check-codex-permissions.mjs` to repeat its filesystem boundary checks. Production workspace isolation and runtime approvals remain outstanding.
 
 ### Opt-in local Claude read-only run
 
