@@ -8,6 +8,7 @@ import { accountPage } from './account-page.mjs';
 import { handleTestWalletRequest, reconcileDueRefunds } from './billing-wallet.mjs';
 import { fundPendingTestEmails, reconcileTestEmailCharges, reservePendingTestEmails,
   testBillingEnabled } from './email-charges.mjs';
+import { deleteExpiredRunArtifacts } from './run-artifacts.mjs';
 
 const MAX_WEBHOOK_BYTES = 128_000;
 
@@ -199,6 +200,8 @@ export default {
     catch { return new Response('Inbound mail could not be accepted', { status: 500 }); }
   },
   async scheduled(_event, env) {
+    try { await deleteExpiredRunArtifacts(env); }
+    catch { console.error('Run artifact cleanup is delayed'); }
     try { await reconcileDueRefunds(env); }
     catch { console.error('Test wallet refund reconciliation is delayed'); }
     try { await reconcileTestEmailCharges(env); await fundPendingTestEmails(env); }

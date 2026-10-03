@@ -58,8 +58,11 @@ async function prepare(env, row) {
   const transcriptUrl = siteOrigin
     ? `${siteOrigin}/run?id=${encodeURIComponent(row.job_id)}`
     : relayOrigin ? `${relayOrigin}/runs/${encodeURIComponent(row.job_id)}` : null;
+  const fileNote = result.artifactIds?.length && ownerCanOpen && siteOrigin
+    ? [`${result.artifactIds.length} file${result.artifactIds.length === 1 ? '' : 's'} available on the private run page for seven days.`]
+    : [];
   const rendered = renderResult({
-    state: result.state, summary: result.summary, details: result.details, checks: result.checks,
+    state: result.state, summary: result.summary, details: [...(result.details ?? []), ...fileNote], checks: result.checks,
     links: transcriptUrl && ownerCanOpen ? [{ label: 'Run transcript', url: transcriptUrl }] : [],
     note: result.state === 'needs_approval'
       ? 'The agent is waiting for your approval in the connected app.'

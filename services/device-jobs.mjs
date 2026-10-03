@@ -2,6 +2,7 @@ import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { parseInbound } from '../apps/mock-inbox/inbound.mjs';
 import { chooseModel } from '../apps/mock-inbox/model.mjs';
 import { testBillingEnabled } from './email-charges.mjs';
+import { ARTIFACT_ID, selectedRunArtifacts, uploadRunArtifact } from './run-artifacts.mjs';
 
 const TOKEN = /^tm_dev_[A-Za-z0-9_-]{43}$/;
 const LEASE_SECONDS = 90;
@@ -93,12 +94,16 @@ function validResult(value) {
       typeof value.summary !== 'string' || !value.summary.trim() || value.summary.length > 500) return false;
   const tokens = ['inputTokens', 'cachedInputTokens', 'cacheCreationInputTokens', 'outputTokens', 'reasoningOutputTokens'];
   const transcript = value.transcript;
+  const artifactIds = value.artifactIds;
   return ['details', 'checks'].every((key) => value[key] === undefined ||
     (Array.isArray(value[key]) && value[key].length <= 12 && value[key].every((item) => typeof item === 'string' && item.length <= 300))) &&
     (transcript === undefined || (transcript?.version === 1 && typeof transcript.truncated === 'boolean' &&
       Array.isArray(transcript.events) && transcript.events.length <= 48 &&
       transcript.events.every((event) => event && ['request', 'assistant', 'tool'].includes(event.kind) &&
         typeof event.text === 'string' && event.text.length > 0 && event.text.length <= 800))) &&
+    (artifactIds === undefined || (Array.isArray(artifactIds) && artifactIds.length <= 5 &&
+      artifactIds.every((id) => typeof id === 'string' && ARTIFACT_ID.test(id)) &&
+      new Set(artifactIds).size === artifactIds.length)) &&
     (value.usage === undefined || (value.usage && typeof value.usage === 'object' &&
       tokens.every((key) => Number.isSafeInteger(value.usage[key]) && value.usage[key] >= 0 && value.usage[key] <= 1_000_000_000))) &&
     (value.reportedListCostUsd === undefined || (typeof value.reportedListCostUsd === 'number' &&
@@ -124,6 +129,11 @@ async function complete(env, device, body) {
   if (current.state !== 'running' || current.lease_id !== body.leaseId || !current.lease_valid) {
     return json({ error: 'Lease expired or replaced' }, 409);
   }
+  if (body.result.artifactIds?.length) {
+    const files = await selectedRunArtifacts(env, device.account_id, body.jobId,
+      body.result.artifactIds, body.leaseId);
+    if (files.length !== body.result.artifactIds.length) return json({ error: 'Unknown or expired artifact' }, 400);
+  }
   const key = `results/${device.account_id}/${body.jobId}/${body.leaseId}.json`;
   await env.MAIL.put(key, serialized, { httpMetadata: { contentType: 'application/json' } });
   const state = body.result.state === 'failed' ? 'failed' : 'completed';
@@ -143,7 +153,7 @@ async function complete(env, device, body) {
 
 export async function handleDeviceRequest(request, env) {
   const url = new URL(request.url);
-  if (request.method !== 'POST' || !['/api/device/claim', '/api/device/renew', '/api/device/complete'].includes(url.pathname)) {
+  if (request.method !== 'POST' || !['/api/device/claim', '/api/device/renew', '/api/device/complete', '/api/device/artifacts'].includes(url.pathname)) {
     return new Response('Not found', { status: 404 });
   }
   if (url.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(url.hostname)) return json({ error: 'HTTPS required' }, 403);
@@ -151,6 +161,7 @@ export async function handleDeviceRequest(request, env) {
   const device = await deviceFor(request, env);
   if (!device) return json({ error: 'Unauthorized device' }, 401);
   if (url.pathname === '/api/device/claim') return claim(env, device);
+  if (url.pathname === '/api/device/artifacts') return uploadRunArtifact(request, env, device);
   let body;
   try { body = await boundedJson(request); }
   catch { return json({ error: 'Invalid or oversized JSON body' }, 400); }

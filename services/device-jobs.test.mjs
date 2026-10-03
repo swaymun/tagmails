@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
-import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { handleDeviceRequest } from './device-jobs.mjs';
 import { handleInbound } from './relay-worker.mjs';
 import { bindings } from './bindings-fixture.mjs';
+import { handleAccountRequest } from './account-auth.mjs';
+import { deleteExpiredRunArtifacts } from './run-artifacts.mjs';
 
 function device(sqlite, accountId = 'account-1') {
   const token = `tm_dev_${randomBytes(32).toString('base64url')}`;
@@ -102,6 +104,59 @@ test('expired leases are reclaimed and a stale or different device cannot comple
   assert.equal((await call(env, secondDevice.token, 'complete', { jobId: second.jobId, leaseId: second.leaseId, result })).status, 200);
   assert.equal(sqlite.prepare('SELECT attempts FROM jobs').get().attempts, 2);
   assert.equal(sqlite.prepare('SELECT count(*) n FROM outbox').get().n, 1);
+});
+
+test('a run file is uploaded under its lease, privately downloaded, and deleted after seven days', async () => {
+  const { env, sqlite, objects } = bindings();
+  env.SITE_ORIGIN = 'https://tagmails.chatgpt.site';
+  const paired = device(sqlite);
+  await inbound(env);
+  const lease = envelope((await call(env, paired.token, 'claim')).body);
+  const upload = (token, length = 4) => handleDeviceRequest(new Request(
+    `https://relay.test/api/device/artifacts?jobId=${lease.jobId}&leaseId=${lease.leaseId}`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'video/mp4',
+        'Content-Length': String(length), 'X-TagMails-Filename': encodeURIComponent('demo clip.mp4') },
+      body: Buffer.from('clip'),
+    }), env);
+  assert.equal((await upload('bad')).status, 401);
+  assert.equal((await upload(paired.token, 24_000_001)).status, 413);
+  const saved = await upload(paired.token);
+  assert.equal(saved.status, 201);
+  const file = await saved.json();
+  assert.equal(file.name, 'demo clip.mp4');
+  assert.equal(file.size, 4);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM run_artifacts').get().n, 1);
+  const result = { state: 'completed', summary: 'The file is ready.', artifactIds: [file.id] };
+  assert.equal((await call(env, paired.token, 'complete', { jobId: lease.jobId, leaseId: lease.leaseId,
+    result: { ...result, artifactIds: [randomUUID()] } })).status, 400);
+  assert.equal((await call(env, paired.token, 'complete', { jobId: lease.jobId, leaseId: lease.leaseId,
+    result })).status, 200);
+
+  const identity = { verifyIdentity: async (credential) => {
+    if (credential !== 'owner-token') throw new Error('Bad token');
+    return { sub: 'google-sub-1', email: 'owner@gmail.com' };
+  } };
+  const headers = { Authorization: 'Bearer owner-token', Origin: env.SITE_ORIGIN };
+  const run = await handleAccountRequest(new Request(`https://relay.test/api/runs/${lease.jobId}`, { headers }), env, identity);
+  assert.deepEqual((await run.json()).artifacts.map(({ id, name, size }) => ({ id, name, size })),
+    [{ id: file.id, name: file.name, size: 4 }]);
+  const fileUrl = `https://relay.test/api/runs/${lease.jobId}/artifacts/${file.id}`;
+  assert.equal((await handleAccountRequest(new Request(fileUrl), env, identity)).status, 401);
+  assert.equal((await handleAccountRequest(new Request(fileUrl, { headers }), env, {
+    verifyIdentity: async () => ({ sub: 'unknown-user', email: 'other@gmail.com' }),
+  })).status, 404);
+  const downloaded = await handleAccountRequest(new Request(fileUrl, { headers }), env, identity);
+  assert.equal(downloaded.status, 200);
+  assert.equal(downloaded.headers.get('content-type'), 'application/octet-stream');
+  assert.equal(downloaded.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(await downloaded.text(), 'clip');
+
+  const objectKey = sqlite.prepare('SELECT object_key FROM run_artifacts WHERE id = ?').get(file.id).object_key;
+  sqlite.prepare("UPDATE run_artifacts SET expires_at = datetime('now', '-1 second') WHERE id = ?").run(file.id);
+  assert.equal((await handleAccountRequest(new Request(fileUrl, { headers }), env, identity)).status, 404);
+  await deleteExpiredRunArtifacts(env);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM run_artifacts').get().n, 0);
+  assert.equal(objects.has(objectKey), false);
 });
 
 test('a device cannot claim another account and revocation blocks access', async () => {

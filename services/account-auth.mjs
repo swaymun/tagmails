@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { runReceiptPage } from './account-page.mjs';
+import { artifactForDownload, selectedRunArtifacts } from './run-artifacts.mjs';
 
 const googleKeys = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
 const DEVICE_TOKEN = /^tm_dev_[A-Za-z0-9_-]{43}$/;
@@ -152,24 +153,39 @@ async function runRow(env, runId, accountId) {
   if (!row) return null;
   const saved = row.result_key ? await env.MAIL.get(row.result_key) : null;
   const result = saved ? JSON.parse(new TextDecoder().decode(await saved.arrayBuffer())) : null;
-  return { ...row, result };
+  const artifacts = await selectedRunArtifacts(env, accountId, runId, result?.artifactIds);
+  return { ...row, result, artifacts };
+}
+
+async function artifactResponse(env, accountId, row, artifactId, headers = {}) {
+  if (!row.result?.artifactIds?.includes(artifactId)) return json({ error: 'File not found' }, 404, headers);
+  const file = await artifactForDownload(env, accountId, row.id, artifactId);
+  const object = file ? await env.MAIL.get(file.object_key) : null;
+  if (!object) return json({ error: 'File not found' }, 404, headers);
+  return new Response(object.body ?? await object.arrayBuffer(), { headers: {
+    ...headers, 'Cache-Control': 'private, no-store', 'Content-Type': 'application/octet-stream',
+    'Content-Disposition': `attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+    'X-Content-Type-Options': 'nosniff',
+  } });
 }
 
 export async function handleAccountRequest(request, env, { verifyIdentity = verifyGoogleCredential } = {}) {
   const { pathname } = new URL(request.url);
   const runId = pathname.match(/^\/runs\/([0-9a-f-]{36})$/i)?.[1];
+  const receiptArtifact = pathname.match(/^\/runs\/([0-9a-f-]{36})\/artifacts\/([0-9a-f-]{36})$/i);
   const apiRunId = pathname.match(/^\/api\/runs\/([0-9a-f-]{36})$/i)?.[1];
-  if (!pathname.startsWith('/api/auth/') && !pathname.startsWith('/api/account/') && pathname !== '/api/device/pair' && !runId && !apiRunId) return null;
+  const apiArtifact = pathname.match(/^\/api\/runs\/([0-9a-f-]{36})\/artifacts\/([0-9a-f-]{36})$/i);
+  if (!pathname.startsWith('/api/auth/') && !pathname.startsWith('/api/account/') && pathname !== '/api/device/pair' && !runId && !receiptArtifact && !apiRunId && !apiArtifact) return null;
   if (!env.DB) throw new Error('Account database is not configured');
   if (pathname === '/api/auth/google' && request.method === 'OPTIONS') return new Response(null, {
     status: request.headers.get('origin') === env.SITE_ORIGIN ? 204 : 403,
     headers: siteCors(request, env),
   });
-  if (apiRunId && request.method === 'OPTIONS') return new Response(null, {
+  if ((apiRunId || apiArtifact) && request.method === 'OPTIONS') return new Response(null, {
     status: request.headers.get('origin') === env.SITE_ORIGIN ? 204 : 403,
     headers: siteCors(request, env),
   });
-  if (apiRunId && request.method === 'GET') {
+  if ((apiRunId || apiArtifact) && request.method === 'GET') {
     const headers = siteCors(request, env);
     const credential = request.headers.get('authorization')?.match(/^Bearer (\S+)$/)?.[1];
     let identity;
@@ -177,11 +193,14 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
     catch { return json({ error: 'Google sign-in required' }, 401, headers); }
     const owner = await env.DB.prepare('SELECT id FROM accounts WHERE google_sub = ? AND active = 1')
       .bind(identity.sub).first();
-    const row = owner ? await runRow(env, apiRunId, owner.id) : null;
+    const jobId = apiRunId ?? apiArtifact[1];
+    const row = owner ? await runRow(env, jobId, owner.id) : null;
     if (!row) return json({ error: 'Run not found' }, 404, headers);
+    if (apiArtifact) return artifactResponse(env, owner.id, row, apiArtifact[2], headers);
     return json({ id: row.id, state: row.state, subject: row.subject, sender: row.sender_email,
       createdAt: row.created_at, attempts: row.attempts, deliveryState: row.delivery_state,
-      result: row.result }, 200, headers);
+      result: row.result, artifacts: row.artifacts.map((file) => ({ id: file.id, name: file.name,
+        mimeType: file.mime_type, size: file.byte_size, expiresAt: file.expires_at })) }, 200, headers);
   }
   if (pathname === '/api/auth/config' && request.method === 'GET') {
     return env.GOOGLE_CLIENT_ID && DOMAIN.test(env.AGENT_DOMAIN ?? '')
@@ -191,6 +210,12 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
   if (pathname === '/api/auth/google' && request.method === 'POST') return signIn(request, env, verifyIdentity);
   if (pathname === '/api/device/pair' && request.method === 'POST') return pair(request, env);
   const account = await accountFor(request, env);
+  if (receiptArtifact && request.method === 'GET') {
+    if (!account) return Response.redirect(`${new URL(request.url).origin}/account?next=${encodeURIComponent(pathname)}`, 302);
+    const row = await runRow(env, receiptArtifact[1], account.id);
+    return row ? artifactResponse(env, account.id, row, receiptArtifact[2])
+      : new Response('Run not found', { status: 404 });
+  }
   if (runId && request.method === 'GET') {
     if (!account) return Response.redirect(`${new URL(request.url).origin}/account?next=${encodeURIComponent(pathname)}`, 302);
     const row = await runRow(env, runId, account.id);

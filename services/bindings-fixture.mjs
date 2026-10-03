@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export function bindings() {
   const sqlite = new DatabaseSync(':memory:');
-  for (const file of ['0001_inbound.sql', '0002_devices_and_leases.sql', '0003_outbound_and_reactions.sql', '0004_accounts_and_pairing.sql', '0005_test_wallet.sql', '0006_test_email_charges.sql']) {
+  for (const file of ['0001_inbound.sql', '0002_devices_and_leases.sql', '0003_outbound_and_reactions.sql', '0004_accounts_and_pairing.sql', '0005_test_wallet.sql', '0006_test_email_charges.sql', '0007_run_artifacts.sql']) {
     sqlite.exec(fs.readFileSync(new URL(`./migrations/${file}`, import.meta.url), 'utf8'));
   }
   sqlite.prepare('INSERT INTO accounts (id, google_sub, owner_email, agent_email) VALUES (?, ?, ?, ?)')
@@ -35,6 +35,7 @@ export function bindings() {
     DB: db, MAIL: {
       put: async (key, value) => objects.set(key, Buffer.from(value)),
       get: async (key) => objects.has(key) ? { arrayBuffer: async () => Uint8Array.from(objects.get(key)).buffer } : null,
+      delete: async (key) => { objects.delete(key); },
     },
     RESEND_API_KEY: 're_test', RESEND_WEBHOOK_SECRET: 'whsec_test',
   };

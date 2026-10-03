@@ -114,8 +114,14 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
     '<receipt@gmail.com>', identity.email, 'inbound/receipt.eml');
   sqlite.prepare(`INSERT INTO jobs (id, thread_id, message_id, state, result_key)
     VALUES (?, ?, ?, 'completed', ?)`).run(runId, 'receipt-thread', 'receipt-message', 'results/receipt.json');
+  const artifactId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  sqlite.prepare(`INSERT INTO run_artifacts
+    (id, account_id, job_id, lease_id, object_key, name, mime_type, byte_size)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(artifactId, accountId, runId,
+    'receipt-lease', 'artifacts/receipt.bin', 'review <draft>.txt', 'text/plain', 4);
+  await env.MAIL.put('artifacts/receipt.bin', 'memo');
   await env.MAIL.put('results/receipt.json', JSON.stringify({ state: 'completed', summary: 'Checked <safely>',
-    details: ['Found one item.'], checks: ['No external action.'],
+    details: ['Found one item.'], checks: ['No external action.'], artifactIds: [artifactId],
     transcript: { version: 1, truncated: false, events: [
       { kind: 'request', text: 'Find <private> items' }, { kind: 'tool', text: 'Read completed.' },
       { kind: 'assistant', text: 'Found one item.' }] },
@@ -132,6 +138,8 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.match(html, /302 input tokens/);
   assert.match(html, /\$0\.010528/);
   assert.match(html, /not a TagMails charge/);
+  assert.match(html, /review &lt;draft&gt;\.txt/);
+  assert.doesNotMatch(html, /review <draft>\.txt/);
   assert.equal(receipt.headers.get('cache-control'), 'no-store');
   const siteRequest = (credential = 'test', origin = env.SITE_ORIGIN) => new Request(`https://relay.test/api/runs/${runId}`, {
     headers: { Authorization: `Bearer ${credential}`, Origin: origin },
@@ -140,7 +148,12 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   const siteRun = await handleAccountRequest(siteRequest(), env, options);
   assert.equal(siteRun.headers.get('access-control-allow-origin'), env.SITE_ORIGIN);
   assert.equal(siteRun.headers.get('cache-control'), 'no-store');
-  assert.equal((await siteRun.json()).result.transcript.events[0].text, 'Find <private> items');
+  const siteResult = await siteRun.json();
+  assert.equal(siteResult.result.transcript.events[0].text, 'Find <private> items');
+  assert.equal(siteResult.artifacts[0].name, 'review <draft>.txt');
+  const receiptFile = await handleAccountRequest(request(`/runs/${runId}/artifacts/${artifactId}`, 'GET', undefined, cookie), env, options);
+  assert.equal(await receiptFile.text(), 'memo');
+  assert.equal(receiptFile.headers.get('content-type'), 'application/octet-stream');
   assert.equal((await handleAccountRequest(siteRequest('test', 'https://attacker.test'), env, options))
     .headers.get('access-control-allow-origin'), null);
   const preflight = await handleAccountRequest(new Request(`https://relay.test/api/runs/${runId}`, {
@@ -155,6 +168,7 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   });
   const otherCookie = other.headers.get('set-cookie').split(';')[0];
   assert.equal((await handleAccountRequest(request(`/runs/${runId}`, 'GET', undefined, otherCookie), env, options)).status, 404);
+  assert.equal((await handleAccountRequest(request(`/runs/${runId}/artifacts/${artifactId}`, 'GET', undefined, otherCookie), env, options)).status, 404);
   assert.equal((await handleAccountRequest(siteRequest(), env, {
     verifyIdentity: async () => ({ sub: 'google-sub-1', email: 'owner@gmail.com' }),
   })).status, 404);
