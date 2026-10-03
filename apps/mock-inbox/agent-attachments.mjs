@@ -39,10 +39,10 @@ async function attachmentBytes(attachment) {
   return Buffer.concat(chunks);
 }
 
-export async function stageAgentAttachments(attachments = []) {
+export async function stageAgentAttachments(attachments = [], baseDirectory = os.tmpdir()) {
   if (!Array.isArray(attachments) || attachments.length > MAX_ATTACHMENTS) throw new Error('Too many attachments');
   if (!attachments.length) return { directory: null, prompt: '', cleanup: async () => {} };
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tagmails-attachment-'));
+  const directory = await fs.mkdtemp(path.join(baseDirectory, 'tagmails-attachment-'));
   const cleanup = () => fs.rm(directory, { recursive: true, force: true });
   try {
     let total = 0;

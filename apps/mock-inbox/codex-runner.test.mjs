@@ -14,43 +14,79 @@ function claim(jobId, threadId, body = 'Summarize this workspace.') {
   };
 }
 
-test('Codex read-only adapter resumes a thread and reuses a completed job result', async (t) => {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'tagmails-runner-test-'));
-  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
-  const fakeBin = path.join(workspace, 'fake-codex');
-  const fakeSource = `#!/usr/bin/env node
+function setup(t, mode = 'normal') {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tagmails-codex-test-'));
+  const workspace = path.join(root, 'workspace');
+  const home = path.join(root, 'codex-home');
+  const auth = path.join(root, 'auth.json');
+  const calls = path.join(root, 'calls.jsonl');
+  const fakeBin = path.join(root, 'fake-codex');
+  fs.mkdirSync(workspace);
+  fs.writeFileSync(auth, '{"fake":true}\n', { mode: 0o600 });
+  fs.writeFileSync(fakeBin, `#!/usr/bin/env node
 const fs = require('node:fs');
-const path = require('node:path');
-const args = process.argv.slice(2);
-let prompt = '';
-process.stdin.on('data', (chunk) => { prompt += chunk; });
-process.stdin.on('end', () => {
-  const resumed = args.includes('resume');
-  const output = args[args.indexOf('-o') + 1];
-  const id = '11111111-1111-4111-8111-111111111111';
-  const attachmentLine = prompt.split(String.fromCharCode(10)).find(line => line.startsWith('1. /'));
-  const attachment = attachmentLine?.split(' (')[0].slice(3);
-  const attachmentText = attachment ? fs.readFileSync(attachment, 'utf8') : null;
-  fs.appendFileSync(path.join(process.cwd(), 'calls.jsonl'), JSON.stringify({ args, prompt, attachment, attachmentText, hadApiKey: Boolean(process.env.OPENAI_API_KEY) }) + '\\n');
-  fs.writeFileSync(output, resumed ? 'First turn plus second turn.' : 'First turn.');
-  process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: id }) + '\\n');
-  process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1200,
-    cached_input_tokens: 300, cache_write_input_tokens: 0, output_tokens: 40, reasoning_output_tokens: 12 } }) + '\\n');
+const readline = require('node:readline');
+const log = ${JSON.stringify(calls)};
+const mode = ${JSON.stringify(mode)};
+const id = '11111111-1111-4111-8111-111111111111';
+let resumed = false;
+function send(value) { process.stdout.write(JSON.stringify(value) + '\\n'); }
+readline.createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') send({ id: message.id, result: {} });
+  if (message.method === 'config/read') send({ id: message.id, result: {
+    config: { web_search: 'disabled', sandbox_mode: null, mcp_servers: mode === 'external-tool' ? { rogue: {} } : {} },
+    layers: [{ name: { type: 'project' }, disabledReason: mode === 'trusted-project' ? null : 'untrusted' }],
+  } });
+  if (message.method === 'thread/start' || message.method === 'thread/resume') {
+    resumed = message.method === 'thread/resume';
+    fs.appendFileSync(log, JSON.stringify({ method: message.method, params: message.params,
+      codexHome: process.env.CODEX_HOME, hadApiKey: Boolean(process.env.OPENAI_API_KEY) }) + '\\n');
+    send({ id: message.id, result: { thread: { id }, activePermissionProfile: {
+      id: mode === 'wrong-profile' ? ':danger-full-access' : 'tagmails-read' } } });
+  }
+  if (message.method === 'turn/start') {
+    const prompt = message.params.input[0].text;
+    const attachmentLine = prompt.split(String.fromCharCode(10)).find(line => line.startsWith('1. /'));
+    const attachment = attachmentLine?.split(' (')[0].slice(3);
+    const attachmentText = attachment ? fs.readFileSync(attachment, 'utf8') : null;
+    fs.appendFileSync(log, JSON.stringify({ method: message.method, params: message.params,
+      attachment, attachmentText }) + '\\n');
+    send({ id: message.id, result: { turn: { id: 'turn-1', status: 'inProgress' } } });
+    setTimeout(() => {
+      send({ method: 'thread/tokenUsage/updated', params: { tokenUsage: { last: {
+        inputTokens: 1200, cachedInputTokens: 300, cacheWriteInputTokens: 0,
+        outputTokens: 40, reasoningOutputTokens: 12 } } } });
+      send({ method: 'item/completed', params: { item: { type: 'agentMessage', phase: 'final_answer',
+        text: resumed ? 'First turn plus second turn.' : 'First turn.' } } });
+      send({ method: 'turn/completed', params: { turn: { status: 'completed' } } });
+    }, mode === 'slow' ? 160 : 0);
+  }
 });
-`;
-  fs.writeFileSync(fakeBin, fakeSource, { mode: 0o755 });
-  const previous = Object.fromEntries(['TAGMAILS_WORKSPACE', 'TAGMAILS_SESSION_FILE', 'TAGMAILS_CODEX_BIN', 'OPENAI_API_KEY'].map((key) => [key, process.env[key]]));
-  process.env.TAGMAILS_WORKSPACE = workspace;
-  process.env.TAGMAILS_SESSION_FILE = path.join(workspace, 'sessions.json');
-  process.env.TAGMAILS_CODEX_BIN = fakeBin;
-  process.env.OPENAI_API_KEY = 'FAKE_TEST_KEY';
+`, { mode: 0o755 });
+  const keys = ['TAGMAILS_WORKSPACE', 'TAGMAILS_SESSION_FILE', 'TAGMAILS_CODEX_BIN',
+    'TAGMAILS_CODEX_AUTH_FILE', 'TAGMAILS_CODEX_RUNTIME_HOME', 'OPENAI_API_KEY'];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  Object.assign(process.env, {
+    TAGMAILS_WORKSPACE: workspace,
+    TAGMAILS_SESSION_FILE: path.join(root, 'sessions.json'),
+    TAGMAILS_CODEX_BIN: fakeBin,
+    TAGMAILS_CODEX_AUTH_FILE: auth,
+    TAGMAILS_CODEX_RUNTIME_HOME: home,
+    OPENAI_API_KEY: 'FAKE_TEST_KEY',
+  });
   t.after(() => {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+    fs.rmSync(root, { recursive: true, force: true });
   });
+  return { root, workspace, home, auth, calls };
+}
 
+test('Codex app-server resumes the restricted thread, reads an attachment, and caches results', async (t) => {
+  const { root, workspace, home, auth, calls } = setup(t);
   const attached = claim('job-1', 'thread-1');
   attached.request.attachments = [{ name: 'note.txt', mimeType: 'text/plain', size: 16,
     data: Buffer.from('Agent test note.').toString('base64') }];
@@ -61,61 +97,70 @@ process.stdin.on('end', () => {
     cacheCreationInputTokens: 0, outputTokens: 40, reasoningOutputTokens: 12 });
   assert.deepEqual(await runClaim(claim('job-1', 'thread-1')), first);
   const second = await runClaim(claim('job-2', 'thread-1', 'Continue the summary.'));
-  assert.equal(second.state, 'completed');
   assert.match(second.summary, /second turn/);
 
-  const calls = fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.equal(calls.length, 2);
-  assert.ok(calls[0].args.includes('read-only'));
-  assert.ok(calls[0].args.includes(workspace));
-  assert.equal(calls[0].attachmentText, 'Agent test note.');
-  assert.equal(fs.existsSync(calls[0].attachment), false);
-  assert.ok(calls[1].args.includes('resume'));
-  assert.ok(calls[1].args.includes('sandbox_mode="read-only"'));
-  assert.ok(calls[1].args.includes('11111111-1111-4111-8111-111111111111'));
-  assert.ok(calls[1].prompt.includes('Continue the summary.'));
-  assert.equal(calls[0].hadApiKey, false);
-  const store = JSON.parse(fs.readFileSync(path.join(workspace, 'sessions.json'), 'utf8'));
+  const events = fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(events.length, 4);
+  assert.equal(events[0].params.permissions, 'tagmails-read');
+  assert.equal(events[0].hadApiKey, false);
+  assert.equal(events[0].codexHome, fs.realpathSync(home));
+  assert.equal(events[1].params.cwd, fs.realpathSync(workspace));
+  assert.equal(events[1].params.sandboxPolicy, undefined);
+  assert.equal(events[1].attachmentText, 'Agent test note.');
+  assert.equal(events[1].attachment.startsWith(fs.realpathSync(workspace)), true);
+  assert.equal(fs.existsSync(events[1].attachment), false);
+  assert.equal(events[2].method, 'thread/resume');
+  assert.equal(events[2].params.threadId, '11111111-1111-4111-8111-111111111111');
+  assert.equal(events[2].params.permissions, 'tagmails-read');
+  assert.ok(events[3].params.input[0].text.includes('Continue the summary.'));
+  assert.equal(fs.realpathSync(path.join(home, 'auth.json')), fs.realpathSync(auth));
+  assert.match(fs.readFileSync(path.join(home, 'config.toml'), 'utf8'), /":root" = "deny"/);
+  const store = JSON.parse(fs.readFileSync(path.join(root, 'sessions.json'), 'utf8'));
   assert.equal(store.threads['thread-1'].sessionId, '11111111-1111-4111-8111-111111111111');
   assert.equal(Object.keys(store.jobs).length, 2);
 });
 
-test('a longer Codex turn renews its lab claim before completion', async (t) => {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'tagmails-lease-test-'));
-  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
-  const fakeBin = path.join(workspace, 'fake-codex');
-  fs.writeFileSync(fakeBin, `#!/usr/bin/env node
-const fs = require('node:fs');
-const args = process.argv.slice(2);
-process.stdin.resume();
-process.stdin.on('end', () => setTimeout(() => {
-  fs.writeFileSync(args[args.indexOf('-o') + 1], 'Slow turn completed.');
-  process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: '22222222-2222-4222-8222-222222222222' }) + '\\n');
-  process.stdout.write(JSON.stringify({ type: 'turn.completed' }) + '\\n');
-}, 160));
-`, { mode: 0o755 });
+test('Codex adapter refuses to run a turn when the restricted profile is not active', async (t) => {
+  const { calls } = setup(t, 'wrong-profile');
+  await assert.rejects(runClaim(claim('job-1', 'thread-1')), /restricted read profile/);
+  const events = fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(events.length, 1);
+});
+
+test('Codex adapter rejects active project settings before starting a thread', async (t) => {
+  setup(t, 'trusted-project');
+  await assert.rejects(runClaim(claim('job-1', 'thread-1')), /active project settings/);
+});
+
+test('Codex adapter rejects external tools before starting a thread', async (t) => {
+  setup(t, 'external-tool');
+  await assert.rejects(runClaim(claim('job-1', 'thread-1')), /external tools/);
+});
+
+test('Codex adapter keeps the session store outside the readable workspace', async (t) => {
+  const { workspace } = setup(t);
+  process.env.TAGMAILS_SESSION_FILE = path.join(workspace, 'sessions.json');
+  await assert.rejects(runClaim(claim('job-1', 'thread-1')), /session store must be outside/);
+});
+
+test('a longer Codex app-server turn renews its lab claim', async (t) => {
+  setup(t, 'slow');
   let renewals = 0;
   const server = http.createServer((request, response) => {
-    if (request.url === '/api/renew') renewals += 1;
+    if (request.url === '/api/renew') renewals++;
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end('{"renewed":true}');
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => server.close());
-  const keys = ['TAGMAILS_WORKSPACE', 'TAGMAILS_SESSION_FILE', 'TAGMAILS_CODEX_BIN', 'TAGMAILS_LAB_URL', 'TAGMAILS_CLAIM_RENEW_MS'];
-  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
-  Object.assign(process.env, {
-    TAGMAILS_WORKSPACE: workspace,
-    TAGMAILS_SESSION_FILE: path.join(workspace, 'sessions.json'),
-    TAGMAILS_CODEX_BIN: fakeBin,
-    TAGMAILS_LAB_URL: `http://127.0.0.1:${server.address().port}`,
-    TAGMAILS_CLAIM_RENEW_MS: '20',
-  });
+  const previous = { url: process.env.TAGMAILS_LAB_URL, interval: process.env.TAGMAILS_CLAIM_RENEW_MS };
+  process.env.TAGMAILS_LAB_URL = `http://127.0.0.1:${server.address().port}`;
+  process.env.TAGMAILS_CLAIM_RENEW_MS = '20';
   t.after(() => {
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
+    if (previous.url === undefined) delete process.env.TAGMAILS_LAB_URL;
+    else process.env.TAGMAILS_LAB_URL = previous.url;
+    if (previous.interval === undefined) delete process.env.TAGMAILS_CLAIM_RENEW_MS;
+    else process.env.TAGMAILS_CLAIM_RENEW_MS = previous.interval;
   });
   assert.equal((await runClaim(claim('job-slow', 'thread-slow'))).state, 'completed');
   assert.ok(renewals >= 1);

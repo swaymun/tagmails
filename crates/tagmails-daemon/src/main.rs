@@ -262,7 +262,7 @@ fn relay_result(claim: &Value, base: &str) -> Result<Value, Box<dyn Error>> {
         Ok(result) => result,
         Err(error) => {
             eprintln!("Local agent adapter failed: {error}");
-            json!({"runtime":format!("{}-cli-readonly", runtime.split('-').next().unwrap_or("agent")),"state":"failed","summary":"The local agent adapter could not complete this turn."})
+            json!({"runtime":if runtime == "codex-readonly" { "codex-app-server-readonly" } else { "claude-cli-readonly" },"state":"failed","summary":"The local agent adapter could not complete this turn."})
         }
     })
 }
@@ -432,7 +432,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         Ok(result) => result,
                         Err(error) => {
                             eprintln!("Local agent adapter failed: {error}");
-                            json!({"runtime":format!("{}-cli-readonly", runtime.split('-').next().unwrap_or("agent")),"state":"failed","summary":"The local agent adapter could not complete this turn."})
+                            json!({"runtime":if runtime == "codex-readonly" { "codex-app-server-readonly" } else { "claude-cli-readonly" },"state":"failed","summary":"The local agent adapter could not complete this turn."})
                         }
                     }
                 } else {

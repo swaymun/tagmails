@@ -295,10 +295,10 @@ test('a renewed claim stays assigned and a real Codex result is labeled honestly
   assert.equal(lab.renewClaim(claim.jobId, claim.claimId).renewed, true);
   assert.equal(lab.claimNext().claimed, false);
   assert.equal(lab.completeClaim(claim.jobId, claim.claimId, {
-    runtime: 'codex-cli-readonly', state: 'completed', summary: 'Codex read the selected workspace.',
+    runtime: 'codex-app-server-readonly', state: 'completed', summary: 'Codex read the selected workspace.',
   }).state, 'completed');
-  assert.equal(lab.state.jobs[0].runtime, 'codex-cli-readonly');
-  assert.match(lab.state.threads[0].messages.at(-1).text, /Codex CLI completed locally in read-only mode/);
+  assert.equal(lab.state.jobs[0].runtime, 'codex-app-server-readonly');
+  assert.match(lab.state.threads[0].messages.at(-1).text, /Codex completed locally in read-only mode/);
   assert.throws(() => lab.renewClaim(claim.jobId, claim.claimId), /expired or been replaced/);
 });
 
@@ -310,7 +310,7 @@ test('a real Claude result keeps its runtime label in the email thread', (t) => 
     runtime: 'claude-cli-readonly', state: 'completed', summary: 'Claude read the note.',
   }).state, 'completed');
   assert.equal(lab.state.jobs[0].runtime, 'claude-cli-readonly');
-  assert.match(lab.state.threads[0].messages.at(-1).text, /Claude CLI completed locally in read-only mode/);
+  assert.match(lab.state.threads[0].messages.at(-1).text, /Claude completed locally in read-only mode/);
 });
 
 test('the real-run worker can claim only the selected queued job', (t) => {
