@@ -202,7 +202,7 @@ function restrictedConfiguration(value) {
 
 async function runCodex(claim, workspace, home, sessionId, staged, write) {
   const profile = write ? WRITE_PROFILE : PROFILE;
-  const child = spawn(process.env.TAGMAILS_CODEX_BIN || 'codex', ['app-server'], {
+  const child = spawn(process.env.TAGMAILS_CODEX_BIN || 'codex', ['app-server', '-c', 'model_reasoning_summary="auto"'], {
     cwd: workspace, env: codexEnvironment(home), stdio: ['pipe', 'pipe', 'pipe'],
   });
   child.stdin.on('error', () => {});
@@ -281,6 +281,21 @@ async function runCodex(claim, workspace, home, sessionId, staged, write) {
       capabilities: { experimentalApi: true } });
     send({ method: 'initialized', params: {} });
     restrictedConfiguration(await request('config/read', { cwd: workspace, includeLayers: true }));
+    const catalog = await request('model/list', { includeHidden: false, limit: 100 });
+    const available = catalog?.data?.find((model) => model?.id === claim.model.id);
+    // model/list can be a bundled catalog, not a proof of entitlement. A
+    // default medium/standard turn may still succeed with a newer model ID.
+    const speed = claim.model.speed || 'standard';
+    if (!available && (claim.model.effort !== 'medium' || speed !== 'standard')) return {
+      result: { ...fail(`${claim.model.id} is not listed by this Mac's Codex app-server, so its requested effort or speed cannot be verified.`, write),
+        state: 'needs_clarification', transcript } };
+    const efforts = available?.supportedReasoningEfforts?.map((item) => item.reasoningEffort) ?? [];
+    if (available && !efforts.includes(claim.model.effort)) return { result: { ...fail(`${claim.model.id} does not offer ${claim.model.effort} reasoning on this Mac.`, write),
+      state: 'needs_clarification', transcript } };
+    const tier = speed === 'standard' ? 'default' : available?.serviceTiers?.find((item) =>
+      item.id === speed || item.name?.toLowerCase().replace(/[\s-]+/g, '') === speed)?.id;
+    if (!tier) return { result: { ...fail(`${claim.model.id} does not offer ${speed} speed on this Mac.`, write),
+      state: 'needs_clarification', transcript } };
     const started = sessionId
       ? await request('thread/resume', { threadId: sessionId, cwd: workspace, model: claim.model.id,
         approvalPolicy: 'on-request', permissions: profile })
@@ -291,6 +306,7 @@ async function runCodex(claim, workspace, home, sessionId, staged, write) {
       throw new Error(`Codex did not activate the ${profile} profile`);
     }
     const startedTurn = await request('turn/start', { threadId, cwd: workspace, model: claim.model.id, effort: claim.model.effort,
+      serviceTierForTurn: tier,
       approvalPolicy: 'on-request', input: [{ type: 'text', text: promptFor(claim, staged.prompt, write) }] });
     const status = await turnDone;
     if (leaseLost) return { result: { ...fail('The local claim lease was lost while Codex was running.', write), transcript } };
@@ -344,7 +360,8 @@ async function runCodex(claim, workspace, home, sessionId, staged, write) {
 export async function runClaim(claim, { write = false } = {}) {
   if (!claim?.claimed || !/^[a-z0-9-]+$/.test(claim.jobId || '') || !/^[a-z0-9-]+$/.test(claim.threadId || '')) throw new Error('Invalid local claim');
   if (claim.model?.error) return { state: 'needs_clarification', summary: claim.model.error, runtime: runtimeFor(write) };
-  if (!MODELS.has(claim.model?.id) || !['low', 'medium'].includes(claim.model?.effort)) return fail('This prototype can run Codex Luna or Sol only.', write);
+  if (!MODELS.has(claim.model?.id) || typeof claim.model?.effort !== 'string' ||
+      !['standard', 'fast', 'ultrafast'].includes(claim.model?.speed || 'standard')) return fail('This prototype can run Codex Luna or Sol only.', write);
   const selected = process.env.TAGMAILS_WORKSPACE;
   if (!selected || !path.isAbsolute(selected) || !(await fs.stat(selected)).isDirectory()) throw new Error('Select an absolute TAGMAILS_WORKSPACE directory');
   const workspace = await fs.realpath(selected);

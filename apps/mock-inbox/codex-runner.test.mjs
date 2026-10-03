@@ -40,6 +40,12 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     config: { web_search: 'disabled', sandbox_mode: null, mcp_servers: mode === 'external-tool' ? { rogue: {} } : {} },
     layers: [{ name: { type: 'project' }, disabledReason: mode === 'trusted-project' ? null : 'untrusted' }],
   } });
+  if (message.method === 'model/list') send({ id: message.id, result: { data: [
+    { id: 'gpt-6-luna', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'].map(reasoningEffort => ({ reasoningEffort })),
+      serviceTiers: [{ id: 'priority', name: 'Fast' }] },
+    { id: 'gpt-6.1-sol', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map(reasoningEffort => ({ reasoningEffort })),
+      serviceTiers: [{ id: 'priority', name: 'Fast' }] },
+  ] } });
   if (message.method === 'account/read') send({ id: message.id, result: {
     account: { type: 'chatgpt', email: mode === 'account-mismatch' ? 'another@gmail.com' : 'owner@gmail.com', planType: 'pro' },
   } });
@@ -61,7 +67,9 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       : resumed ? 'First turn plus second turn.' : 'First turn.';
     const entries = [
       { turnId, item: { id: 'user-1', type: 'userMessage', content: [{ type: 'text', text: 'SECRET_PROMPT' }] } },
-      { turnId, item: { id: 'reason-1', type: 'reasoning', summary: 'SECRET_REASONING' } },
+      { turnId, item: { id: 'reason-1', type: 'reasoning',
+        summary: mode === 'reasoning-summary' ? ['Checked available files.'] : 'SECRET_REASONING',
+        content: ['SECRET_PRIVATE_REASONING'] } },
       { turnId, item: { id: 'command-1', type: 'commandExecution', command: 'cat secret.txt',
         aggregatedOutput: 'SECRET_FILE', status: 'completed', exitCode: 0 } },
       { turnId, item: { id: 'message-1', type: 'agentMessage', phase: 'commentary', text: 'Checking the workspace.' } },
@@ -101,7 +109,9 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       send({ method: 'thread/tokenUsage/updated', params: { tokenUsage: { last: {
         inputTokens: 1200, cachedInputTokens: 300, cacheWriteInputTokens: 0,
         outputTokens: 40, reasoningOutputTokens: 12 } } } });
-      send({ method: 'item/completed', params: { item: { type: 'reasoning', summary: 'SECRET_REASONING' } } });
+      send({ method: 'item/completed', params: { item: { type: 'reasoning',
+        summary: mode === 'reasoning-summary' ? ['Checked available files.'] : 'SECRET_REASONING',
+        content: ['SECRET_PRIVATE_REASONING'] } } });
       send({ method: 'item/completed', params: { item: { type: 'commandExecution', command: 'cat secret.txt',
         aggregatedOutput: 'SECRET_FILE', status: 'completed', exitCode: 0 } } });
       if (mode !== 'history-paged') send({ method: 'item/completed', params: { item: { type: 'agentMessage',
@@ -186,6 +196,29 @@ test('a different Codex account does not disclose its allowance to the Gmail own
   const result = await runClaim(ownerClaim);
   assert.equal(result.state, 'completed');
   assert.equal(result.codexAllowance, undefined);
+});
+
+test('Codex passes advertised effort and fast tier and records reasoning summaries', async (t) => {
+  const { calls } = setup(t, 'reasoning-summary');
+  const job = claim('job-fast', 'thread-fast');
+  job.model = { id: 'gpt-6-luna', effort: 'medium', speed: 'fast' };
+  const result = await runClaim(job);
+  assert.equal(result.state, 'completed');
+  assert.deepEqual(result.transcript.events[1], { kind: 'reasoning', text: 'Checked available files.' });
+  assert.doesNotMatch(JSON.stringify(result.transcript), /SECRET_PRIVATE_REASONING/);
+  const turn = fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse).find((item) => item.method === 'turn/start');
+  assert.equal(turn.params.effort, 'medium');
+  assert.equal(turn.params.serviceTierForTurn, 'priority');
+});
+
+test('Codex rejects a speed tier missing from its live model catalog', async (t) => {
+  const { calls } = setup(t);
+  const job = claim('job-ultrafast', 'thread-ultrafast');
+  job.model.speed = 'ultrafast';
+  const result = await runClaim(job);
+  assert.equal(result.state, 'needs_clarification');
+  assert.match(result.summary, /does not offer ultrafast speed/);
+  assert.equal(fs.existsSync(calls), false);
 });
 
 test('Codex adapter accepts an unphased legacy answer as the final response', async (t) => {

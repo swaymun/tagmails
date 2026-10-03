@@ -95,6 +95,10 @@ async function signIn(request, env, verifyIdentity) {
     const body = await bodyJson(request);
     identity = await verifyIdentity(body.credential, env.GOOGLE_CLIENT_ID);
   } catch { return json({ error: 'Google sign-in failed' }, 401, headers); }
+  if (env.PUBLIC_SIGNUP_ENABLED !== 'true' &&
+      identity.email !== String(env.PILOT_OWNER_EMAIL ?? '').trim().toLowerCase()) {
+    return json({ error: 'TagMails signup is closed during the private pilot' }, 403, headers);
+  }
   const existing = await env.DB.prepare('SELECT id, active FROM accounts WHERE google_sub = ?')
     .bind(identity.sub).first();
   if (existing && !existing.active) return json({ error: 'Account is inactive' }, 403, headers);
@@ -349,7 +353,7 @@ function visibleTranscript(value) {
   if (value?.version !== 1 || !Array.isArray(value.events)) return null;
   return { version: 1, truncated: value.truncated === true,
     events: value.events.slice(0, 48).flatMap((event) =>
-      event && ['request', 'assistant', 'tool'].includes(event.kind) && typeof event.text === 'string'
+      event && ['request', 'assistant', 'tool', 'reasoning'].includes(event.kind) && typeof event.text === 'string'
         ? [{ kind: event.kind,
           ...(event.kind === 'assistant' && ['commentary', 'final_answer'].includes(event.phase)
             ? { phase: event.phase } : {}),

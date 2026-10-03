@@ -1,0 +1,9 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { selectedModelDetail } from './model-route.mjs';
+
+test('the receipt distinguishes a requested Fast tier from measured speed', () => {
+  assert.equal(selectedModelDetail(JSON.stringify({ id: 'gpt-6-luna', effort: 'medium',
+    speed: 'fast', source: 'classified' })),
+  'Selected model: Codex GPT-6 Luna (medium; fast tier requested; requested in this email).');
+});

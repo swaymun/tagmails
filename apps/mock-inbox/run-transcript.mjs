@@ -26,7 +26,7 @@ export function runTranscript(request) {
 }
 
 export function addRunEvent(transcript, kind, value) {
-  if (!['request', 'assistant', 'tool'].includes(kind)) return;
+  if (!['request', 'assistant', 'tool', 'reasoning'].includes(kind)) return;
   if (typeof value !== 'string' || !value.trim()) return;
   if (transcript.events.length >= MAX_EVENTS - 1) { transcript.truncated = true; return; }
   const item = kind === 'assistant' ? { kind, phase: 'commentary' } : { kind };
@@ -60,11 +60,15 @@ export function finishRunTranscript(transcript, answer) {
   return transcript;
 }
 
-// Project only completed, user-visible items. Raw arguments, outputs, prompts,
-// and reasoning can contain credentials or private file contents.
+// Project only completed, user-visible items. A reasoning item can contain
+// private content; only its distinct summary field is safe to show here.
 export function codexRunEvent(message) {
   if (message?.method !== 'item/completed') return null;
   const item = message.params?.item;
+  if (item?.type === 'reasoning' && Array.isArray(item.summary)) {
+    const summary = item.summary.filter((part) => typeof part === 'string' && part.trim()).join('\n');
+    return summary ? { kind: 'reasoning', text: summary } : null;
+  }
   if (item?.type === 'agentMessage') return item.phase === 'commentary' || item.phase == null
     ? { kind: 'assistant', text: item.text } : null;
   if (item?.type === 'commandExecution') {

@@ -238,7 +238,7 @@ test('owner and invited guest continue one MIME thread across turns, restart, an
     body: 'Model: Luna\nCombine the outline and risks.',
   }));
   assert.equal(followup.threadId, first.threadId);
-  assert.deepEqual(resumed.state.jobs[2].model, { id: 'gpt-6-luna', effort: 'low', source: 'explicit' });
+  assert.deepEqual(resumed.state.jobs[2].model, { id: 'gpt-6-luna', effort: 'medium', source: 'explicit' });
   assert.equal(resumed.processNext().state, 'completed');
   const thirdAgent = shared.messages.at(-1);
   assert.equal(thirdAgent.to, 'owner@gmail.com');

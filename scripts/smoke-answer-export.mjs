@@ -68,7 +68,8 @@ try {
   assert.equal(sqlite.prepare('SELECT state FROM outbox').get().state, 'queued');
   console.log(JSON.stringify({ jobId: job.id, state: job.state, artifactName: file.name,
     artifactBytes: file.byte_size, artifactSha256: createHash('sha256').update(text).digest('hex'),
-    replyQueued: true, toolSteps: result.transcript.events.filter((event) => event.kind === 'tool').length }));
+    replyQueued: true, toolSteps: result.transcript.events.filter((event) => event.kind === 'tool').length,
+    reasoningSummaries: result.transcript.events.filter((event) => event.kind === 'reasoning').length }));
 } finally {
   await new Promise((resolve) => server.close(resolve));
   fs.rmSync(root, { recursive: true, force: true });

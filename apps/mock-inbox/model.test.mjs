@@ -6,7 +6,7 @@ test('only the leading directive block selects a model', () => {
   assert.deepEqual(chooseModel('Model: Claude\nReview this.'),
     { id: 'claude-sonnet-5-5', effort: 'medium', source: 'explicit' });
   assert.deepEqual(chooseModel('TagMails-File: report.txt\nModel: Luna\nCreate the report.'),
-    { id: 'gpt-6-luna', effort: 'low', source: 'explicit' });
+    { id: 'gpt-6-luna', effort: 'medium', source: 'explicit' });
   assert.deepEqual(chooseModel('Model: Claude Sonnet 5.5 medium\n\nContinue the thread.'),
     { id: 'claude-sonnet-5-5', effort: 'medium', source: 'explicit' });
   assert.deepEqual(chooseModel('Model: Codex 6.1 Sol medium\n\nContinue the thread.'),
@@ -15,6 +15,5 @@ test('only the leading directive block selects a model', () => {
     { id: 'claude-sonnet-5-5', effort: 'medium', source: 'default' });
   assert.deepEqual(chooseModel('> Model: Luna\n> Old request', 'claude-sonnet-5-5'),
     { id: 'claude-sonnet-5-5', effort: 'medium', source: 'default' });
-  assert.equal(chooseModel('Model:\nReview this.').error,
-    'Choose Codex, Claude, or Luna after Model:.');
+  assert.match(chooseModel('Model:\nReview this.').error, /omit the model to use your default/);
 });

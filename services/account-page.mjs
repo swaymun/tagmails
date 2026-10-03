@@ -244,9 +244,9 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 </script></head><body><main>
 <p class="eyebrow">tagmails. / account</p><h1>Your agent address.</h1>
-<p class="muted">Sign in with a personal Gmail account, then pair your Mac. Google sign-in does not grant mailbox access.</p>
+<p class="muted">Private owner-only pilot. Sign in with the configured Gmail account, then pair your Mac. Google sign-in does not grant mailbox access. Development mail is visible in the Resend team dashboard.</p>
 <p id="status" role="status" aria-live="polite"></p>
-<section id="signedOut" class="card" hidden><h2>Sign in</h2><p>Use the Gmail address you will send tasks from.</p><div id="googleButton"></div></section>
+<section id="signedOut" class="card" hidden><h2>Sign in</h2><p>Use the owner Gmail address for this private pilot. Customer signup is closed.</p><div id="googleButton"></div></section>
 <div id="signedIn" hidden>
   <section class="card"><h2>Account</h2><p>Verified sender<br><span id="ownerEmail" class="address"></span></p>
     <p>Agent address<br><span id="agentEmail" class="address"></span></p><p id="delivery" class="muted"></p>
@@ -254,7 +254,7 @@ document.addEventListener('DOMContentLoaded', () => {
     <select id="defaultModel"><option value="gpt-6.1-sol">Codex · GPT-6.1 Sol · medium</option>
       <option value="claude-sonnet-5-5" disabled>Claude Code · on hold</option></select>
     <button id="saveDefaultModel" class="secondary">Save default model</button>
-    <p class="muted">No model line is required. Ask naturally, such as “use Luna for this,” to switch models on a new email or reply. For exact control, put <code>Model: Codex</code> or <code>Model: Luna</code> on its own line before the request. Claude subscription requests return a no-charge notice in this pilot.</p>
+    <p class="muted">No model line is required. Ask naturally, such as “use Luna Medium for this” or “use Codex Fast,” to choose a model, effort, or available speed. When effort is unclear, TagMails uses Medium. Unsupported runtime choices receive a no-charge notice. Claude subscription requests are paused in this pilot.</p>
     <button id="signOut" class="secondary">Sign out</button></section>
   <section class="card"><h2>Pair a Mac</h2><p>Create a one-time code, then run the setup command in your TagMails checkout. The device token stays in a file on your Mac.</p>
     <button id="pair">Create pairing code</button><p><code id="pairCode"></code></p><pre id="pairCommand"></pre>
@@ -324,9 +324,9 @@ ${run.selectedModel ? `<span><strong>Model route</strong>${escapeHtml(run.select
 <span><strong>Attempts</strong>${escapeHtml(run.attempts)}</span><span><strong>Provider send</strong>${escapeHtml(run.delivery_state ?? 'Not queued')}</span></div></section>
 ${run.artifacts?.length ? `<section class="card"><h2>Files</h2><ul>${run.artifacts.map((file) => `<li><a href="/runs/${escapeHtml(run.id)}/artifacts/${escapeHtml(file.id)}">${escapeHtml(file.name)}</a> (${escapeHtml((file.byte_size / 1_000_000).toFixed(1))} MB)</li>`).join('')}</ul><p class="muted">Files expire seven days after upload.</p></section>` : ''}
 <section class="card"><h2>Run transcript</h2>
-${transcript ? transcript.events.map((event) => `<div class="event ${event.kind === 'tool' ? 'tool' : ''}"><strong>${escapeHtml(event.kind === 'request' ? 'Email request' : event.kind === 'tool' ? 'Tool step' : event.phase === 'commentary' ? 'Agent update' : event.phase === 'final_answer' ? 'Agent answer' : 'Agent')}</strong><p>${escapeHtml(event.text)}</p></div>`).join('') : '<p class="muted">A transcript was not recorded for this run.</p>'}
+${transcript ? transcript.events.map((event) => `<div class="event ${event.kind === 'tool' ? 'tool' : ''}"><strong>${escapeHtml(event.kind === 'request' ? 'Email request' : event.kind === 'tool' ? 'Tool step' : event.kind === 'reasoning' ? 'Reasoning summary' : event.phase === 'commentary' ? 'Agent update' : event.phase === 'final_answer' ? 'Agent answer' : 'Agent')}</strong><p>${escapeHtml(event.text)}</p></div>`).join('') : '<p class="muted">A transcript was not recorded for this run.</p>'}
 ${transcript?.truncated ? '<p class="muted">Long content and later steps were shortened to fit this receipt.</p>' : ''}
-<p class="muted">Private reasoning, setup prompts, and raw tool output are excluded.</p></section>
+<p class="muted">Model-provided reasoning summaries may appear. Private reasoning, setup prompts, and raw tool output are excluded.</p></section>
 </main></body></html>`;
   return new Response(html, { headers: {
     'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',

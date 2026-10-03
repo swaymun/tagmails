@@ -47,6 +47,21 @@ test('Google ID tokens require a valid signature, client, and verified personal 
   }
 });
 
+test('the private pilot creates an address only for its configured owner', async () => {
+  const { env, sqlite } = bindings();
+  delete env.PUBLIC_SIGNUP_ENABLED;
+  env.PILOT_OWNER_EMAIL = 'owner@gmail.com';
+  env.GOOGLE_CLIENT_ID = clientId;
+  env.AGENT_DOMAIN = 'tagmails.test';
+  const signIn = (sub, email) => handleAccountRequest(
+    request('/api/auth/google', 'POST', { credential: 'test' }), env,
+    { verifyIdentity: async () => ({ sub, email }) });
+  assert.equal((await signIn('another-sub', 'another@gmail.com')).status, 403);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM accounts').get().count, 1);
+  assert.equal((await signIn('google-sub-1', 'owner@gmail.com')).status, 200);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM accounts').get().count, 1);
+});
+
 test('a Gmail owner signs in, pairs one device, revokes it, and signs out', async () => {
   const { env, sqlite } = bindings();
   env.GOOGLE_CLIENT_ID = clientId;
@@ -164,7 +179,9 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   await env.MAIL.put('results/receipt.json', JSON.stringify({ state: 'completed', summary: 'Checked <safely>',
     details: ['Found one item.'], checks: ['No external action.'], artifactIds: [artifactId],
     transcript: { version: 1, truncated: false, events: [
-      { kind: 'request', text: 'Find <private> items' }, { kind: 'tool', text: 'Read completed.' },
+      { kind: 'request', text: 'Find <private> items' },
+      { kind: 'reasoning', text: 'Checked the <files>.' },
+      { kind: 'tool', text: 'Read completed.' },
       { kind: 'assistant', text: 'Found one item.' }] },
     usage: { inputTokens: 302, cachedInputTokens: 100, cacheCreationInputTokens: 200,
       outputTokens: 30, reasoningOutputTokens: 4 }, reportedListCostUsd: 0.010528 }));
@@ -175,7 +192,10 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.doesNotMatch(html, /<safely>/);
   assert.match(html, /Private &lt;review&gt;/);
   assert.match(html, /Find &lt;private&gt; items/);
-  assert.match(html, /Selected model: Claude Code Sonnet 5\.5 \(medium; requested in this email\)/);
+  assert.match(html, /Reasoning summary/);
+  assert.match(html, /Checked the &lt;files&gt;\./);
+  assert.doesNotMatch(html, /Checked the <files>\./);
+  assert.match(html, /Selected model: Claude Code Sonnet 5\.5 \(medium; standard speed; requested in this email\)/);
   assert.match(html, /Email delivery needs review\. This reply will not be sent again automatically/);
   assert.doesNotMatch(html, /<private>/);
   assert.match(html, /302 input tokens/);
@@ -195,11 +215,12 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.equal(customRun.headers.get('access-control-allow-origin'), 'https://tagmails.com');
   assert.equal(siteRun.headers.get('cache-control'), 'no-store');
   const siteResult = await siteRun.json();
-  assert.equal(siteResult.selectedModel, 'Selected model: Claude Code Sonnet 5.5 (medium; requested in this email).');
+  assert.equal(siteResult.selectedModel, 'Selected model: Claude Code Sonnet 5.5 (medium; standard speed; requested in this email).');
   assert.equal(siteResult.threadId, 'receipt-thread');
   assert.equal(siteResult.deliveryState, 'uncertain');
   assert.deepEqual(siteResult.deliveryRecipients, []);
   assert.equal(siteResult.result.transcript.events[0].text, 'Find <private> items');
+  assert.deepEqual(siteResult.result.transcript.events[1], { kind: 'reasoning', text: 'Checked the <files>.' });
   assert.equal(siteResult.artifacts[0].name, 'review <draft>.txt');
   assert.deepEqual(siteResult.threadRuns.map((run) => run.id), [runId, laterRunId]);
   assert.equal(siteResult.threadRuns[1].state, 'queued');

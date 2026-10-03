@@ -3,8 +3,14 @@ import { chooseModel } from '../apps/mock-inbox/model.mjs';
 const ROUTES = {
   codex: { id: 'gpt-6.1-sol', effort: 'medium' },
   claude: { id: 'claude-sonnet-5-5', effort: 'medium' },
-  luna: { id: 'gpt-6-luna', effort: 'low' },
+  luna: { id: 'gpt-6-luna', effort: 'medium' },
 };
+const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+
+function confidentChoice(answer, threshold = 0.65) {
+  return answer?.type === 'choice' && Number.isFinite(answer.probabilities?.[answer.choice]) &&
+    answer.probabilities[answer.choice] >= threshold ? answer.choice : null;
+}
 
 function currentText(body) {
   const lines = [];
@@ -18,17 +24,19 @@ function currentText(body) {
 
 export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, priorModel, subject } = {}) {
   const direct = chooseModel(body, defaultModel);
-  if (direct.source === 'explicit') return direct;
-  const knownPrior = priorModel && Object.values(ROUTES).some(({ id, effort }) =>
-    priorModel.id === id && priorModel.effort === effort);
-  const fallback = direct.error ? direct : knownPrior
-    ? { id: priorModel.id, effort: priorModel.effort, source: 'thread' } : direct;
+  const knownPrior = priorModel && Object.values(ROUTES).some(({ id }) => priorModel.id === id) &&
+    EFFORTS.has(priorModel.effort);
+  // A malformed optional Model line is still an email request. Let Jev read
+  // its intent, then use the saved route if the classification is uncertain.
+  const fallback = direct.source === 'explicit' ? direct : knownPrior
+    ? { id: priorModel.id, effort: priorModel.effort, source: 'thread' }
+    : chooseModel('', defaultModel);
   const text = currentText(body);
   // A reply's subject may repeat an old model request. Only its new text can
   // change the thread's selected route.
   const subjectText = knownPrior ? '' : String(subject ?? '').replace(/[\r\n]+/g, ' ').slice(0, 300).trim();
   const state = subjectText ? `Subject: ${subjectText}\nBody:\n${text}` : text;
-  if (!apiKey || !state.trim()) return fallback;
+  if (direct.source === 'explicit' || !apiKey || !state.trim()) return direct.error ? direct : fallback;
 
   try {
     const response = await fetcher('https://api.typesafe.ai/v1/systemone', {
@@ -49,21 +57,45 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
               unsupported: 'The sender clearly asks to use an unavailable model or a named variant other than the supported Codex, Sonnet 5.5, and Luna choices.',
             },
           },
+          effort: {
+            type: 'choice',
+            instructions: 'Choose the effort for this current email task. An explicit effort request such as Luna Low or Sonnet High takes priority. Otherwise choose low for clearly simple work, high for clearly complex multistep work, and medium when uncertain or ordinary. Reserve xhigh, max, and ultra for explicit requests. Ignore quoted earlier messages.',
+            criteria: {
+              low: 'Explicit low effort, or a clearly trivial task.',
+              medium: 'Explicit medium effort, or ordinary or ambiguous complexity.',
+              high: 'Explicit high effort, or clearly complex multistep work.',
+              xhigh: 'Explicit extra high or xhigh effort.',
+              max: 'Explicit max effort.',
+              ultra: 'Explicit ultra reasoning effort.',
+            },
+          },
+          speed: {
+            type: 'choice',
+            instructions: 'Does the sender explicitly request an inference speed tier for this email? A request to be brief or answer quickly is not necessarily a paid speed tier. Ignore quoted earlier messages.',
+            criteria: {
+              standard: 'No explicit speed tier request, or the sender explicitly asks for standard speed.',
+              fast: 'The sender explicitly requests fast mode or the fast speed tier.',
+              ultrafast: 'The sender explicitly requests ultra-fast or ultrafast mode.',
+            },
+          },
         },
       }),
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) throw new Error(`Jev HTTP ${response.status}`);
-    const answer = (await response.json()).answers?.route;
-    const probability = answer?.probabilities?.[answer?.choice];
-    const threshold = answer?.choice === 'unsupported' ? 0.75 : 0.6;
-    if (answer?.type !== 'choice' || !Number.isFinite(probability) || probability < threshold) return fallback;
-    if (answer.choice === 'unsupported') return { error: 'That model is not available. Use Codex, Claude, or Luna.' };
-    const route = Object.hasOwn(ROUTES, answer.choice) ? ROUTES[answer.choice] : null;
-    if (!route) return fallback;
-    return { ...route, source: 'classified' };
+    const answers = (await response.json()).answers;
+    const routeChoice = confidentChoice(answers?.route, answers?.route?.choice === 'unsupported' ? 0.75 : 0.6);
+    if (routeChoice === 'unsupported') return { error: 'That model is not available. Use Codex, Claude, or Luna.' };
+    const route = Object.hasOwn(ROUTES, routeChoice) ? ROUTES[routeChoice] : null;
+    const selected = route ? { ...route, source: 'classified' } : { ...fallback };
+    if (route && knownPrior && route.id === priorModel.id) selected.effort = priorModel.effort;
+    const effort = confidentChoice(answers?.effort, 0.7);
+    if (EFFORTS.has(effort)) selected.effort = effort;
+    const speed = confidentChoice(answers?.speed, 0.75);
+    if (speed === 'fast' || speed === 'ultrafast') selected.speed = speed;
+    return selected;
   } catch (error) {
-    console.error('Jev model routing fell back to the saved route', error);
-    return fallback;
+    if (direct.source !== 'explicit') console.error('Jev model routing fell back to the saved route', error);
+    return direct.error ? direct : fallback;
   }
 }

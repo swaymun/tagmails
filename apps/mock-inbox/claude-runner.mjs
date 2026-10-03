@@ -119,7 +119,7 @@ async function runClaude(claim, workspace, sessionId, staged, write) {
     '--strict-mcp-config', '--disable-slash-commands', '--no-chrome',
     '--tools', write ? 'Read,Glob,Grep,Edit,Write' : 'Read,Glob,Grep', '--disallowedTools', 'mcp__*',
     '--permission-mode', write ? 'acceptEdits' : 'dontAsk',
-    '--permission-prompts', 'none', '--model', MODEL, '--effort', 'medium',
+    '--permission-prompts', 'none', '--model', MODEL, '--effort', claim.model.effort,
     '--system-prompt', write
       ? 'You are TagMails, an email agent. Read and edit files only in the selected local workspace. Never run commands, use the web, send messages, deploy, purchase, or take external actions. Report file changes and checks in concise plain text.'
       : 'You are TagMails, an email agent. Read files only in the selected local workspace. Never write files, run commands, use the web, send messages, or take external actions. Reply in concise plain text.',
@@ -201,7 +201,8 @@ export async function runClaim(claim) {
   const write = process.env.TAGMAILS_RUNTIME === 'claude-write';
   if (!claim?.claimed || !/^[a-z0-9-]+$/.test(claim.jobId || '') || !/^[a-z0-9-]+$/.test(claim.threadId || '')) throw new Error('Invalid local claim');
   if (claim.model?.error) return { runtime: runtime(write), state: 'needs_clarification', summary: claim.model.error };
-  if (claim.model?.id !== MODEL || claim.model.effort !== 'medium') return fail('This prototype can run Claude Sonnet 5.5 Medium only.', write);
+  if (claim.model?.id !== MODEL || !['low', 'medium', 'high', 'xhigh', 'max'].includes(claim.model.effort) ||
+      !['standard', undefined].includes(claim.model.speed)) return fail('Claude Sonnet 5.5 does not offer this effort or speed in the pilot.', write);
   const selected = process.env.TAGMAILS_WORKSPACE;
   if (!selected || !path.isAbsolute(selected) || !(await fs.stat(selected)).isDirectory()) throw new Error('Select an absolute TAGMAILS_WORKSPACE directory');
   const workspace = await fs.realpath(selected);

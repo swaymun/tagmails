@@ -1,19 +1,23 @@
 const MODEL_LABELS = {
-  'gpt-6.1-sol': ['Codex GPT-6.1 Sol', 'medium'],
-  'claude-sonnet-5-5': ['Claude Code Sonnet 5.5', 'medium'],
-  'gpt-6-luna': ['Codex GPT-6 Luna', 'low'],
+  'gpt-6.1-sol': 'Codex GPT-6.1 Sol',
+  'claude-sonnet-5-5': 'Claude Code Sonnet 5.5',
+  'gpt-6-luna': 'Codex GPT-6 Luna',
 };
+const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 
 export function selectedModelDetail(json) {
   if (!json) return null;
   try {
     const model = JSON.parse(json);
-    const [label, effort] = MODEL_LABELS[model.id] ?? [];
-    if (!label || model.effort !== effort || !['default', 'explicit', 'classified', 'thread'].includes(model.source)) return null;
+    const label = MODEL_LABELS[model.id];
+    if (!label || !EFFORTS.has(model.effort) ||
+        !['standard', 'fast', 'ultrafast'].includes(model.speed || 'standard') ||
+        !['default', 'explicit', 'classified', 'thread'].includes(model.source)) return null;
     const source = {
       default: 'account default', explicit: 'requested in this email',
       classified: 'requested in this email', thread: 'continued from this thread',
     }[model.source];
-    return `Selected model: ${label} (${effort}; ${source}).`;
+    const speed = model.speed ? `${model.speed} tier requested` : 'standard speed';
+    return `Selected model: ${label} (${model.effort}; ${speed}; ${source}).`;
   } catch { return null; }
 }

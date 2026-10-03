@@ -23,24 +23,31 @@ test('Jev routes a clear new-thread model request and defaults when uncertain', 
   }), { error: 'That model is not available. Use Codex, Claude, or Luna.' });
 });
 
-test('explicit directives do not call Jev', async () => {
-  const noCall = () => { throw new Error('Jev must not be called'); };
+test('an exact directive stays authoritative without a Jev call', async () => {
+  let calls = 0;
   assert.deepEqual(await routeModel('Model: Luna\nDo this.', 'gpt-6.1-sol', {
-    apiKey: 'test-key', fetcher: noCall,
-  }), { id: 'gpt-6-luna', effort: 'low', source: 'explicit' });
+    apiKey: 'test-key', fetcher: async (...args) => {
+      calls += 1;
+      return jev('codex', 0.97)(...args);
+    },
+  }), { id: 'gpt-6-luna', effort: 'medium', source: 'explicit' });
+  assert.equal(calls, 0);
 });
 
-test('a malformed leading Model line gets one classifier chance before clarification', async () => {
+test('a collapsed leading Model line is classified and otherwise uses the saved default', async () => {
   assert.deepEqual(await routeModel('Model: Luna please review this.', 'gpt-6.1-sol', {
     apiKey: 'test-key', fetcher: jev('luna', 0.94),
-  }), { id: 'gpt-6-luna', effort: 'low', source: 'classified' });
+  }), { id: 'gpt-6-luna', effort: 'medium', source: 'classified' });
   const uncertain = await routeModel('Model: Luna please review this.', 'gpt-6.1-sol', {
     apiKey: 'test-key', fetcher: jev('luna', 0.42),
   });
-  assert.match(uncertain.error, /could not read the Model line/i);
+  assert.deepEqual(uncertain, { id: 'gpt-6.1-sol', effort: 'medium', source: 'default' });
   assert.deepEqual(await routeModel('Model: Claude Opus please review this.', 'gpt-6.1-sol', {
     apiKey: 'test-key', fetcher: jev('unsupported', 0.95),
   }), { error: 'That model is not available. Use Codex, Claude, or Luna.' });
+  assert.deepEqual(await routeModel('Model: Claude Internal routing check. Review this.',
+    'gpt-6.1-sol', { apiKey: 'test-key', fetcher: jev('claude', 0.92) }),
+  { id: 'claude-sonnet-5-5', effort: 'medium', source: 'classified' });
 });
 
 test('natural requests can change a reply model; ordinary replies inherit it', async () => {
@@ -93,4 +100,32 @@ test('Jev considers a model request in the subject when the body is empty', asyn
         probabilities: { claude: 0.95 } } } });
     },
   }), { id: 'claude-sonnet-5-5', effort: 'medium', source: 'classified' });
+});
+
+test('one Jev request interprets natural model, effort, and speed choices', async () => {
+  let calls = 0;
+  const selected = await routeModel('Use Luna Low in fast mode to check the file.', 'gpt-6.1-sol', {
+    apiKey: 'test-key', fetcher: async (_url, request) => {
+      calls += 1;
+      const questions = JSON.parse(request.body).questions;
+      assert.deepEqual(Object.keys(questions), ['route', 'effort', 'speed']);
+      return Response.json({ answers: Object.fromEntries([
+        ['route', 'luna', 0.96], ['effort', 'low', 0.94], ['speed', 'fast', 0.91],
+      ].map(([key, choice, probability]) => [key, { type: 'choice', choice,
+        probabilities: { [choice]: probability } }])) });
+    },
+  });
+  assert.equal(calls, 1);
+  assert.deepEqual(selected, { id: 'gpt-6-luna', effort: 'low', speed: 'fast', source: 'classified' });
+});
+
+test('uncertain effort uses medium and an explicit ultra-fast request reaches runtime validation', async () => {
+  const selected = await routeModel('Use Luna medium at ultra-fast speed.', 'gpt-6.1-sol', {
+    apiKey: 'test-key', fetcher: async () => Response.json({ answers: {
+      route: { type: 'choice', choice: 'luna', probabilities: { luna: 0.94 } },
+      effort: { type: 'choice', choice: 'low', probabilities: { low: 0.52 } },
+      speed: { type: 'choice', choice: 'ultrafast', probabilities: { ultrafast: 0.94 } },
+    } }),
+  });
+  assert.deepEqual(selected, { id: 'gpt-6-luna', effort: 'medium', speed: 'ultrafast', source: 'classified' });
 });

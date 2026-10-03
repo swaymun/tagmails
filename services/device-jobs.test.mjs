@@ -63,7 +63,7 @@ test('queued mail keeps its selected default after the account preference change
   await inbound(env, 'explicit-second', 'Model: Luna\nReview the note.');
   const second = await call(env, paired.token, 'claim');
   assert.deepEqual(envelope(second.body).model,
-    { id: 'gpt-6-luna', effort: 'low', source: 'explicit' });
+    { id: 'gpt-6-luna', effort: 'medium', source: 'explicit' });
 });
 
 test('a queued message stays claimable after the account address changes', async () => {
@@ -88,7 +88,7 @@ test('replies inherit the original route without reclassifying quoted model line
     JOIN messages m ON m.id = j.message_id ORDER BY m.provider_email_id`).all();
   assert.equal(jobs[0].thread_id, jobs[1].thread_id);
   assert.deepEqual(JSON.parse(jobs[1].model_json),
-    { id: 'gpt-6-luna', effort: 'low', source: 'thread' });
+    { id: 'gpt-6-luna', effort: 'medium', source: 'thread' });
 });
 
 test('a paired device receives a signed, account-scoped claim and completes it once', async () => {
@@ -100,7 +100,7 @@ test('a paired device receives a signed, account-scoped claim and completes it o
   assert.equal(status, 200);
   assert.equal(body.claimed, true);
   const signedJob = envelope(body);
-  assert.deepEqual(signedJob.model, { id: 'gpt-6-luna', effort: 'low', source: 'explicit' });
+  assert.deepEqual(signedJob.model, { id: 'gpt-6-luna', effort: 'medium', source: 'explicit' });
   assert.equal(signedJob.request.from, 'owner@gmail.com');
   assert.equal(signedJob.request.fromOwner, true);
   assert.match(signedJob.request.body, /Read the status/);
@@ -112,6 +112,7 @@ test('a paired device receives a signed, account-scoped claim and completes it o
   const result = { state: 'completed', summary: 'The local agent read the status.',
     transcript: { version: 1, truncated: false, events: [
       { kind: 'request', text: 'Read the status.' },
+      { kind: 'reasoning', text: 'I checked the available file.' },
       { kind: 'tool', text: 'Read requested.' },
       { kind: 'assistant', text: 'The local agent read the status. '.repeat(170) }] },
     usage: { inputTokens: 1200, cachedInputTokens: 300, cacheCreationInputTokens: 0,

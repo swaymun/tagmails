@@ -11,6 +11,15 @@ test('Codex projection ignores non-visible assistant phases', () => {
   } }), null);
 });
 
+test('Codex projection exposes summary text but never private reasoning content', () => {
+  assert.deepEqual(codexRunEvent({ method: 'item/completed', params: { item: {
+    type: 'reasoning', summary: ['Checked the relevant file.'], content: ['SECRET_PRIVATE_REASONING'],
+  } } }), { kind: 'reasoning', text: 'Checked the relevant file.' });
+  assert.equal(codexRunEvent({ method: 'item/completed', params: { item: {
+    type: 'reasoning', summary: [], content: ['SECRET_PRIVATE_REASONING'],
+  } } }), null);
+});
+
 test('the linked transcript retains a long final answer beyond the email summary', () => {
   const answer = Array.from({ length: 700 }, (_, index) => `point${index}`).join(' ');
   assert.ok(answer.length > 5000 && answer.length < 8000);

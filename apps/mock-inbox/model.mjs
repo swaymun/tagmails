@@ -1,4 +1,5 @@
 export const ACCOUNT_DEFAULT_MODELS = ['gpt-6.1-sol', 'claude-sonnet-5-5'];
+const UNKNOWN_MODEL = 'I could not identify an available model in this request. Ask for Codex, Claude, or Luna, or omit the model to use your default.';
 
 function requestedModel(body) {
   let inDirectives = false;
@@ -22,7 +23,7 @@ export function chooseModel(body, defaultModel = 'gpt-6.1-sol') {
   const requested = requestedModel(body);
   if (requested === null) return { id: ACCOUNT_DEFAULT_MODELS.includes(defaultModel) ? defaultModel : 'gpt-6.1-sol',
     effort: 'medium', source: 'default' };
-  if (!requested) return { error: 'Choose Codex, Claude, or Luna after Model:.' };
+  if (!requested) return { error: UNKNOWN_MODEL };
   const choices = {
     codex: ['gpt-6.1-sol', 'medium'],
     'codex 6.1 sol': ['gpt-6.1-sol', 'medium'],
@@ -39,11 +40,12 @@ export function chooseModel(body, defaultModel = 'gpt-6.1-sol') {
     'claude sonnet 5.5 medium': ['claude-sonnet-5-5', 'medium'],
     'claude-sonnet-5-5': ['claude-sonnet-5-5', 'medium'],
     'claude-sonnet-5-5 medium': ['claude-sonnet-5-5', 'medium'],
-    luna: ['gpt-6-luna', 'low'],
-    'gpt-6-luna': ['gpt-6-luna', 'low'],
+    luna: ['gpt-6-luna', 'medium'],
+    'gpt-6-luna': ['gpt-6-luna', 'medium'],
   };
-  const choice = choices[requested];
-  return choice ? { id: choice[0], effort: choice[1], source: 'explicit' } : {
-    error: 'I could not read the Model line. Put Model: Codex, Model: Claude, or Model: Luna on its own line, then write the task below.',
+  const match = requested.match(/^(.*?)(?:\s+(low|medium|high|xhigh|max|ultra))?$/);
+  const choice = choices[match?.[1]];
+  return choice ? { id: choice[0], effort: match[2] || choice[1], source: 'explicit' } : {
+    error: UNKNOWN_MODEL,
   };
 }

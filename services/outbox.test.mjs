@@ -202,8 +202,8 @@ test('the result email names the model recorded at receipt, including an explici
     sendEmail: async (payload) => { sent = payload; return { data: { id: 'model-sent-1' } }; },
     getSentEmail: async () => ({ data: { message_id: '<model-sent-1@tagmails.test>' } }),
   })).state, 'sent');
-  assert.match(sent.text, /Selected model: Claude Code Sonnet 5\.5 \(medium; requested in this email\)/);
-  assert.match(sent.html, /Selected model: Claude Code Sonnet 5\.5 \(medium; requested in this email\)/);
+  assert.match(sent.text, /Selected model: Claude Code Sonnet 5\.5 \(medium; standard speed; requested in this email\)/);
+  assert.match(sent.html, /Selected model: Claude Code Sonnet 5\.5 \(medium; standard speed; requested in this email\)/);
   assert.doesNotMatch(sent.text, /GPT-6\.1 Sol/);
 });
 

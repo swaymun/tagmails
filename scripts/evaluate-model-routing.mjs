@@ -26,7 +26,7 @@ const cases = [
   { id: 'unsupported-gemini', body: 'Use Gemini to review the figures.', expected: 'error' },
   { id: 'unsupported-opus', body: 'Please run this with Claude Opus instead of Sonnet.', expected: 'error' },
   { id: 'explicit-directive', body: 'Model: Claude\nReview the copy.', expected: claude, calls: 0 },
-  { id: 'explicit-unsupported', body: 'Model: Gemini\nReview the copy.', expected: 'error' },
+  { id: 'explicit-unsupported', body: 'Model: Gemini\nReview the copy.', expected: 'error', calls: 0 },
   { id: 'collapsed-model-line', body: 'Model: Luna please review the copy.', expected: luna },
   { id: 'collapsed-unsupported', body: 'Model: Claude Opus please review the copy.', expected: 'error' },
   { id: 'reply-inherits', body: 'Continue the review.\n\n> Use Luna for the first pass.',

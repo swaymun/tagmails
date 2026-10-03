@@ -172,7 +172,7 @@ function validResult(value) {
     (Array.isArray(value[key]) && value[key].length <= 12 && value[key].every((item) => typeof item === 'string' && item.length <= 300))) &&
     (transcript === undefined || (transcript?.version === 1 && typeof transcript.truncated === 'boolean' &&
       Array.isArray(transcript.events) && transcript.events.length <= 48 &&
-      transcript.events.every((event, index) => event && ['request', 'assistant', 'tool'].includes(event.kind) &&
+      transcript.events.every((event, index) => event && ['request', 'assistant', 'tool', 'reasoning'].includes(event.kind) &&
         (event.phase === undefined || (event.kind === 'assistant' &&
           ['commentary', 'final_answer'].includes(event.phase))) &&
         typeof event.text === 'string' && event.text.length > 0 &&

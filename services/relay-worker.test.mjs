@@ -124,7 +124,7 @@ test('a malformed model request gets a relay clarification without a paired Mac'
   assert.equal(reply.replyTo, 'agent@wonder.test');
   assert.deepEqual(reply.to, ['owner@gmail.com']);
   assert.match(reply.text, /Which model should I use\?/);
-  assert.match(reply.text, /Put Model: Codex, Model: Claude, or Model: Luna on its own line/);
+  assert.match(reply.text, /Ask for Codex, Claude, or Luna, or omit the model to use your default/);
   assert.match(reply.text, /Run details/);
   assert.match(reply.text, /No local agent ran/);
   assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM outbox').get().n, 1);

@@ -38,6 +38,7 @@ export function bindings() {
       delete: async (key) => { objects.delete(key); },
     },
     RESEND_API_KEY: 're_test', RESEND_WEBHOOK_SECRET: 'whsec_test', CLAUDE_ROUTE_ENABLED: 'true',
+    PUBLIC_SIGNUP_ENABLED: 'true',
   };
   return { env, sqlite, objects };
 }

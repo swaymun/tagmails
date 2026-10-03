@@ -119,7 +119,7 @@ test('an invalid model gets a free clarification reply while funded work still w
   const result = JSON.parse(Buffer.from(await saved.arrayBuffer()).toString());
   assert.equal(result.runtime, 'relay');
   assert.equal(result.state, 'needs_clarification');
-  assert.match(result.summary, /could not read the Model line/i);
+  assert.match(result.summary, /could not identify an available model/i);
   assert.deepEqual(await claim(env, token), { claimed: false });
   assert.equal((await sendNextOutbox(env, {
     sendEmail: async () => ({ data: { id: 'sent-clarification' } }),
