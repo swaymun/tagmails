@@ -50,7 +50,8 @@ export async function parseInbound(raw, agentAddress = 'agent@wonder.test', {
   if (autoSubmitted && autoSubmitted !== 'no') throw new Error('Automatic response email was ignored');
   const reactionParts = email.attachments.filter((part) => part.mimeType === 'text/vnd.google.email-reaction+json');
   if (reactionParts.length) {
-    if (reactionParts.length !== 1 || email.attachments.length !== 1 || reactionParts[0].disposition === 'attachment' || reactionParts[0].content.length > 1024) throw new Error('Invalid Gmail reaction');
+    // Gmail also allows inline files in a surrounding multipart/related part.
+    if (reactionParts.length !== 1 || reactionParts[0].disposition === 'attachment' || reactionParts[0].content.length > 1024) throw new Error('Invalid Gmail reaction');
     let reaction;
     try { reaction = JSON.parse(Buffer.from(reactionParts[0].content).toString('utf8')); }
     catch { throw new Error('Invalid Gmail reaction'); }

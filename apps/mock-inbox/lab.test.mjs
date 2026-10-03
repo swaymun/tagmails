@@ -26,15 +26,25 @@ function rawTextMail({ from, subject, id, body, to = 'agent@wonder.test', cc, bc
   ].join('\r\n'));
 }
 
-function rawGmailReaction({ from, id, targetId, emoji = '👍', version = 1 }) {
-  return Buffer.from([
-    `From: ${from}`, 'To: agent@wonder.test', `Message-ID: ${id}`, `In-Reply-To: ${targetId}`,
-    'MIME-Version: 1.0', 'Content-Type: multipart/alternative; boundary="reaction"', '',
+function rawGmailReaction({ from, id, targetId, emoji = '👍', version = 1, inlineAttachment = false }) {
+  const alternative = [
     '--reaction', 'Content-Type: text/plain; charset=utf-8', '', 'Reacted via Gmail.',
     '--reaction', 'Content-Type: text/vnd.google.email-reaction+json; charset=utf-8', '',
     JSON.stringify({ version, emoji }),
     '--reaction', 'Content-Type: text/html; charset=utf-8', '', '<p>Reacted via Gmail.</p>',
     '--reaction--', '',
+  ];
+  return Buffer.from([
+    `From: ${from}`, 'To: agent@wonder.test', `Message-ID: ${id}`, `In-Reply-To: ${targetId}`,
+    'MIME-Version: 1.0',
+    ...(inlineAttachment
+      ? ['Content-Type: multipart/related; boundary="related"', '', '--related',
+        'Content-Type: multipart/alternative; boundary="reaction"', '', ...alternative,
+        '--related', 'Content-Type: image/png',
+        'Content-Disposition: inline; filename="preview.png"', 'Content-Transfer-Encoding: base64', '',
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQMAAAAl21bKAAAAA1BMVEUAAACnej3aAAAAAXRSTlMAQObYZgAAAApJREFUCNdjYAAAAAIAAeIhvDMAAAAASUVORK5CYII=',
+        '--related--', '']
+      : ['Content-Type: multipart/alternative; boundary="reaction"', '', ...alternative]),
   ].join('\r\n'));
 }
 
@@ -144,12 +154,13 @@ test('Gmail MIME reactions stay on the agent message and never queue work', asyn
   assert.equal((await lab.importMime(ownerReaction)).accepted, true);
   assert.equal((await lab.importMime(ownerReaction)).duplicate, true);
   assert.equal((await lab.importMime(rawGmailReaction({ from: 'guest@gmail.com', id: '<reaction-2@example.test>', targetId: agentMessage.id, emoji: '❤️' }))).accepted, true);
+  assert.equal((await lab.importMime(rawGmailReaction({ from: 'owner@gmail.com', id: '<reaction-inline@example.test>', targetId: agentMessage.id, emoji: '🎉', inlineAttachment: true }))).accepted, true);
   assert.equal((await lab.importMime(rawGmailReaction({ from: 'stranger@gmail.com', id: '<reaction-3@example.test>', targetId: agentMessage.id }))).accepted, false);
   await assert.rejects(lab.importMime(rawGmailReaction({ from: 'owner@gmail.com', id: '<reaction-4@example.test>', targetId: agentMessage.id, version: 2 })), /Invalid Gmail reaction/);
   assert.equal(lab.state.jobs.length, 1);
   assert.equal(lab.state.threads[0].messages.length, 2);
-  assert.deepEqual(agentMessage.reactions.map((reaction) => reaction.emoji), ['👍', '❤️']);
-  assert.equal(new Lab(file, { seed: false }).findMessage(agentMessage.id).message.reactions.length, 2);
+  assert.deepEqual(agentMessage.reactions.map((reaction) => reaction.emoji), ['👍', '❤️', '🎉']);
+  assert.equal(new Lab(file, { seed: false }).findMessage(agentMessage.id).message.reactions.length, 3);
   assert.equal(first.threadId, lab.state.threads[0].id);
 });
 
