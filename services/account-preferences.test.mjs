@@ -26,4 +26,7 @@ test('email defaults persist and supply a fallback while Jev may override task c
   await assert.rejects(saveAccountPreferences(env, account, {
     model: 'claude-sonnet-5-5', effort: 'medium', speed: 'fast',
   }), /does not offer this speed/);
+  await assert.rejects(saveAccountPreferences(env, account, {
+    model: 'gpt-6-luna', effort: 'ultra', speed: 'standard',
+  }), /does not offer Ultra reasoning/);
 });

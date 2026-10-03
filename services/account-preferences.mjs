@@ -20,6 +20,9 @@ export async function saveAccountPreferences(env, account, input) {
   if (model === 'claude-sonnet-5-5' && speed !== 'standard') {
     throw new Error('Claude Code does not offer this speed in the pilot.');
   }
+  if (model === 'gpt-6-luna' && effort === 'ultra') {
+    throw new Error('GPT-6 Luna does not offer Ultra reasoning on this Mac.');
+  }
   await env.DB.prepare(`INSERT INTO account_preferences (account_id, default_model, default_effort, default_speed)
     VALUES (?, ?, ?, ?) ON CONFLICT(account_id) DO UPDATE SET
     default_model = excluded.default_model, default_effort = excluded.default_effort,
