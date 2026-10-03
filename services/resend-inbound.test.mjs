@@ -132,6 +132,25 @@ test('a verified event resolves one active agent address before retrieving mail'
   }), /does not identify/);
 });
 
+test('a Received-header recipient alone cannot route mail to an agent', async () => {
+  const item = fixture();
+  const payload = JSON.parse(item.rawPayload);
+  payload.data.to = ['other@example.test'];
+  payload.data.cc = [];
+  payload.data.bcc = [];
+  payload.data.received_for = [agent];
+  let candidates;
+  assert.deepEqual(await inspectResendInbound({ ...options(item), ...signed(payload), agentAddress: undefined,
+    resolveAgentAddress: async (addresses) => { candidates = addresses; return null; },
+    getReceivedEmail: async () => { throw new Error('Unmatched mail must not be fetched'); },
+  }), { ignored: true });
+  assert.deepEqual(candidates, ['other@example.test']);
+
+  await assert.rejects(inspectResendInbound({ ...options(item), getReceivedEmail: async () => ({
+    ...item.email, to: ['other@example.test'], cc: [], bcc: [], received_for: [agent],
+  }) }), /does not match the verified event/);
+});
+
 test('Resend intake rejects tampering, mismatched retrieval, failed authentication, and unsafe raw URLs', async () => {
   const item = fixture();
   await assert.rejects(inspectResendInbound({ ...options(item), rawPayload: item.rawPayload + ' ' }));

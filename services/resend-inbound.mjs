@@ -20,7 +20,8 @@ function recipients(value) {
 }
 
 function recipientAddresses(email) {
-  return [...new Set(['to', 'cc', 'bcc', 'received_for'].flatMap((field) => recipients(email[field])))];
+  // received_for comes from a Received header, not a recipient field.
+  return [...new Set(['to', 'cc', 'bcc'].flatMap((field) => recipients(email[field])))];
 }
 
 function header(headers, name) {

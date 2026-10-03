@@ -8,6 +8,7 @@ Internal working runbook. The test is limited to the owner's Gmail, the dedicate
 - The development Worker is deployed at `https://tagmails-relay-dev.saimun-shahee.workers.dev`. Its existing `RESEND_API_KEY` and `RESEND_WEBHOOK_SECRET` bindings contain placeholders; a binding name alone does not establish a connected provider.
 - A read-only remote D1 audit returned one active account and two completed fixture jobs, with **zero outbox rows and zero queued jobs**. Repeat this audit immediately before connecting a real key; the queue may change.
 - Resend offers Full access and Sending access keys. The relay retrieves received mail, reads sent-message IDs, and sends replies, so it needs **Full access** in the dedicated development account. Sending access alone cannot retrieve inbound mail. [Resend key permissions](https://resend.com/changelog/new-api-key-permissions)
+- Account routing uses the signed event's To, Cc, and Bcc fields and checks them again on the retrieved record. It does not use `received_for`, which Resend derives from a `Received` header. A local fixture confirmed that `received_for` alone cannot select an agent account. In the live test, confirm which recipient field contains the agent and inspect the signed raw-download URL host before widening any provider allowlist. [Resend received-email fields](https://resend.com/docs/api-reference/emails/retrieve-received-email)
 
 ## Connection order
 
