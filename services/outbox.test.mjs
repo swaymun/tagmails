@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { bindings } from './bindings-fixture.mjs';
-import { reconcileOneUnknownOutbox, recordDeliveryOutcome, sendNextOutbox } from './outbox.mjs';
+import { reconcileOneUnknownOutbox, reconcileSentEvent, recordDeliveryOutcome, sendNextOutbox } from './outbox.mjs';
 import { handleInbound } from './relay-worker.mjs';
 
 function queuedTurn({ env, sqlite }, { number, from, to, cc = [], inReplyTo = null, references = [], accountId = 'account-1', threadId = 'thread-1', jobId = `job-${number}`, model = null }) {
@@ -366,7 +366,7 @@ test('a failed primary recipient releases the test charge even when a copied gue
   assert.equal(sqlite.prepare('SELECT state FROM test_email_charges WHERE job_id = ?').get(jobId).state, 'released');
 });
 
-test('a sent event arriving before the send response cannot create a second reply', async () => {
+test('an early sent event supports immediate reaction and reply without a second send', async () => {
   const fixture = bindings();
   const { env, sqlite } = fixture;
   const jobId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
@@ -381,6 +381,19 @@ test('a sent event arriving before the send response cannot create a second repl
         from: payload.from, to: payload.to, cc: payload.cc ?? [], subject: payload.subject,
       } }) });
       assert.deepEqual(await response.json(), { accepted: true, sentEvent: true });
+      assert.deepEqual(await reaction(env, { providerEmailId: 'early-reaction',
+        from: 'owner@gmail.com', targetId: '<early@tagmails.test>' }),
+      { accepted: true, reaction: true, duplicate: false });
+      const followup = await handleInbound(new Request('https://relay.test/webhooks/resend', {
+        method: 'POST', body: '{}',
+      }), env, { inspect: async () => ({ providerEmailId: 'quick-followup',
+        messageId: '<quick-followup@gmail.com>', agentAddress: 'agent@wonder.test',
+        from: 'owner@gmail.com', to: ['agent@wonder.test'], cc: [], bcc: [],
+        subject: 'Re: Shared work', body: 'Continue this thread.',
+        parentIds: ['<early@tagmails.test>'], rawMime: Buffer.from('Synthetic follow-up') }) });
+      assert.equal((await followup.json()).accepted, true);
+      assert.equal(sqlite.prepare('SELECT thread_id FROM messages WHERE message_id = ?')
+        .get('<quick-followup@gmail.com>').thread_id, 'thread-1');
       return { data: { id: providerId } };
     },
   });
@@ -390,6 +403,11 @@ test('a sent event arriving before the send response cannot create a second repl
     getSentEmail: async () => ({ data: { message_id: '<early@tagmails.test>' } }),
   }), { state: 'sent', jobId, messageId: '<early@tagmails.test>' });
   assert.equal(sqlite.prepare("SELECT count(*) n FROM messages WHERE direction = 'outbound'").get().n, 1);
+  const event = { jobId, providerEmailId: providerId, messageId: '<early@tagmails.test>',
+    from: 'agent@wonder.test', to: ['owner@gmail.com'], cc: [], subject: 'Re: Shared work' };
+  assert.deepEqual(await reconcileSentEvent(env, event), { accepted: true, duplicate: true });
+  assert.deepEqual(await reconcileSentEvent(env, { ...event, messageId: '<wrong@tagmails.test>' }),
+    { accepted: false, duplicate: true });
 });
 
 test('an accepted send finalizes when its outbound message was already recorded', async () => {
@@ -469,7 +487,9 @@ test('guest-only replies link to the Site transcript only after participant acce
   env.PUBLIC_ORIGIN = 'https://relay.tagmails.test';
   env.SITE_ORIGIN = 'https://site.tagmails.test';
   const receiptJobId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'], jobId: receiptJobId });
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'],
+    cc: ['reviewer@gmail.com'], jobId: receiptJobId });
+  sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)').run('thread-1', 'reviewer@gmail.com');
   const payloads = [];
   const provider = {
     sendEmail: async (payload) => { payloads.push(payload); return { data: { id: `sent-${payloads.length}` } }; },
@@ -477,8 +497,8 @@ test('guest-only replies link to the Site transcript only after participant acce
   };
   assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
   assert.ok(payloads[0].html.includes(`https://site.tagmails.test/run?id=${receiptJobId}`));
+  assert.match(payloads[0].text, /Run transcript \(owner only\)/);
   assert.doesNotMatch(payloads[0].html, /relay\.tagmails\.test\/runs/);
-  sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)').run('thread-1', 'reviewer@gmail.com');
   await queuedTurn(fixture, { number: 2, from: 'reviewer@gmail.com', to: ['agent@wonder.test'] });
   assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
   assert.doesNotMatch(payloads[1].html, /\/run\?id=|\/runs\//);

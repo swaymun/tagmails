@@ -42,8 +42,25 @@ function providerRecipients(value) {
   return (Array.isArray(value) ? value : []).map(providerMailbox);
 }
 
+async function saveOutboundMessage(env, jobId, threadId, providerEmailId, messageId) {
+  const account = await env.DB.prepare(`SELECT t.account_id, a.agent_email FROM jobs j
+    JOIN threads t ON t.id = j.thread_id JOIN accounts a ON a.id = t.account_id
+    WHERE j.id = ?`).bind(jobId).first();
+  if (!account) throw new Error('Outbound job has no account');
+  await env.DB.prepare(`INSERT INTO messages
+    (id, account_id, thread_id, provider_email_id, message_id, direction, sender_email, object_key)
+    VALUES (?, ?, ?, ?, ?, 'outbound', ?, ?)
+    ON CONFLICT(account_id, provider_email_id) DO NOTHING`)
+    .bind(randomUUID(), account.account_id, threadId, providerEmailId, messageId,
+      account.agent_email, `outbound/${account.account_id}/${jobId}.json`).run();
+  const saved = await env.DB.prepare('SELECT message_id FROM messages WHERE account_id = ? AND provider_email_id = ?')
+    .bind(account.account_id, providerEmailId).first();
+  if (saved?.message_id !== messageId) throw new Error('Outbound Message-ID conflicts with the provider record');
+}
+
 export async function reconcileSentEvent(env, event) {
-  const row = await env.DB.prepare('SELECT state, payload_json, provider_email_id FROM outbox WHERE job_id = ?')
+  const row = await env.DB.prepare(`SELECT o.state, o.payload_json, o.provider_email_id, j.thread_id
+    FROM outbox o JOIN jobs j ON j.id = o.job_id WHERE o.job_id = ?`)
     .bind(event.jobId).first();
   if (!row || !['sending', 'uncertain', 'accepted', 'sent'].includes(row.state)) return { accepted: false };
   let payload;
@@ -51,13 +68,19 @@ export async function reconcileSentEvent(env, event) {
   catch { return { accepted: false }; }
   if (payload.tags?.some(({ name, value }) => name === 'tagmails_job' && value === event.jobId) !== true ||
       payload.from !== event.from || payload.subject !== event.subject ||
-      !matchesSentAudience(payload, event) ||
+      !matchesSentAudience(payload, event) || !MESSAGE_ID.test(event.messageId ?? '') ||
       (row.provider_email_id && row.provider_email_id !== event.providerEmailId)) return { accepted: false };
-  if (row.state === 'sent') return { accepted: true, duplicate: true };
+  if (row.state === 'sent') {
+    const saved = await env.DB.prepare(`SELECT message_id FROM messages
+      WHERE thread_id = ? AND provider_email_id = ? AND direction = 'outbound'`)
+      .bind(row.thread_id, event.providerEmailId).first();
+    return { accepted: saved?.message_id === event.messageId, duplicate: true };
+  }
   const updated = await env.DB.prepare(`UPDATE outbox SET state = 'accepted', provider_email_id = ?, updated_at = CURRENT_TIMESTAMP
     WHERE job_id = ? AND state IN ('sending', 'uncertain', 'accepted')
       AND (provider_email_id IS NULL OR provider_email_id = ?) RETURNING job_id`)
     .bind(event.providerEmailId, event.jobId, event.providerEmailId).first();
+  if (updated) await saveOutboundMessage(env, event.jobId, row.thread_id, event.providerEmailId, event.messageId);
   return { accepted: Boolean(updated), sentEvent: true };
 }
 
@@ -187,6 +210,7 @@ async function prepare(env, row) {
     ? `${siteOrigin}/run?id=${encodeURIComponent(row.job_id)}`
     : relayOrigin ? `${relayOrigin}/runs/${encodeURIComponent(row.job_id)}` : null;
   const participantTranscriptReady = siteOrigin && env.SITE_PARTICIPANT_TRANSCRIPTS === 'true';
+  const sharedWithParticipant = [...to, ...cc].some((email) => email !== owner);
   const fileNote = result.artifactIds?.length && ownerCanOpen && siteOrigin
     ? [`${result.artifactIds.length} file${result.artifactIds.length === 1 ? '' : 's'} available on the private run page for seven days.`]
     : [];
@@ -196,7 +220,8 @@ async function prepare(env, row) {
     state: result.state, summary: result.summary,
     details: [...(selectedModel ? [selectedModel] : []), ...(result.details ?? []), ...fileNote], checks: result.checks,
     links: transcriptUrl && (ownerCanOpen || participantTranscriptReady)
-      ? [{ label: 'Run transcript', url: transcriptUrl }] : [],
+      ? [{ label: sharedWithParticipant && !participantTranscriptReady ? 'Run transcript (owner only)' : 'Run transcript',
+        url: transcriptUrl }] : [],
     note: result.state === 'needs_approval'
       ? 'No action was approved automatically. Review the request and local permissions before replying or retrying.'
       : writeRun && result.state === 'completed'
@@ -232,19 +257,9 @@ async function finalize(env, row, getSentEmail) {
   if (error || !data?.message_id || !MESSAGE_ID.test(data.message_id)) {
     return { state: 'accepted', jobId: row.job_id };
   }
-  const account = await env.DB.prepare(`SELECT t.account_id, a.agent_email FROM jobs j
-    JOIN threads t ON t.id = j.thread_id JOIN accounts a ON a.id = t.account_id
-    WHERE j.id = ?`).bind(row.job_id).first();
-  await env.DB.batch([
-    env.DB.prepare(`INSERT INTO messages
-      (id, account_id, thread_id, provider_email_id, message_id, direction, sender_email, object_key)
-      VALUES (?, ?, ?, ?, ?, 'outbound', ?, ?)
-      ON CONFLICT(account_id, provider_email_id) DO NOTHING`)
-      .bind(randomUUID(), account.account_id, row.thread_id, row.provider_email_id, data.message_id,
-        account.agent_email, `outbound/${account.account_id}/${row.job_id}.json`),
-    env.DB.prepare("UPDATE outbox SET state = 'sent', updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'accepted'")
-      .bind(row.job_id),
-  ]);
+  await saveOutboundMessage(env, row.job_id, row.thread_id, row.provider_email_id, data.message_id);
+  await env.DB.prepare("UPDATE outbox SET state = 'sent', updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'accepted'")
+    .bind(row.job_id).run();
   return { state: 'sent', jobId: row.job_id, messageId: data.message_id };
 }
 
