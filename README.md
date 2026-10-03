@@ -21,7 +21,7 @@ When the owner includes another address in To, Cc, or Bcc, that address can repl
 
 Use **Import sample email with image** to test raw MIME parsing and an image preview. A custom `.eml` must include `agent@wonder.test` in To, Cc, or Bcc and have a valid `Message-ID`. Imported sender identity is simulated; the lab does not verify that the file came from Gmail. The parser converts HTML-only mail to text, limits mail and attachment sizes, and keeps attachment bytes in the local state file. The Rust mock worker fetches each attachment and reports its byte count without interpreting the image. Resend's verified event can confirm delivery to the agent, including when the agent itself was Bcc. It cannot reveal other Gmail Bcc guests hidden from the agent's copy; production cannot grant those guests from this event alone.
 
-Outgoing replies are built as multipart plain-text and HTML MIME with `Message-ID`, `In-Reply-To`, `References`, and visible `Cc` headers. The thread view renders the HTML decoded from those generated MIME bytes and offers a raw MIME view. Every result states that it is synthetic. The local trace pages show mock job events.
+Outgoing replies are built as multipart plain-text and HTML MIME with `Message-ID`, `In-Reply-To`, `References`, and visible `Cc` headers. The thread view renders the HTML decoded from those generated MIME bytes and offers a raw MIME view. Generic mock replies are headed **Synthetic preview** and say that no agent answered the request; authored example fixtures illustrate answer formatting. The local trace pages show mock job events.
 
 To process queued mail with the local Rust prototype, keep the inbox server running in one terminal and run this in another:
 

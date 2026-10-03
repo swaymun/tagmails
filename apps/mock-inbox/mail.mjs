@@ -38,7 +38,7 @@ function base64Lines(value) {
 }
 
 export function renderResult(result) {
-  const title = result.state === 'failed' ? 'Could not finish' : result.state === 'needs_approval' ? 'Waiting for approval' : result.state === 'needs_clarification' ? 'Which model should I use?' : 'Task completed';
+  const title = result.preview ? 'Synthetic preview' : result.state === 'failed' ? 'Could not finish' : result.state === 'needs_approval' ? 'Waiting for approval' : result.state === 'needs_clarification' ? 'Which model should I use?' : 'Task completed';
   const note = typeof result.note === 'string' && result.note.trim() ? result.note.trim() : null;
   const items = (result.details ?? []).map((item) => `<li>${escapeHtml(item)}</li>`).join('');
   const checks = (result.checks ?? []).map((item) => `<li>${escapeHtml(item)}</li>`).join('');

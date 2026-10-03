@@ -260,6 +260,17 @@ test('renderer escapes hostile content and rejects header injection', () => {
   assert.throws(() => makeMime({ from: 'agent@wonder.test', to: 'owner@gmail.com', subject: 'Hello\r\nBcc: victim@example.com', messageId: '<id@wonder.test>', text: 'a', html: '<p>a</p>' }), /line break/);
 });
 
+test('generic mock reply clearly labels itself as a preview', (t) => {
+  const { lab } = freshLab(t);
+  lab.setOnline(true);
+  lab.send({ from: 'owner@gmail.com', subject: 'Project question', body: 'What is the codename?' });
+  assert.equal(lab.processNext().state, 'completed');
+  const reply = lab.state.threads[0].messages.at(-1);
+  assert.match(reply.text, /^Synthetic preview\n/);
+  assert.match(reply.text, /No agent answered the request/);
+  assert.doesNotMatch(reply.text, /^Task completed\n/);
+});
+
 test('interrupted mock work is returned to the durable queue', (t) => {
   const { lab, file } = freshLab(t);
   lab.send({ from: 'owner@gmail.com', subject: 'Recover', body: 'Keep this queued.' });
