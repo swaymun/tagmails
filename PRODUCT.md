@@ -20,7 +20,7 @@ Give a local agent an email address. Queue work while the computer is offline, r
 
 ## Positioning
 
-The customer's own local Codex or Claude Code session performs the task. The hosted service supplies address routing, durable delivery, storage, and optional metered API-funded execution.
+The customer's own local Codex or Claude Code session performs the task. The hosted service supplies address routing, durable delivery, and storage. Metered API-funded execution may follow the first beta.
 
 ## Operating Context
 

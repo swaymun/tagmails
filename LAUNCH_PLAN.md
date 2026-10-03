@@ -65,6 +65,6 @@ Review first-task completion, time to first reply, second-turn rate, multiplayer
 - The user purchased `tagmails.com`. Resolve the active `TagMail` email-product naming risk and obtain trademark clearance before broadly launching the TagMails brand.
 - Choose production Bcc invitation behavior: verified Gmail Sent access or an authenticated owner invite; the current production path supports verified visible To/Cc grants.
 - Set retention and the final exchange price after measuring live delivery and model use.
-- Decide when API-funded model execution follows the subscription-backed local path.
+- Add API-funded model execution only after the subscription-backed beta proves local execution, delivery, and metering.
 
 Owner actions should be requested when a concrete purchase, terms acceptance, paid service, public deployment, or payment activation is ready for review. The current plan and local prototype do not require those actions to continue development.

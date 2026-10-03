@@ -2,7 +2,7 @@ export const TEST_EMAIL_CENTS = 5;
 
 export function testBillingEnabled(env) {
   return env.BILLING_TEST_MODE === 'true' &&
-    env.STRIPE_SECRET_KEY?.startsWith('sk_test_') &&
+    /^(?:sk|rk)_test_/.test(env.STRIPE_SECRET_KEY ?? '') &&
     env.STRIPE_WEBHOOK_SECRET?.startsWith('whsec_');
 }
 

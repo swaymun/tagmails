@@ -3,6 +3,7 @@ import { createHash, createHmac } from 'node:crypto';
 import test from 'node:test';
 import { bindings } from './bindings-fixture.mjs';
 import { handleTestWalletRequest, reconcileDueRefunds } from './billing-wallet.mjs';
+import { testBillingEnabled } from './email-charges.mjs';
 
 const origin = 'https://relay.test';
 const token = 'A'.repeat(43);
@@ -32,6 +33,13 @@ function signedEvent(event, secret = 'whsec_local') {
   const signature = createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');
   return request('/webhooks/stripe', 'POST', { 'Stripe-Signature': `t=${timestamp},v1=${signature}` }, body);
 }
+
+test('test billing accepts a restricted sandbox key but no live key', () => {
+  assert.equal(Boolean(testBillingEnabled({ BILLING_TEST_MODE: 'true',
+    STRIPE_SECRET_KEY: 'rk_test_tagmails', STRIPE_WEBHOOK_SECRET: 'whsec_local' })), true);
+  assert.equal(Boolean(testBillingEnabled({ BILLING_TEST_MODE: 'true',
+    STRIPE_SECRET_KEY: 'rk_live_tagmails', STRIPE_WEBHOOK_SECRET: 'whsec_local' })), false);
+});
 
 test('test Checkout credits once after a signed paid event and reverses a successful refund', async () => {
   const { env, sqlite } = fixture();
