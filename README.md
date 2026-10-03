@@ -2,6 +2,8 @@
 
 TagMails gives an existing local coding agent an email address. This repository currently contains the product plan and an **internal, synthetic Gmail-style test inbox**. A [private TagMails Site](https://tagmails.saimun-h-shahee.chatgpt.site) hosts the landing preview, owner-only Google sign-in and device setup, and run transcripts from a separate source checkout in `site/`; it does not deliver live email yet. By default the local prototype sends no email, invokes no model, changes no files on behalf of a message, and charges no money. Explicit one-job Codex and Claude read-only modes are available for local testing, plus an opt-in Codex mode that can edit one selected workspace.
 
+TagMails source is [MIT licensed](LICENSE). The separate Site checkout has its own MIT license. Third-party dependencies retain their own licenses. Neither checkout is a public source release yet.
+
 ## Run the internal inbox
 
 Requires Node.js 20.19 or newer and Rust for the optional worker.

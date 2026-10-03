@@ -35,7 +35,7 @@ The first beta uses Google sign-in with a verified Gmail address. Customers inst
 - Gmail users can react to an agent reply with a native emoji where Gmail offers the control. Inbound reaction mail is feedback on that message and does not start a task. Bcc recipients cannot react to the original Bcc message in Gmail.
 - Completion emails include a concise outcome, real checks and limitations, links and small previews where supported, and an accessible full trace.
 - The internal test site uses synthetic messages and must identify simulated work clearly.
-- TagMails is the chosen public brand; Wonder Email remains the internal project name. Domain acquisition, license, final pricing, and retention policy are open decisions.
+- TagMails is the chosen public brand; Wonder Email remains the internal project name. MIT is the selected source license. Domain acquisition, final pricing, and retention policy are open decisions.
 
 ## Brand Commitments
 

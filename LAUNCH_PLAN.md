@@ -18,7 +18,7 @@ The initial audience is developers and small teams already using Codex or Claude
 | Execution | Run one bounded Codex task and one bounded Claude task in the selected workspace; test offline queue recovery, interrupted work, approvals, and truthful failure mail. Record actual model, cost, and outcome. |
 | Customer controls | Show run status, a private owner receipt, device revocation, and clear retention/deletion behavior. Test cross-account isolation and recovery from duplicate provider events. A receipt is a summary until full trace capture is implemented. |
 | Pricing and payments | Decide the measured service price and refund behavior; reconcile an idempotent Stripe test-mode top-up and a duplicate webhook before any paid signup. Display a maximum for API-funded work if offered. |
-| Open source and setup | Choose a license; publish the exact deployable source, self-host instructions, security and limitation notes, and a tested copyable Codex/Claude setup prompt. GitHub says a public repository needs an explicit license to grant open-source permissions. [GitHub licensing guide](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/licensing-a-repository) |
+| Open source and setup | MIT is selected; publish the exact deployable source, self-host instructions, security and limitation notes, and a tested copyable Codex/Claude setup prompt. The license file alone is not a public source release. [GitHub licensing guide](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/licensing-a-repository) |
 
 The launch site, screenshots, examples, and video must be assembled from the same verified release candidate. Mark synthetic inbox fixtures as examples. Avoid launch claims about PR creation, artifact downloads, full traces, paid execution, or Bcc invitations until each works in the public build.
 
@@ -63,7 +63,6 @@ Review first-task completion, time to first reply, second-turn rate, multiplayer
 ## Decisions still needed
 
 - Confirm domain checkout and trademark clearance for TagMails before purchase or public branding of the address.
-- Choose the open-source license before publishing the repository.
 - Choose production Bcc invitation behavior: verified Gmail Sent access or an authenticated owner invite; the current production path supports verified visible To/Cc grants.
 - Set retention and the final exchange price after measuring live delivery and model use.
 - Decide when API-funded model execution follows the subscription-backed local path.
