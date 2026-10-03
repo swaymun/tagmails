@@ -50,6 +50,11 @@ async function devices() {
     list.append(row);
   }
 }
+async function billing() {
+  const data = await api('/api/billing');
+  $('balance').textContent = '$' + (data.balanceCents / 100).toFixed(2) + ' in test credits';
+  $('topup').hidden = !data.checkoutEnabled;
+}
 let googleReady = false;
 async function showGoogle() {
   if (googleReady) return;
@@ -88,8 +93,12 @@ async function refresh() {
     : 'Address reserved. Email delivery is not connected yet.';
   const next = new URLSearchParams(location.search).get('next');
   if (next?.startsWith('/runs/') && /^[0-9a-f-]{36}$/i.test(next.slice(6))) { location.assign(next); return; }
-  try { await devices(); status(''); }
-  catch { $('devices').textContent = 'Devices could not be loaded. Reload to try again.'; status('Account loaded, but device status is unavailable.'); }
+  try { await devices(); }
+  catch { $('devices').textContent = 'Devices could not be loaded. Reload to try again.'; }
+  try { await billing(); }
+  catch { $('balance').textContent = 'Test balance is unavailable. Reload to try again.'; }
+  status(new URLSearchParams(location.search).get('topup') === 'returned'
+    ? 'Stripe test checkout returned. Credits appear here only after the paid webhook is verified.' : '');
 }
 
 let pairCode = '';
@@ -136,6 +145,17 @@ document.addEventListener('DOMContentLoaded', () => {
     try { await navigator.clipboard.writeText(installCommand()); status('Start command copied. Run it from your TagMails checkout after pairing.'); }
     catch (error) { status(error.message === 'Enter an absolute workspace path on your Mac.' ? error.message : 'Copy failed. Select the command above to copy it.'); }
   });
+  $('topup').addEventListener('click', async () => {
+    $('topup').disabled = true;
+    try {
+      const data = await api('/api/billing/checkout', { method: 'POST' });
+      location.assign(data.checkoutUrl);
+    } catch (error) { status(error.message); $('topup').disabled = false; }
+  });
+  $('refreshBalance').addEventListener('click', async () => {
+    try { await billing(); status('Test balance refreshed.'); }
+    catch { status('Test balance is unavailable. Reload to try again.'); }
+  });
   $('signOut').addEventListener('click', async () => {
     try { await api('/api/auth/logout', { method: 'POST' }); await refresh(); }
     catch (error) { status(error.message); }
@@ -161,6 +181,9 @@ document.addEventListener('DOMContentLoaded', () => {
     <button id="copyInstall" class="secondary">Copy start command</button>
     <p class="muted">The installer checks the path and token, then registers a macOS LaunchAgent. It refuses to overwrite an existing TagMails agent. The checkout and local CLI tools must remain available on this Mac.</p></section>
   <section class="card"><h2>Devices</h2><div id="devices"></div></section>
+  <section class="card"><h2>Test credits</h2><p id="balance">Loading balance…</p>
+    <p class="muted">This is a non-spendable test wallet. The proposed exchange price and real payments are not enabled.</p>
+    <button id="topup" hidden>Add $10 in Stripe test mode</button> <button id="refreshBalance" class="secondary">Refresh balance</button></section>
 </div></main></body></html>`;
   return new Response(html, { headers: {
     'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',

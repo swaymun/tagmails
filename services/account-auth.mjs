@@ -12,7 +12,7 @@ function hash(value) { return createHash('sha256').update(value).digest('hex'); 
 function json(value, status = 200, headers = {}) {
   return Response.json(value, { status, headers: { 'Cache-Control': 'no-store', ...headers } });
 }
-function sameOrigin(request) {
+export function sameOrigin(request) {
   return request.headers.get('origin') === new URL(request.url).origin;
 }
 function sessionToken(request) {
@@ -57,7 +57,7 @@ export async function verifyGoogleCredential(credential, clientId, keys = google
   return { sub: payload.sub, email };
 }
 
-async function accountFor(request, env) {
+export async function accountFor(request, env) {
   const token = sessionToken(request);
   if (!token) return null;
   return env.DB.prepare(`SELECT a.id, a.owner_email, a.agent_email FROM sessions s

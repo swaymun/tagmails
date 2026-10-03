@@ -5,6 +5,7 @@ import { handleDeviceRequest } from './device-jobs.mjs';
 import { sendNextOutbox } from './outbox.mjs';
 import { handleAccountRequest } from './account-auth.mjs';
 import { accountPage } from './account-page.mjs';
+import { handleTestWalletRequest, reconcileDueRefunds } from './billing-wallet.mjs';
 
 const MAX_WEBHOOK_BYTES = 128_000;
 
@@ -167,6 +168,10 @@ export default {
   async fetch(request, env) {
     if (request.method === 'GET' && new URL(request.url).pathname === '/account') return accountPage();
     try {
+      const billing = await handleTestWalletRequest(request, env);
+      if (billing) return billing;
+    } catch { return new Response('Test wallet request failed', { status: 500 }); }
+    try {
       const account = await handleAccountRequest(request, env);
       if (account) return account;
     } catch { return new Response('Account request failed', { status: 500 }); }
@@ -178,6 +183,8 @@ export default {
     catch { return new Response('Inbound mail could not be accepted', { status: 500 }); }
   },
   async scheduled(_event, env) {
+    try { await reconcileDueRefunds(env); }
+    catch { console.error('Test wallet refund reconciliation is delayed'); }
     for (let index = 0; index < 10; index += 1) {
       const result = await sendNextOutbox(env);
       if (['idle', 'contended', 'accepted'].includes(result.state)) break;
