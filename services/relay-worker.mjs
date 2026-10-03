@@ -9,6 +9,7 @@ import { handleTestWalletRequest, reconcileDueRefunds } from './billing-wallet.m
 import { fundPendingTestEmails, reconcileTestEmailCharges, reservePendingTestEmails,
   testBillingEnabled } from './email-charges.mjs';
 import { deleteExpiredRunArtifacts } from './run-artifacts.mjs';
+import { deleteSettledInboundMime } from './inbound-retention.mjs';
 
 const MAX_WEBHOOK_BYTES = 128_000;
 
@@ -200,6 +201,8 @@ export default {
     catch { return new Response('Inbound mail could not be accepted', { status: 500 }); }
   },
   async scheduled(_event, env) {
+    try { await deleteSettledInboundMime(env); }
+    catch { console.error('Inbound MIME cleanup is delayed'); }
     try { await deleteExpiredRunArtifacts(env); }
     catch { console.error('Run artifact cleanup is delayed'); }
     try { await reconcileDueRefunds(env); }
