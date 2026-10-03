@@ -9,7 +9,7 @@
 
 Give an existing local agent an email address. The owner-only development pilot signs in with Google, connects Codex on a Mac, and sends work to the address. The service queues the message while the computer is offline. The local daemon resumes the appropriate agent session, completes the task, and sends a concise result in the same email thread with artifacts and a private run link. A reply continues that session. The daemon, relay, account site, and viewer are intended to be open source. A priced customer deployment remains gated on provider terms and billing verification. Claude subscription routing is not a beta offer; API-funded model execution is outside the first beta by user decision. [OpenAI plan-usage overview](https://developers.openai.com/siwc/token-sharing-open-source) · [Anthropic account guidance](https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account)
 
-The initial audience is people already using coding agents who want to assign a task from any email client. The first supported agent runtimes are Codex and Claude Code. The first platform for the daemon is macOS. The website handles account setup, balance, address and device status, memory controls, traces, and billing; routine work stays in email.
+The initial audience is people already using coding agents who want to assign a task from any email client. The verified live pilot runtime is Codex; Claude Code has a local adapter but is held from customer routing pending a permitted provider path. The first platform for the daemon is macOS. The website handles account setup, balance, address and device status, memory controls, traces, and billing; routine work stays in email.
 
 ## Journey and boundaries
 
