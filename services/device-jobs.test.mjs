@@ -18,7 +18,8 @@ function device(sqlite, accountId = 'account-1') {
 
 function envelope(body) { return JSON.parse(Buffer.from(body.payload, 'base64url').toString('utf8')); }
 
-async function inbound(env, id = 'email-1', body = 'Model: Luna\nRead the status without changing files.', parentIds = []) {
+async function inbound(env, id = 'email-1', body = 'Model: Luna\nRead the status without changing files.', parentIds = [],
+  expected = { accepted: true, duplicate: false }) {
   const messageId = `<${id}@gmail.com>`;
   const rawMime = Buffer.from([
     'From: owner@gmail.com', 'To: agent@wonder.test', 'Subject: Check routing',
@@ -33,7 +34,7 @@ async function inbound(env, id = 'email-1', body = 'Model: Luna\nRead the status
   const response = await handleInbound(new Request('https://relay.test/webhooks/resend', { method: 'POST', body: '{}' }), env, {
     inspect: async () => message,
   });
-  assert.deepEqual(await response.json(), { accepted: true, duplicate: false });
+  assert.deepEqual(await response.json(), expected);
 }
 
 async function call(env, token, path, body) {
@@ -122,6 +123,64 @@ test('a paired device receives a signed, account-scoped claim and completes it o
   assert.deepEqual(JSON.parse(objects.get(job.result_key).toString()).transcript, result.transcript);
 });
 
+test('same-thread turns wait and stay with the Mac that owns their local session', async () => {
+  const { env, sqlite } = bindings();
+  const firstDevice = device(sqlite);
+  const otherDevice = device(sqlite);
+  await inbound(env, 'turn-one');
+  await inbound(env, 'turn-two', 'Continue the task.', ['<turn-one@gmail.com>']);
+  const first = envelope((await call(env, firstDevice.token, 'claim')).body);
+  assert.equal(sqlite.prepare('SELECT device_id FROM threads WHERE id = ?').get(first.threadId).device_id, firstDevice.id);
+  assert.deepEqual((await call(env, otherDevice.token, 'claim')).body, { claimed: false });
+  assert.deepEqual((await call(env, firstDevice.token, 'claim')).body, { claimed: false });
+  assert.equal((await call(env, firstDevice.token, 'complete', {
+    jobId: first.jobId, leaseId: first.leaseId,
+    result: { state: 'completed', summary: 'First turn finished.' },
+  })).status, 200);
+  assert.deepEqual((await call(env, otherDevice.token, 'claim')).body, { claimed: false });
+  const second = envelope((await call(env, firstDevice.token, 'claim')).body);
+  assert.equal(second.threadId, first.threadId);
+  assert.notEqual(second.jobId, first.jobId);
+  assert.equal(second.request.body, 'Continue the task.');
+  await inbound(env, 'other-thread');
+  const independent = envelope((await call(env, otherDevice.token, 'claim')).body);
+  assert.notEqual(independent.threadId, first.threadId);
+});
+
+test('a reply to a revoked Mac gets a relay explanation without running or charging', async () => {
+  const { env, sqlite } = bindings();
+  const firstDevice = device(sqlite);
+  const otherDevice = device(sqlite);
+  await inbound(env);
+  const first = envelope((await call(env, firstDevice.token, 'claim')).body);
+  assert.equal((await call(env, firstDevice.token, 'complete', {
+    jobId: first.jobId, leaseId: first.leaseId,
+    result: { state: 'completed', summary: 'First turn finished.' },
+  })).status, 200);
+  assert.equal((await sendNextOutbox(env, {
+    sendEmail: async () => ({ data: { id: 'first-send' } }),
+    getSentEmail: async () => ({ data: { message_id: '<first-send@tagmails.test>' } }),
+  })).state, 'sent');
+  sqlite.prepare('UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE id = ?').run(firstDevice.id);
+  await inbound(env, 'after-revoke', 'Continue the same task.', ['<email-1@gmail.com>'],
+    { accepted: true, duplicate: false, threadUnavailable: true });
+  const stopped = sqlite.prepare(`SELECT j.state, j.model_json, j.result_key FROM jobs j
+    JOIN messages m ON m.id = j.message_id WHERE m.provider_email_id = ?`).get('after-revoke');
+  assert.equal(stopped.state, 'failed');
+  assert.equal(stopped.model_json, null);
+  assert.ok(stopped.result_key);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM test_email_charges').get().n, 0);
+  assert.deepEqual((await call(env, otherDevice.token, 'claim')).body, { claimed: false });
+  let reply;
+  const sent = await sendNextOutbox(env, {
+    sendEmail: async (payload) => { reply = payload; return { data: { id: randomUUID() } }; },
+    getSentEmail: async () => ({ data: { message_id: '<revoked-reply@tagmails.test>' } }),
+  });
+  assert.equal(sent.state, 'sent');
+  assert.match(reply.text, /Mac was revoked/);
+  assert.match(reply.text, /No local agent ran/);
+});
+
 test('device status confirms an active token without claiming queued mail', async () => {
   const { env, sqlite } = bindings();
   const paired = device(sqlite);
@@ -181,13 +240,14 @@ test('expired leases are reclaimed and a stale or different device cannot comple
   const first = envelope((await call(env, firstDevice.token, 'claim')).body);
   sqlite.prepare("UPDATE jobs SET lease_until = datetime('now', '-1 second')").run();
   assert.equal((await call(env, firstDevice.token, 'renew', { jobId: first.jobId, leaseId: first.leaseId })).status, 409);
-  const second = envelope((await call(env, secondDevice.token, 'claim')).body);
+  assert.deepEqual((await call(env, secondDevice.token, 'claim')).body, { claimed: false });
+  const second = envelope((await call(env, firstDevice.token, 'claim')).body);
   assert.equal(second.jobId, first.jobId);
   assert.notEqual(second.leaseId, first.leaseId);
   const result = { state: 'completed', summary: 'Finished after recovery.' };
-  assert.equal((await call(env, firstDevice.token, 'complete', { jobId: first.jobId, leaseId: first.leaseId, result })).status, 404);
-  assert.equal((await call(env, secondDevice.token, 'complete', { jobId: second.jobId, leaseId: first.leaseId, result })).status, 409);
-  assert.equal((await call(env, secondDevice.token, 'complete', { jobId: second.jobId, leaseId: second.leaseId, result })).status, 200);
+  assert.equal((await call(env, firstDevice.token, 'complete', { jobId: first.jobId, leaseId: first.leaseId, result })).status, 409);
+  assert.equal((await call(env, secondDevice.token, 'complete', { jobId: second.jobId, leaseId: second.leaseId, result })).status, 404);
+  assert.equal((await call(env, firstDevice.token, 'complete', { jobId: second.jobId, leaseId: second.leaseId, result })).status, 200);
   assert.equal(sqlite.prepare('SELECT attempts FROM jobs').get().attempts, 2);
   assert.equal(sqlite.prepare('SELECT count(*) n FROM outbox').get().n, 1);
 });

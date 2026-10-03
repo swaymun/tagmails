@@ -44,7 +44,11 @@ async function devices() {
       const button = document.createElement('button'); button.className = 'secondary'; button.textContent = 'Revoke';
       button.setAttribute('aria-label', 'Revoke ' + device.name);
       button.addEventListener('click', async () => {
-        try { await api('/api/account/devices/' + device.id + '/revoke', { method: 'POST' }); await devices(); }
+        try {
+          await api('/api/account/devices/' + device.id + '/revoke', { method: 'POST' });
+          await devices(); await threads();
+          status('Device revoked. Unfinished tasks on its threads stopped. Any reserved test credits were released. Start a new email thread for another Mac.');
+        }
         catch (error) { status(error.message); }
       });
       row.append(button);
@@ -60,6 +64,13 @@ async function threads() {
     const section = document.createElement('div'); section.className = 'thread';
     const title = document.createElement('h3'); title.textContent = thread.subject;
     section.append(title);
+    if (thread.device) {
+      const placement = document.createElement('p'); placement.className = 'muted';
+      placement.textContent = thread.device.revokedAt
+        ? 'This thread used ' + thread.device.name + ', which is revoked. Start a new email thread to use another Mac; its local agent memory cannot move automatically.'
+        : 'Agent session on ' + thread.device.name + '. Follow-up turns stay on this Mac.';
+      section.append(placement);
+    }
     for (const person of thread.participants) {
       const row = document.createElement('div'); row.className = 'device';
       const name = document.createElement('span');
@@ -296,7 +307,9 @@ h1{font-size:clamp(2rem,6vw,3.25rem);line-height:1.1;margin:.35em 0}h2{font-size
 .meta strong{display:block;color:#242424}.meta span{overflow-wrap:anywhere}li{margin:6px 0}.event{border-top:1px solid #e5e2db;padding:14px 0}.event:first-child{border-top:0}.event strong{display:block;font-size:.8rem;color:#526960;text-transform:uppercase;letter-spacing:.07em}.event p{white-space:pre-wrap;overflow-wrap:anywhere;margin:5px 0 0}.event.tool{color:#555;background:#f7f7f4;padding:12px;border-radius:8px;margin:8px 0}@media(max-width:520px){.meta{grid-template-columns:1fr}}
 </style></head><body><main><p class="eyebrow">tagmails. / run receipt</p><a href="/account">Account</a>
 <h1>${escapeHtml(run.subject)}</h1><span class="status">${title}</span>
-<section class="card"><h2>Outcome</h2><p>${escapeHtml(run.result?.summary ?? 'The agent has not submitted a result yet.')}</p>
+<section class="card"><h2>Outcome</h2><p>${escapeHtml(run.result?.summary ?? (run.state === 'failed'
+    ? 'This run stopped before an agent result was saved. If it may have edited files, inspect the workspace.'
+    : 'The agent has not submitted a result yet.'))}</p>
 ${run.delivery_state === 'uncertain' ? '<p class="muted">Email delivery needs review. This reply will not be sent again automatically.</p>' : ''}
 ${run.delivery_state === 'sent' ? '<p class="muted">Resend accepted the reply. Inbox delivery is reported separately below when available.</p>' : ''}
 ${run.deliveryRecipients?.length ? `<h2>Recipient delivery</h2>${list(run.deliveryRecipients.map((item) => `${item.recipient_email}: ${item.status}`))}<p class="muted">Only reported recipients are listed. Other recipients may still be pending or unconfirmed.</p>` : ''}

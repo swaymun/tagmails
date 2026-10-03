@@ -51,20 +51,31 @@ async function claim(env, device) {
     ? `AND (json_extract(j.model_json, '$.error') IS NOT NULL OR EXISTS
         (SELECT 1 FROM test_email_charges c WHERE c.job_id = j.id AND c.state = 'reserved'))`
     : '';
+  const eligible = `(j.state = 'queued' OR
+      (j.state = 'running' AND (j.lease_until IS NULL OR j.lease_until <= CURRENT_TIMESTAMP)))
+    ${funded}
+    AND (m.sender_email = a.owner_email OR EXISTS (
+      SELECT 1 FROM participants p WHERE p.thread_id = t.id AND p.email = m.sender_email AND p.revoked_at IS NULL))
+    AND NOT EXISTS (SELECT 1 FROM jobs earlier WHERE earlier.thread_id = j.thread_id
+      AND earlier.state IN ('queued', 'running') AND earlier.rowid < j.rowid)`;
+  // Pin the thread before claiming its first job. A second Mac cannot claim a
+  // later turn, and a lease retry stays on the Mac with the local session.
+  await env.DB.prepare(`UPDATE threads SET device_id = ? WHERE id = (
+    SELECT t.id FROM jobs j JOIN threads t ON t.id = j.thread_id
+    JOIN messages m ON m.id = j.message_id JOIN accounts a ON a.id = t.account_id
+    WHERE t.account_id = ? AND t.device_id IS NULL AND ${eligible}
+    ORDER BY j.created_at, j.rowid LIMIT 1
+  ) AND device_id IS NULL`).bind(device.id, device.account_id).run();
   const row = await env.DB.prepare(`UPDATE jobs SET
     state = 'running', device_id = ?, lease_id = ?,
     lease_until = datetime('now', '+${LEASE_SECONDS} seconds'), attempts = attempts + 1
     WHERE id = (
       SELECT j.id FROM jobs j JOIN threads t ON t.id = j.thread_id
       JOIN messages m ON m.id = j.message_id JOIN accounts a ON a.id = t.account_id
-      WHERE t.account_id = ? AND (j.state = 'queued' OR
-        (j.state = 'running' AND (j.lease_until IS NULL OR j.lease_until <= CURRENT_TIMESTAMP)))
-        ${funded}
-        AND (m.sender_email = a.owner_email OR EXISTS (
-          SELECT 1 FROM participants p WHERE p.thread_id = t.id AND p.email = m.sender_email AND p.revoked_at IS NULL))
-      ORDER BY j.created_at, j.id LIMIT 1
+      WHERE t.account_id = ? AND t.device_id = ? AND ${eligible}
+      ORDER BY j.created_at, j.rowid LIMIT 1
     ) RETURNING id, thread_id, message_id, lease_until, model_json`)
-    .bind(device.id, leaseId, device.account_id).first();
+    .bind(device.id, leaseId, device.account_id, device.id).first();
   if (!row) return json({ claimed: false });
   const message = await env.DB.prepare(`SELECT m.object_key, m.message_id, t.subject
     FROM messages m JOIN threads t ON t.id = m.thread_id

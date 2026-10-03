@@ -284,10 +284,22 @@ test('the private Site can show the owner account and manage only its paired dev
   const afterPoll = await (await handleAccountRequest(site('/api/site/devices'), env, options)).json();
   assert.match(afterPoll.devices[0].last_seen_at, /^\d{4}-\d\d-\d\d /);
   assert.equal(sqlite.prepare('SELECT revoked_at FROM devices WHERE id = ?').get(deviceId).revoked_at, null);
+  const stoppedThread = '66666666-6666-4666-8666-666666666666';
+  sqlite.prepare('INSERT INTO threads (id, account_id, subject, device_id) VALUES (?, ?, ?, ?)')
+    .run(stoppedThread, 'account-1', 'Interrupted work', deviceId);
+  sqlite.prepare(`INSERT INTO messages (id, account_id, thread_id, message_id, direction, sender_email, object_key)
+    VALUES (?, ?, ?, ?, 'inbound', ?, ?)`).run('stopped-message', 'account-1', stoppedThread,
+    '<stopped@gmail.com>', 'owner@gmail.com', 'inbound/stopped.eml');
+  sqlite.prepare(`INSERT INTO jobs (id, thread_id, message_id, state) VALUES (?, ?, ?, 'queued')`)
+    .run('stopped-job', stoppedThread, 'stopped-message');
+  sqlite.prepare(`INSERT INTO test_email_charges (job_id, account_id, amount_cents, state)
+    VALUES (?, ?, 5, 'reserved')`).run('stopped-job', 'account-1');
   assert.equal((await handleAccountRequest(site(`/api/site/devices/${deviceId}/revoke`, 'POST'), env, {
     verifyIdentity: async () => ({ sub: 'another-sub', email: 'other@gmail.com' }),
   })).status, 404);
   assert.equal((await handleAccountRequest(site(`/api/site/devices/${deviceId}/revoke`, 'POST'), env, options)).status, 200);
+  assert.equal(sqlite.prepare('SELECT state FROM jobs WHERE id = ?').get('stopped-job').state, 'failed');
+  assert.equal(sqlite.prepare('SELECT state FROM test_email_charges WHERE job_id = ?').get('stopped-job').state, 'released');
   assert.equal((await handleDeviceRequest(new Request('https://relay.test/api/device/claim', {
     method: 'POST', headers: { Authorization: `Bearer ${token}` },
   }), env)).status, 401);
@@ -317,7 +329,7 @@ test('the private Site lets only the Gmail owner manage reply access on an exist
   assert.equal(listed.headers.get('access-control-allow-origin'), env.SITE_ORIGIN);
   assert.deepEqual((await listed.json()).threads, [{ id: threadId, subject: 'Shared <review>',
     createdAt: sqlite.prepare('SELECT created_at FROM threads WHERE id = ?').get(threadId).created_at,
-    latestRunId: null, participants: [] }]);
+    latestRunId: null, device: null, participants: [] }]);
   const invitePath = `/api/site/threads/${threadId}/invite`;
   assert.equal((await route(site(invitePath, 'POST', { email: 'guest@gmail.com' }), {
     verifyIdentity: async () => ({ sub: 'another-sub', email: 'other@gmail.com' }),
@@ -328,6 +340,13 @@ test('the private Site lets only the Gmail owner manage reply access on an exist
   assert.deepEqual(await invited.json(), { invited: true });
   assert.deepEqual((await (await route(site('/api/site/threads'))).json()).threads[0].participants,
     [{ email: 'guest@gmail.com', revokedAt: null }]);
+  sqlite.prepare('INSERT INTO devices (id, account_id, token_hash, name) VALUES (?, ?, ?, ?)')
+    .run('thread-mac', 'account-1', 'thread-mac-token-hash', 'Work Mac');
+  sqlite.prepare('UPDATE threads SET device_id = ? WHERE id = ?').run('thread-mac', threadId);
+  assert.deepEqual((await (await route(site('/api/site/threads'))).json()).threads[0].device,
+    { name: 'Work Mac', revokedAt: null });
+  sqlite.prepare('UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE id = ?').run('thread-mac');
+  assert.ok((await (await route(site('/api/site/threads'))).json()).threads[0].device.revokedAt);
   assert.equal((await route(site(`/api/site/threads/${threadId}/revoke`, 'POST',
     { email: 'guest@gmail.com' }, 'https://other.test'))).status, 403);
   const revoked = await route(site(`/api/site/threads/${threadId}/revoke`, 'POST',

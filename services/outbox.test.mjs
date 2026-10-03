@@ -116,6 +116,38 @@ test('development sender replies to the account owner through the inbound alias'
   })).state, 'blocked');
 });
 
+test('a permanently missing outbox source blocks only that reply', async () => {
+  const fixture = bindings();
+  const { env, sqlite, objects } = fixture;
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  await queuedTurn(fixture, { number: 2, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  objects.delete('inbound/1.eml');
+  let sent = 0;
+  const provider = {
+    sendEmail: async () => ({ data: { id: `sent-${++sent}` } }),
+    getSentEmail: async (id) => ({ data: { message_id: `<${id}@tagmails.test>` } }),
+  };
+  assert.deepEqual(await sendNextOutbox(env, provider), { state: 'blocked', jobId: 'job-1' });
+  assert.equal(sqlite.prepare('SELECT state FROM outbox WHERE job_id = ?').get('job-1').state, 'blocked');
+  assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
+  assert.equal(sent, 1);
+});
+
+test('a transient storage read leaves the outbox queued for retry', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  const get = env.MAIL.get;
+  env.MAIL.get = async () => { throw new Error('Temporary R2 error'); };
+  await assert.rejects(sendNextOutbox(env), /Temporary R2 error/);
+  assert.equal(sqlite.prepare('SELECT state FROM outbox WHERE job_id = ?').get('job-1').state, 'queued');
+  env.MAIL.get = get;
+  assert.equal((await sendNextOutbox(env, {
+    sendEmail: async () => ({ data: { id: 'sent-after-retry' } }),
+    getSentEmail: async () => ({ data: { message_id: '<sent-after-retry@tagmails.test>' } }),
+  })).state, 'sent');
+});
+
 test('the result email names the model recorded at receipt, including an explicit override', async () => {
   const fixture = bindings();
   const { env, sqlite } = fixture;

@@ -66,6 +66,8 @@ A [self-hosting starter](SELF_HOSTING.md) now documents a separate Worker, D1, R
 
 **Daemon:** Rust owns pairing, device keys, queue polling, local persistence, launch-at-login, workspace boundaries, and recovery. Keep runtime-specific protocol handling in small adapters. Inspect Wonder's App Server item projection and reconciliation (`crates/wonderd/src/history.rs`, `crates/wonderd/src/lib.rs`), its `crates/wonder-app-server`, and `services/claude-runtime` before copying logic. Review T3 Code's transcript and projection paths for ideas and license terms; its repository is MIT licensed. [T3 Code](https://github.com/pingdotgg/t3code)
 
+The relay now offers only the oldest unfinished turn of a thread and pins that thread to its first claiming Mac. This prevents simultaneous turns on different local session stores. An expired lease can be reclaimed by that same Mac; revoking it stops unfinished jobs and releases reserved test credits. A later reply to the old thread gets a relay explanation without a model run or charge. The owner must start a new email thread on another Mac until a deliberate session-migration flow exists. Local two-device and revoked-thread tests cover these boundaries; live provider behavior remains unverified.
+
 ## Runtime and model paths
 
 | Mode | First implementation | Customer billing |

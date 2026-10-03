@@ -148,6 +148,10 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
       .bind(threadId, message.from).first();
     if (!participant) return Response.json({ accepted: false });
   }
+  const priorDevice = threadId ? await env.DB.prepare(`SELECT d.revoked_at FROM threads t
+    LEFT JOIN devices d ON d.id = t.device_id WHERE t.id = ? AND t.account_id = ?`)
+    .bind(threadId, account.id).first() : null;
+  const threadUnavailable = Boolean(priorDevice?.revoked_at);
   const id = randomUUID();
   const newThreadId = threadId ?? randomUUID();
   const guests = owner ? visibleGuests(message, ownerEmail, agent) : [];
@@ -164,9 +168,21 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
       ON CONFLICT(thread_id, email) DO UPDATE SET revoked_at = NULL`).bind(newThreadId, guest));
   }
   const jobId = randomUUID();
-  const model = chooseModel(message.body, account.default_model);
-  statements.push(env.DB.prepare("INSERT INTO jobs (id, thread_id, message_id, state, model_json) VALUES (?, ?, ?, 'queued', ?)")
-    .bind(jobId, newThreadId, id, JSON.stringify(model)));
+  const model = threadUnavailable ? null : chooseModel(message.body, account.default_model);
+  const unavailableResult = threadUnavailable ? {
+    runtime: 'relay', state: 'failed',
+    summary: owner
+      ? 'This thread\'s Mac was revoked, so the task did not run. Start a new email to your agent address to begin a new session.'
+      : 'This thread\'s Mac was revoked, so the task did not run. Ask the account owner to start a new email thread with you.',
+    checks: ['No local agent ran and no task credit was charged.'],
+  } : null;
+  const resultKey = unavailableResult ? `results/${account.id}/${jobId}/unavailable.json` : null;
+  if (unavailableResult) await env.MAIL.put(resultKey, JSON.stringify(unavailableResult), {
+    httpMetadata: { contentType: 'application/json' },
+  });
+  statements.push(env.DB.prepare('INSERT INTO jobs (id, thread_id, message_id, state, model_json, result_key) VALUES (?, ?, ?, ?, ?, ?)')
+    .bind(jobId, newThreadId, id, threadUnavailable ? 'failed' : 'queued', model && JSON.stringify(model), resultKey));
+  if (threadUnavailable) statements.push(env.DB.prepare('INSERT INTO outbox (job_id) VALUES (?)').bind(jobId));
   try {
     await env.DB.batch(statements);
   } catch (error) {
@@ -176,6 +192,7 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
     if (raced) return Response.json({ accepted: true, duplicate: true });
     throw error;
   }
+  if (threadUnavailable) return Response.json({ accepted: true, duplicate: false, threadUnavailable: true });
   if (testBillingEnabled(env)) {
     try { await reservePendingTestEmails(env, account.id); }
     catch { console.error('Test email credit reservation is delayed'); }

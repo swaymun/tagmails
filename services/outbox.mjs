@@ -8,6 +8,8 @@ import { selectedModelDetail } from './model-route.mjs';
 
 const MESSAGE_ID = /^<[^<>\s]+@[^<>\s]+>$/;
 
+class InvalidOutboxSource extends Error {}
+
 function publicOrigin(value) {
   if (!value) return null;
   try {
@@ -165,17 +167,24 @@ async function prepare(env, row) {
     FROM jobs j JOIN messages m ON m.id = j.message_id
     JOIN threads t ON t.id = j.thread_id JOIN accounts a ON a.id = t.account_id
     WHERE j.id = ? LIMIT 1`).bind(row.job_id).first();
-  if (!inbound) throw new Error('Outbox job has no inbound message');
+  if (!inbound || !row.result_key) throw new InvalidOutboxSource('Outbox job has no complete source');
   const raw = await env.MAIL.get(inbound.object_key);
   const saved = await env.MAIL.get(row.result_key);
-  if (!raw || !saved) throw new Error('Outbox source is missing from mail storage');
-  const request = await parseInbound(await raw.arrayBuffer(), inbound.agent_email, {
-    verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false,
-  });
+  if (!raw || !saved) throw new InvalidOutboxSource('Outbox source is missing from mail storage');
+  const rawBytes = await raw.arrayBuffer();
+  let request;
+  try {
+    request = await parseInbound(rawBytes, inbound.agent_email, {
+      verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false,
+    });
+  } catch { throw new InvalidOutboxSource('Stored inbound MIME cannot be parsed'); }
   if (request.messageId !== inbound.message_id || request.from !== inbound.sender_email) {
-    throw new Error('Outbox source no longer matches the verified inbound message');
+    throw new InvalidOutboxSource('Outbox source no longer matches the verified inbound message');
   }
-  const result = JSON.parse(new TextDecoder().decode(await saved.arrayBuffer()));
+  const resultBytes = await saved.arrayBuffer();
+  let result;
+  try { result = JSON.parse(new TextDecoder().decode(resultBytes)); }
+  catch { throw new InvalidOutboxSource('Stored result cannot be parsed'); }
   const owner = inbound.owner_email.toLowerCase();
   const agent = inbound.agent_email.toLowerCase();
   if (request.from !== owner) {
@@ -222,13 +231,15 @@ async function prepare(env, row) {
     links: transcriptUrl && (ownerCanOpen || participantTranscriptReady)
       ? [{ label: sharedWithParticipant && !participantTranscriptReady ? 'Run transcript (owner only)' : 'Run transcript',
         url: transcriptUrl }] : [],
-    note: result.state === 'needs_approval'
+    note: result.runtime === 'relay'
+      ? 'No local agent ran for this email.'
+      : result.state === 'needs_approval'
       ? 'No action was approved automatically. Review the request and local permissions before replying or retrying.'
       : writeRun && result.state === 'completed'
         ? 'This reply is the agent\'s report. Verify local file changes before relying on them.'
       : 'This summary came from your connected local agent.',
   });
-  if (/[\r\n]/.test(inbound.subject)) throw new Error('Outbox subject contains a line break');
+  if (/[\r\n]/.test(inbound.subject)) throw new InvalidOutboxSource('Outbox subject contains a line break');
   return {
     from: testSender ?? agent, ...(testSender ? { replyTo: agent } : {}),
     to, ...(cc.length ? { cc } : {}),
@@ -298,7 +309,17 @@ export async function sendNextOutbox(env, {
     JOIN accounts a ON a.id = t.account_id
     WHERE o.state = 'queued' AND a.active = 1 ORDER BY o.updated_at, o.job_id LIMIT 1`).bind().first();
   if (!row) return { state: 'idle' };
-  const payload = await prepare(env, row);
+  let payload;
+  try { payload = await prepare(env, row); }
+  catch (error) {
+    if (!(error instanceof InvalidOutboxSource)) throw error;
+    const blocked = await env.DB.prepare("UPDATE outbox SET state = 'blocked', updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'queued' RETURNING job_id")
+      .bind(row.job_id).first();
+    if (!blocked) return { state: 'contended' };
+    await releaseTestEmail(env, row.job_id);
+    console.error('Outbox source needs operator review', row.job_id, error.message);
+    return { state: 'blocked', jobId: row.job_id };
+  }
   if (!payload) {
     await env.DB.prepare("UPDATE outbox SET state = 'blocked', updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'queued'")
       .bind(row.job_id).run();

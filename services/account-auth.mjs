@@ -173,9 +173,11 @@ async function accountDevices(env, accountId) {
 async function accountThreads(env, accountId) {
   const rows = await env.DB.prepare(`SELECT t.id, t.subject, t.created_at,
     (SELECT j.id FROM jobs j WHERE j.thread_id = t.id
-      ORDER BY j.created_at DESC, j.id DESC LIMIT 1) AS latest_run_id,
+      ORDER BY j.created_at DESC, j.rowid DESC LIMIT 1) AS latest_run_id,
+    d.name AS device_name, d.revoked_at AS device_revoked_at,
     p.email AS participant_email, p.revoked_at
-    FROM threads t LEFT JOIN participants p ON p.thread_id = t.id
+    FROM threads t LEFT JOIN devices d ON d.id = t.device_id
+    LEFT JOIN participants p ON p.thread_id = t.id
     WHERE t.account_id = ? ORDER BY t.created_at DESC, t.id DESC, p.email LIMIT 200`)
     .bind(accountId).all();
   const threads = [];
@@ -183,7 +185,9 @@ async function accountThreads(env, accountId) {
     let thread = threads.at(-1);
     if (thread?.id !== row.id) {
       thread = { id: row.id, subject: row.subject, createdAt: row.created_at,
-        latestRunId: row.latest_run_id, participants: [] };
+        latestRunId: row.latest_run_id, device: row.device_name
+          ? { name: row.device_name, revokedAt: row.device_revoked_at } : null,
+        participants: [] };
       threads.push(thread);
     }
     if (row.participant_email) thread.participants.push({ email: row.participant_email, revokedAt: row.revoked_at });
@@ -192,8 +196,18 @@ async function accountThreads(env, accountId) {
 }
 
 async function revokeAccountDevice(env, accountId, deviceId) {
-  const result = await env.DB.prepare('UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE id = ? AND account_id = ? AND revoked_at IS NULL')
-    .bind(deviceId, accountId).run();
+  const [result] = await env.DB.batch([
+    env.DB.prepare('UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE id = ? AND account_id = ? AND revoked_at IS NULL')
+      .bind(deviceId, accountId),
+    env.DB.prepare(`UPDATE jobs SET state = 'failed', lease_until = NULL
+      WHERE state IN ('queued', 'running') AND thread_id IN (
+        SELECT id FROM threads WHERE account_id = ? AND device_id = ?)`).bind(accountId, deviceId),
+    env.DB.prepare(`UPDATE test_email_charges SET state = 'released', updated_at = CURRENT_TIMESTAMP
+      WHERE state = 'reserved' AND job_id IN (
+        SELECT j.id FROM jobs j JOIN threads t ON t.id = j.thread_id
+        WHERE t.account_id = ? AND t.device_id = ? AND j.state = 'failed'
+          AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.job_id = j.id))`).bind(accountId, deviceId),
+  ]);
   return (result.meta?.changes ?? result.changes) ? { revoked: true } : null;
 }
 
