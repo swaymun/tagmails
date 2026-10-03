@@ -4,7 +4,7 @@ import { bindings } from './bindings-fixture.mjs';
 import { sendNextOutbox } from './outbox.mjs';
 import { handleInbound } from './relay-worker.mjs';
 
-function queuedTurn({ env, sqlite }, { number, from, to, cc = [], references = [], accountId = 'account-1', threadId = 'thread-1', jobId = `job-${number}` }) {
+function queuedTurn({ env, sqlite }, { number, from, to, cc = [], references = [], accountId = 'account-1', threadId = 'thread-1', jobId = `job-${number}`, model = null }) {
   const id = `inbound-${number}`;
   const messageId = `<inbound-${number}@gmail.com>`;
   const raw = [
@@ -19,8 +19,8 @@ function queuedTurn({ env, sqlite }, { number, from, to, cc = [], references = [
   sqlite.prepare(`INSERT INTO messages
     (id, account_id, thread_id, provider_email_id, message_id, direction, sender_email, object_key)
     VALUES (?, ?, ?, ?, ?, 'inbound', ?, ?)`).run(id, accountId, threadId, `provider-${number}`, messageId, from, `inbound/${number}.eml`);
-  sqlite.prepare(`INSERT INTO jobs (id, thread_id, message_id, state, result_key)
-    VALUES (?, ?, ?, 'completed', ?)`).run(jobId, threadId, id, `results/${number}.json`);
+  sqlite.prepare(`INSERT INTO jobs (id, thread_id, message_id, state, result_key, model_json)
+    VALUES (?, ?, ?, 'completed', ?, ?)`).run(jobId, threadId, id, `results/${number}.json`, model && JSON.stringify(model));
   sqlite.prepare('INSERT INTO outbox (job_id) VALUES (?)').run(jobId);
   return Promise.all([
     env.MAIL.put(`inbound/${number}.eml`, raw),
@@ -111,6 +111,23 @@ test('development sender replies to the account owner through the inbound alias'
   assert.equal((await sendNextOutbox(env, {
     sendEmail: async () => { throw new Error('Test sender must not email participants'); },
   })).state, 'blocked');
+});
+
+test('the result email names the model recorded at receipt, including an explicit override', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'],
+    model: { id: 'claude-sonnet-5-5', effort: 'medium', source: 'explicit' } });
+  // An account preference change after receipt must not relabel a queued result.
+  sqlite.prepare('UPDATE accounts SET default_model = ? WHERE id = ?').run('gpt-6.1-sol', 'account-1');
+  let sent;
+  assert.equal((await sendNextOutbox(env, {
+    sendEmail: async (payload) => { sent = payload; return { data: { id: 'model-sent-1' } }; },
+    getSentEmail: async () => ({ data: { message_id: '<model-sent-1@tagmails.test>' } }),
+  })).state, 'sent');
+  assert.match(sent.text, /Selected model: Claude Code Sonnet 5\.5 \(medium; requested in this email\)/);
+  assert.match(sent.html, /Selected model: Claude Code Sonnet 5\.5 \(medium; requested in this email\)/);
+  assert.doesNotMatch(sent.text, /GPT-6\.1 Sol/);
 });
 
 test('a denied local action asks for review without inventing an approval screen', async () => {

@@ -5,6 +5,22 @@ import { renderResult } from '../apps/mock-inbox/mail.mjs';
 import { releaseTestEmail, settleTestEmail } from './email-charges.mjs';
 
 const MESSAGE_ID = /^<[^<>\s]+@[^<>\s]+>$/;
+const MODEL_LABELS = {
+  'gpt-6.1-sol': ['Codex GPT-6.1 Sol', 'medium'],
+  'claude-sonnet-5-5': ['Claude Code Sonnet 5.5', 'medium'],
+  'gpt-6-luna': ['Codex GPT-6 Luna', 'low'],
+};
+
+function selectedModelDetail(json) {
+  if (!json) return null;
+  try {
+    const model = JSON.parse(json);
+    const [label, effort] = MODEL_LABELS[model.id] ?? [];
+    if (!label || model.effort !== effort || !['default', 'explicit'].includes(model.source)) return null;
+    const source = model.source === 'explicit' ? 'requested in this email' : 'account default';
+    return `Selected model: ${label} (${effort}; ${source}).`;
+  } catch { return null; }
+}
 
 function publicOrigin(value) {
   if (!value) return null;
@@ -19,7 +35,7 @@ function publicOrigin(value) {
 
 async function prepare(env, row) {
   const inbound = await env.DB.prepare(`SELECT m.object_key, m.message_id, m.sender_email,
-      t.subject, a.owner_email, a.agent_email
+      t.subject, a.owner_email, a.agent_email, j.model_json
     FROM jobs j JOIN messages m ON m.id = j.message_id
     JOIN threads t ON t.id = j.thread_id JOIN accounts a ON a.id = t.account_id
     WHERE j.id = ? LIMIT 1`).bind(row.job_id).first();
@@ -70,8 +86,10 @@ async function prepare(env, row) {
   const fileNote = result.artifactIds?.length && ownerCanOpen && siteOrigin
     ? [`${result.artifactIds.length} file${result.artifactIds.length === 1 ? '' : 's'} available on the private run page for seven days.`]
     : [];
+  const selectedModel = selectedModelDetail(inbound.model_json);
   const rendered = renderResult({
-    state: result.state, summary: result.summary, details: [...(result.details ?? []), ...fileNote], checks: result.checks,
+    state: result.state, summary: result.summary,
+    details: [...(selectedModel ? [selectedModel] : []), ...(result.details ?? []), ...fileNote], checks: result.checks,
     links: transcriptUrl && ownerCanOpen ? [{ label: 'Run transcript', url: transcriptUrl }] : [],
     note: result.state === 'needs_approval'
       ? 'No action was approved automatically. Review the request and local permissions before replying or retrying.'
