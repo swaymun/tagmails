@@ -64,6 +64,20 @@ test('verified Resend metadata and raw MIME yield a task without granting unobse
   assert.equal(message.rawMime.toString(), item.raw);
 });
 
+test('a provider-returned signed CloudFront URL can supply the raw MIME without redirects', async () => {
+  const item = fixture();
+  const url = 'https://d123example.cloudfront.net/receiving/raw/synthetic?Signature=abc';
+  const message = await inspectResendInbound({ ...options(item),
+    getReceivedEmail: async () => ({ ...item.email, raw: { download_url: url } }),
+    fetchRaw: async (actual, request) => {
+      assert.equal(actual, url);
+      assert.equal(request.redirect, 'error');
+      return new Response(item.raw, { status: 200 });
+    },
+  });
+  assert.equal(message.providerEmailId, id);
+});
+
 test('a signed sent event carries the job tag and provider identifiers', async () => {
   const item = fixture();
   const jobId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -156,5 +170,14 @@ test('Resend intake rejects tampering, mismatched retrieval, failed authenticati
   await assert.rejects(inspectResendInbound({ ...options(item), rawPayload: item.rawPayload + ' ' }));
   await assert.rejects(inspectResendInbound({ ...options(item), getReceivedEmail: async () => ({ ...item.email, message_id: '<different@example.test>' }) }), /does not match/);
   await assert.rejects(inspectResendInbound({ ...options(item), getReceivedEmail: async () => ({ ...item.email, authentication: { dmarc: 'fail' } }) }), /DMARC/);
-  await assert.rejects(inspectResendInbound({ ...options(item), getReceivedEmail: async () => ({ ...item.email, raw: { download_url: 'https://attacker.example/raw' } }) }), /outside the provider domain/);
+  for (const url of [
+    'https://attacker.example/raw', 'https://resend.com.attacker.example/raw',
+    'https://d123example.cloudfront.net.attacker.example/raw',
+    'http://d123example.cloudfront.net/raw',
+    'https://user:secret@d123example.cloudfront.net/raw',
+  ]) {
+    await assert.rejects(inspectResendInbound({ ...options(item), getReceivedEmail: async () => ({
+      ...item.email, raw: { download_url: url },
+    }) }), /outside approved provider hosts/);
+  }
 });

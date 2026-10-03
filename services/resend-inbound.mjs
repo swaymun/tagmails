@@ -108,8 +108,10 @@ export async function inspectResendInbound({ rawPayload, headers, webhookSecret,
     throw new Error('Sender authentication did not pass DMARC or aligned DKIM');
   }
   const rawUrl = new URL(email.raw?.download_url || '');
-  if (rawUrl.protocol !== 'https:' || !(rawUrl.hostname === 'resend.com' || rawUrl.hostname.endsWith('.resend.com'))) {
-    throw new Error('Resend raw email URL is outside the provider domain');
+  const providerHost = rawUrl.hostname === 'resend.com' || rawUrl.hostname.endsWith('.resend.com') ||
+    /^[a-z0-9-]+\.cloudfront\.net$/i.test(rawUrl.hostname);
+  if (rawUrl.protocol !== 'https:' || !providerHost || rawUrl.username || rawUrl.password || rawUrl.port) {
+    throw new Error('Resend raw email URL is outside approved provider hosts');
   }
   const rawMime = await boundedRaw(await fetchRaw(rawUrl.href, { redirect: 'error' }));
   const parsed = await parseInbound(rawMime, agent, {
