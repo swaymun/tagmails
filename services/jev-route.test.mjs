@@ -34,6 +34,26 @@ test('an exact directive stays authoritative without a Jev call', async () => {
   assert.equal(calls, 0);
 });
 
+test('private pilot uses available Sol without silently replacing an exact 6.1 request', async () => {
+  const pilot = { pilotCodexModel: 'gpt-6-sol' };
+  assert.deepEqual(await routeModel('Review this file.', 'gpt-6.1-sol', pilot),
+    { id: 'gpt-6-sol', effort: 'medium', source: 'pilot' });
+  assert.deepEqual(await routeModel('Use Sol for this review.', 'gpt-6.1-sol', {
+    ...pilot, apiKey: 'test-key', fetcher: jev('codex', 0.96),
+  }), { id: 'gpt-6-sol', effort: 'medium', source: 'classified' });
+  assert.deepEqual(await routeModel('Use GPT-6.1 Sol for this review.', 'gpt-6.1-sol', {
+    ...pilot, apiKey: 'test-key', fetcher: jev('codex61', 0.96),
+  }), { id: 'gpt-6.1-sol', effort: 'medium', source: 'classified' });
+  assert.deepEqual(await routeModel('Model: GPT-6.1 Sol\nReview this.', 'gpt-6.1-sol', pilot),
+    { id: 'gpt-6.1-sol', effort: 'medium', source: 'explicit' });
+  assert.deepEqual(await routeModel('Model: Codex\nReview this.', 'gpt-6.1-sol', pilot),
+    { id: 'gpt-6-sol', effort: 'medium', source: 'explicit' });
+  assert.deepEqual(await routeModel('Continue the review.', 'gpt-6.1-sol', {
+    ...pilot, priorModel: { id: 'gpt-6-sol', effort: 'high' },
+    apiKey: 'test-key', fetcher: jev('none', 0.97),
+  }), { id: 'gpt-6-sol', effort: 'high', source: 'thread' });
+});
+
 test('a collapsed leading Model line is classified and otherwise uses the saved default', async () => {
   assert.deepEqual(await routeModel('Model: Luna please review this.', 'gpt-6.1-sol', {
     apiKey: 'test-key', fetcher: jev('luna', 0.94),

@@ -43,8 +43,12 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   if (message.method === 'model/list') send({ id: message.id, result: { data: [
     { id: 'gpt-6-luna', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'].map(reasoningEffort => ({ reasoningEffort })),
       serviceTiers: [{ id: 'priority', name: 'Fast' }] },
+    { id: 'gpt-6-sol', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map(reasoningEffort => ({ reasoningEffort })),
+      serviceTiers: [{ id: 'priority', name: 'Fast' }] },
+    ...(mode === 'missing-6.1' ? [] : [
     { id: 'gpt-6.1-sol', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map(reasoningEffort => ({ reasoningEffort })),
       serviceTiers: [{ id: 'priority', name: 'Fast' }] },
+    ]),
   ] } });
   if (message.method === 'account/read') send({ id: message.id, result: {
     account: { type: 'chatgpt', email: mode === 'account-mismatch' ? 'another@gmail.com' : 'owner@gmail.com', planType: 'pro' },
@@ -221,6 +225,24 @@ test('Codex rejects a speed tier missing from its live model catalog', async (t)
   assert.equal(fs.existsSync(calls), false);
 });
 
+test('Codex runs listed Sol and gives a no-charge clarification for absent 6.1', async (t) => {
+  const { calls } = setup(t, 'missing-6.1');
+  const unavailable = claim('job-sol61', 'thread-sol61');
+  unavailable.model = { id: 'gpt-6.1-sol', effort: 'medium' };
+  const notice = await runClaim(unavailable);
+  assert.equal(notice.state, 'needs_clarification');
+  assert.match(notice.summary, /not available on this Mac/);
+  assert.equal(fs.existsSync(calls), false);
+  const available = claim('job-sol6', 'thread-sol6');
+  available.model = { id: 'gpt-6-sol', effort: 'medium' };
+  const result = await runClaim(available);
+  assert.equal(result.state, 'completed');
+  const turn = fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse)
+    .find((item) => item.method === 'turn/start');
+  assert.equal(turn.params.model, 'gpt-6-sol');
+  assert.equal(turn.params.effort, 'medium');
+});
+
 test('Codex adapter accepts an unphased legacy answer as the final response', async (t) => {
   setup(t, 'legacy-phase');
   const result = await runClaim(claim('job-legacy', 'thread-legacy'));
@@ -337,6 +359,24 @@ test('opt-in Codex write mode uses its restricted profile and prompt', async (t)
   assert.equal(events[1].params.cwd, fs.realpathSync(workspace));
   assert.match(events[1].params.input[0].text, /You may read and change files only in the selected workspace/);
   assert.match(fs.readFileSync(path.join(home, 'config.toml'), 'utf8'), /"\." = "write"/);
+});
+
+test('full Codex access requires the verified owner and activates the full profile', async (t) => {
+  const { home, calls } = setup(t);
+  const task = claim('job-full', 'thread-full', 'Read the workspace note.');
+  task.request.fromOwner = false;
+  assert.equal((await runClaim(task, { full: true })).state, 'needs_clarification');
+  assert.equal(fs.existsSync(calls), false);
+  task.request.fromOwner = true;
+  const result = await runClaim(task, { full: true });
+  assert.equal(result.state, 'completed');
+  assert.equal(result.runtime, 'codex-app-server-full');
+  const events = fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(events[0].params.permissions, ':danger-full-access');
+  assert.equal(events[0].params.approvalPolicy, 'never');
+  assert.equal(events[1].params.approvalPolicy, 'never');
+  assert.match(events[1].params.input[0].text, /full local file and network access/);
+  assert.match(fs.readFileSync(path.join(home, 'config.toml'), 'utf8'), /default_permissions = ":danger-full-access"/);
 });
 
 test('Codex write mode declines access expansion and reports a waiting result', async (t) => {

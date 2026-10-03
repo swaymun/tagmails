@@ -108,7 +108,7 @@ fn mock_result(claim: &Value, attachment_evidence: Vec<String>) -> Value {
 
 fn agent_result(claim: &Value, base: &str, runtime: &str) -> Result<Value, Box<dyn Error>> {
     let file = match runtime {
-        "codex-readonly" | "codex-write" => "codex-runner.mjs",
+        "codex-readonly" | "codex-write" | "codex-full" => "codex-runner.mjs",
         "claude-readonly" | "claude-write" => "claude-runner.mjs",
         _ => return Err("Unsupported local agent runtime".into()),
     };
@@ -146,6 +146,7 @@ fn agent_result(claim: &Value, base: &str, runtime: &str) -> Result<Value, Box<d
 fn runtime_label(runtime: &str) -> &'static str {
     match runtime {
         "codex-write" => "codex-app-server-write",
+        "codex-full" => "codex-app-server-full",
         "codex-readonly" => "codex-app-server-readonly",
         "claude-write" => "claude-cli-write",
         _ => "claude-cli-readonly",
@@ -329,10 +330,11 @@ fn relay_runtime(model: &str, access: &str) -> Result<&'static str, Box<dyn Erro
     ) {
         (true, false, "read") => Ok("codex-readonly"),
         (true, false, "write") => Ok("codex-write"),
+        (true, false, "full") => Ok("codex-full"),
         (false, true, "read") => Ok("claude-readonly"),
         (false, true, "write") => Ok("claude-write"),
-        (_, _, "read" | "write") => Err("Relay claim has an unsupported model".into()),
-        _ => Err("TAGMAILS_WORKSPACE_ACCESS must be read or write".into()),
+        (_, _, "read" | "write" | "full") => Err("Relay claim has an unsupported model or access mode".into()),
+        _ => Err("TAGMAILS_WORKSPACE_ACCESS must be read, write, or full".into()),
     }
 }
 
@@ -585,8 +587,8 @@ fn run_relay(base: &str) -> Result<(), Box<dyn Error>> {
     }
     validate_relay_base(base)?;
     let access = env::var("TAGMAILS_WORKSPACE_ACCESS").unwrap_or_else(|_| "read".into());
-    if access != "read" && access != "write" {
-        return Err("TAGMAILS_WORKSPACE_ACCESS must be read or write".into());
+    if access != "read" && access != "write" && access != "full" {
+        return Err("TAGMAILS_WORKSPACE_ACCESS must be read, write, or full".into());
     }
     let workspace = env::var("TAGMAILS_WORKSPACE")?;
     if !Path::new(&workspace).is_absolute() || !Path::new(&workspace).is_dir() {
@@ -716,6 +718,8 @@ mod tests {
             relay_runtime("gpt-6.1-sol", "write").unwrap(),
             "codex-write"
         );
+        assert_eq!(relay_runtime("gpt-6-sol", "full").unwrap(), "codex-full");
+        assert!(relay_runtime("claude-sonnet-5-5", "full").is_err());
         assert_eq!(
             relay_runtime("claude-sonnet-5-5", "write").unwrap(),
             "claude-write"
@@ -823,11 +827,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     if runtime != "mock"
         && runtime != "codex-readonly"
         && runtime != "codex-write"
+        && runtime != "codex-full"
         && runtime != "claude-readonly"
         && runtime != "claude-write"
     {
         return Err(
-            "TAGMAILS_RUNTIME must be mock, codex-readonly, codex-write, claude-readonly, or claude-write".into(),
+            "TAGMAILS_RUNTIME must be mock, codex-readonly, codex-write, codex-full, claude-readonly, or claude-write".into(),
         );
     }
     let selected_job = if runtime != "mock" {

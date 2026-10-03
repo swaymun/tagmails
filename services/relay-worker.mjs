@@ -157,8 +157,13 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
   if (message.sent) return Response.json(await reconcileSentEvent(env, message.sent));
   if (message.deliveryOutcome) return Response.json(await recordDeliveryOutcome(env, message.deliveryOutcome));
   const agent = (message.agentAddress ?? '').trim().toLowerCase();
-  const account = await env.DB.prepare(`SELECT a.id, a.owner_email, a.default_model FROM account_agent_addresses aa
-    JOIN accounts a ON a.id = aa.account_id WHERE aa.email = ? AND a.active = 1`)
+  const account = await env.DB.prepare(`SELECT a.id, a.owner_email,
+    COALESCE(p.default_model, a.default_model) AS default_model,
+    COALESCE(p.default_effort, 'medium') AS default_effort,
+    COALESCE(p.default_speed, 'standard') AS default_speed
+    FROM account_agent_addresses aa JOIN accounts a ON a.id = aa.account_id
+    LEFT JOIN account_preferences p ON p.account_id = a.id
+    WHERE aa.email = ? AND a.active = 1`)
     .bind(agent).first();
   if (!account) return Response.json({ accepted: false });
   const duplicate = await env.DB.prepare('SELECT id FROM messages WHERE account_id = ? AND (provider_email_id = ? OR message_id = ?) LIMIT 1')
@@ -210,6 +215,8 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
   const priorModel = previousJob?.model_json ? JSON.parse(previousJob.model_json) : null;
   let model = threadUnavailable ? null : await routeModel(message.body, account.default_model, {
     apiKey: env.TYPESAFE_API_KEY, fetcher: fetchModel, priorModel, subject: message.subject,
+    pilotCodexModel: env.PILOT_CODEX_MODEL,
+    defaultEffort: account.default_effort, defaultSpeed: account.default_speed,
   });
   if (model?.id === 'claude-sonnet-5-5' && env.CLAUDE_ROUTE_ENABLED !== 'true') {
     model = { error: 'Claude Code is unavailable in this pilot. Please ask for Codex or Luna.' };

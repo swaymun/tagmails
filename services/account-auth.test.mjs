@@ -130,6 +130,22 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   }), env, options);
   assert.equal((await siteAccount.json()).defaultModel, 'gpt-6.1-sol');
   assert.equal(siteAccount.headers.get('access-control-allow-origin'), customOrigin);
+  const preferencesRequest = (origin, method = 'GET', body) => new Request('https://relay.test/api/site/preferences', {
+    method, headers: { Origin: origin, Authorization: 'Bearer test',
+      ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  assert.deepEqual(await (await handleAccountRequest(preferencesRequest(customOrigin), env, options)).json(), {
+    model: 'gpt-6.1-sol', effort: 'medium', speed: 'standard',
+  });
+  const changedPreferences = await handleAccountRequest(preferencesRequest(customOrigin, 'POST', {
+    model: 'gpt-6-luna', effort: 'low', speed: 'fast',
+  }), env, options);
+  assert.equal(changedPreferences.status, 200);
+  assert.deepEqual(await changedPreferences.json(), { model: 'gpt-6-luna', effort: 'low', speed: 'fast' });
+  assert.equal((await handleAccountRequest(preferencesRequest('https://attacker.test', 'POST', {
+    model: 'gpt-6-sol', effort: 'medium', speed: 'standard',
+  }), env, options)).status, 403);
 
   const codeResponse = await handleAccountRequest(request('/api/account/pairing-code', 'POST', {}, cookie), env, options);
   const { code } = await codeResponse.json();

@@ -68,7 +68,7 @@ function main() {
   const relay = relayUrl(option('--relay'));
   const workspace = existingAbsolute(option('--workspace'), 'Workspace', 'directory');
   const access = process.argv.includes('--workspace-access') ? option('--workspace-access') : 'read';
-  if (!['read', 'write'].includes(access)) throw new Error('Workspace access must be read or write');
+  if (!['read', 'write', 'full'].includes(access)) throw new Error('Workspace access must be read, write, or full');
   const token = existingAbsolute(option('--token-file'), 'Device token', 'file');
   const binary = existingAbsolute(process.argv.includes('--bin') ? option('--bin') : DEFAULT_BIN, 'Daemon binary', 'file');
   if (token.stat.uid !== process.getuid()) throw new Error('Device token file must belong to the current user');

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-test('LaunchAgent preview defaults to read-only and requires an explicit write choice', (t) => {
+test('LaunchAgent preview defaults to read-only and keeps broader access explicit', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tagmails-launchagent-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const workspace = path.join(root, 'workspace');
@@ -31,7 +31,10 @@ test('LaunchAgent preview defaults to read-only and requires an explicit write c
   const write = preview(['--workspace-access', 'write']);
   assert.equal(write.status, 0, write.stderr);
   assert.match(write.stdout, /<key>TAGMAILS_WORKSPACE_ACCESS<\/key><string>write<\/string>/);
+  const full = preview(['--workspace-access', 'full']);
+  assert.equal(full.status, 0, full.stderr);
+  assert.match(full.stdout, /<key>TAGMAILS_WORKSPACE_ACCESS<\/key><string>full<\/string>/);
   const invalid = preview(['--workspace-access', 'all']);
   assert.equal(invalid.status, 1);
-  assert.match(invalid.stderr, /Workspace access must be read or write/);
+  assert.match(invalid.stderr, /Workspace access must be read, write, or full/);
 });

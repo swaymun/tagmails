@@ -251,10 +251,10 @@ document.addEventListener('DOMContentLoaded', () => {
   <section class="card"><h2>Account</h2><p>Verified sender<br><span id="ownerEmail" class="address"></span></p>
     <p>Agent address<br><span id="agentEmail" class="address"></span></p><p id="delivery" class="muted"></p>
     <label for="defaultModel">Default model for new task emails</label>
-    <select id="defaultModel"><option value="gpt-6.1-sol">Codex · GPT-6.1 Sol · medium</option>
+    <select id="defaultModel"><option value="gpt-6.1-sol">Codex Sol · medium</option>
       <option value="claude-sonnet-5-5" disabled>Claude Code · on hold</option></select>
     <button id="saveDefaultModel" class="secondary">Save default model</button>
-    <p class="muted">No model line is required. Ask naturally, such as “use Luna Medium for this” or “use Codex Fast,” to choose a model, effort, or available speed. When effort is unclear, TagMails uses Medium. Unsupported runtime choices receive a no-charge notice. Claude subscription requests are paused in this pilot.</p>
+    <p class="muted">This private Mac pilot uses GPT-6 Sol while GPT-6.1 Sol is unavailable with its ChatGPT account. No model line is required. Ask naturally, such as “use Luna Medium for this” or “use Codex Fast,” to choose a model, effort, or available speed. When effort is unclear, TagMails uses Medium. Unsupported runtime choices receive a no-charge notice. Claude subscription requests are paused in this pilot.</p>
     <button id="signOut" class="secondary">Sign out</button></section>
   <section class="card"><h2>Pair a Mac</h2><p>Create a one-time code, then run the setup command in your TagMails checkout. The device token stays in a file on your Mac.</p>
     <button id="pair">Create pairing code</button><p><code id="pairCode"></code></p><pre id="pairCommand"></pre>

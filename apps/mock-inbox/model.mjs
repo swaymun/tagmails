@@ -1,4 +1,4 @@
-export const ACCOUNT_DEFAULT_MODELS = ['gpt-6.1-sol', 'claude-sonnet-5-5'];
+export const ACCOUNT_DEFAULT_MODELS = ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'claude-sonnet-5-5'];
 const UNKNOWN_MODEL = 'I could not identify an available model in this request. Ask for Codex, Claude, or Luna, or omit the model to use your default.';
 
 function requestedModel(body) {
@@ -19,13 +19,19 @@ function requestedModel(body) {
   return null;
 }
 
-export function chooseModel(body, defaultModel = 'gpt-6.1-sol') {
+export function chooseModel(body, defaultModel = 'gpt-6.1-sol', { codexModel = 'gpt-6.1-sol' } = {}) {
   const requested = requestedModel(body);
-  if (requested === null) return { id: ACCOUNT_DEFAULT_MODELS.includes(defaultModel) ? defaultModel : 'gpt-6.1-sol',
-    effort: 'medium', source: 'default' };
+  if (requested === null) {
+    const saved = ACCOUNT_DEFAULT_MODELS.includes(defaultModel) ? defaultModel : 'gpt-6.1-sol';
+    return { id: saved === 'gpt-6.1-sol' ? codexModel : saved,
+      effort: 'medium', source: saved === 'gpt-6.1-sol' && codexModel !== saved ? 'pilot' : 'default' };
+  }
   if (!requested) return { error: UNKNOWN_MODEL };
   const choices = {
-    codex: ['gpt-6.1-sol', 'medium'],
+    codex: [codexModel, 'medium'],
+    sol: [codexModel, 'medium'],
+    'gpt-6 sol': ['gpt-6-sol', 'medium'],
+    'gpt-6-sol': ['gpt-6-sol', 'medium'],
     'codex 6.1 sol': ['gpt-6.1-sol', 'medium'],
     'codex 6.1 sol medium': ['gpt-6.1-sol', 'medium'],
     'gpt-6.1 sol': ['gpt-6.1-sol', 'medium'],

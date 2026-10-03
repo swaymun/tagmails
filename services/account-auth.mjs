@@ -1,10 +1,10 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
-import { ACCOUNT_DEFAULT_MODELS } from '../apps/mock-inbox/model.mjs';
 import { runReceiptPage } from './account-page.mjs';
 import { selectedModelDetail } from './model-route.mjs';
 import { artifactForDownload, selectedRunArtifacts } from './run-artifacts.mjs';
 import { knownAgentAddresses } from './agent-addresses.mjs';
+import { accountPreferences, saveAccountPreferences } from './account-preferences.mjs';
 
 const googleKeys = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
 const DEVICE_TOKEN = /^tm_dev_[A-Za-z0-9_-]{43}$/;
@@ -234,7 +234,7 @@ async function changeDefaultModel(request, env, accountId, headers = {}) {
   let model;
   try { model = (await bodyJson(request)).model; }
   catch { return json({ error: 'Invalid model request' }, 400, headers); }
-  if (!ACCOUNT_DEFAULT_MODELS.includes(model)) return json({ error: 'Choose Codex or Claude' }, 400, headers);
+  if (!['gpt-6.1-sol', 'claude-sonnet-5-5'].includes(model)) return json({ error: 'Choose Codex or Claude' }, 400, headers);
   const changed = await env.DB.prepare('UPDATE accounts SET default_model = ? WHERE id = ? AND active = 1')
     .bind(model, accountId).run();
   if (!(changed.meta?.changes ?? changed.changes)) return json({ error: 'Account is inactive' }, 409, headers);
@@ -294,6 +294,13 @@ async function siteAccountRequest(request, env, pathname, verifyIdentity) {
   }
   if (pathname === '/api/site/default-model' && request.method === 'POST') {
     return changeDefaultModel(request, env, account.id, headers);
+  }
+  if (pathname === '/api/site/preferences' && request.method === 'GET') {
+    return json(await accountPreferences(env, account), 200, headers);
+  }
+  if (pathname === '/api/site/preferences' && request.method === 'POST') {
+    try { return json(await saveAccountPreferences(env, account, await bodyJson(request)), 200, headers); }
+    catch (error) { return json({ error: error.message }, 400, headers); }
   }
   if (pathname === '/api/site/devices' && request.method === 'GET') {
     return json(await accountDevices(env, account.id), 200, headers);
