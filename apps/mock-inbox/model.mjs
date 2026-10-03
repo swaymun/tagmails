@@ -25,10 +25,18 @@ export function chooseModel(body, defaultModel = 'gpt-6.1-sol') {
   if (!requested) return { error: 'Choose Codex, Claude, or Luna after Model:.' };
   const choices = {
     codex: ['gpt-6.1-sol', 'medium'],
+    'codex 6.1 sol': ['gpt-6.1-sol', 'medium'],
+    'codex 6.1 sol medium': ['gpt-6.1-sol', 'medium'],
+    'gpt-6.1 sol': ['gpt-6.1-sol', 'medium'],
+    'gpt-6.1 sol medium': ['gpt-6.1-sol', 'medium'],
     'gpt-6.1-sol': ['gpt-6.1-sol', 'medium'],
     'gpt-6.1-sol medium': ['gpt-6.1-sol', 'medium'],
     claude: ['claude-sonnet-5-5', 'medium'],
     sonnet: ['claude-sonnet-5-5', 'medium'],
+    'sonnet 5.5': ['claude-sonnet-5-5', 'medium'],
+    'sonnet 5.5 medium': ['claude-sonnet-5-5', 'medium'],
+    'claude sonnet 5.5': ['claude-sonnet-5-5', 'medium'],
+    'claude sonnet 5.5 medium': ['claude-sonnet-5-5', 'medium'],
     'claude-sonnet-5-5': ['claude-sonnet-5-5', 'medium'],
     'claude-sonnet-5-5 medium': ['claude-sonnet-5-5', 'medium'],
     luna: ['gpt-6-luna', 'low'],
