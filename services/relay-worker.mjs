@@ -234,7 +234,7 @@ export default {
     catch { console.error('Uncertain outbound reconciliation is delayed'); }
     for (let index = 0; index < 10; index += 1) {
       const result = await sendNextOutbox(env);
-      if (['idle', 'contended', 'accepted'].includes(result.state)) break;
+      if (['idle', 'contended'].includes(result.state)) break;
     }
   },
 };

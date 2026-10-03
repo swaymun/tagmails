@@ -264,14 +264,26 @@ async function recipientsStillAuthorized(env, threadId, payload) {
 async function finalize(env, row, getSentEmail) {
   await settleTestEmail(env, row.job_id);
   await releaseFailedPrimaryTestEmail(env, row.job_id);
-  const { data, error } = await getSentEmail(row.provider_email_id);
-  if (error || !data?.message_id || !MESSAGE_ID.test(data.message_id)) {
+  // A verified sent webhook may have recorded the Message-ID already.
+  const recorded = await env.DB.prepare(`SELECT message_id FROM messages
+    WHERE thread_id = ? AND provider_email_id = ? AND direction = 'outbound'`)
+    .bind(row.thread_id, row.provider_email_id).first();
+  let messageId = recorded?.message_id;
+  if (!messageId) {
+    try {
+      const { data, error } = await getSentEmail(row.provider_email_id);
+      if (!error && MESSAGE_ID.test(data?.message_id ?? '')) messageId = data.message_id;
+    } catch { /* Provider lookup can recover on a later scheduled run. */ }
+  }
+  if (!messageId) {
+    await env.DB.prepare("UPDATE outbox SET updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'accepted'")
+      .bind(row.job_id).run();
     return { state: 'accepted', jobId: row.job_id };
   }
-  await saveOutboundMessage(env, row.job_id, row.thread_id, row.provider_email_id, data.message_id);
+  if (!recorded) await saveOutboundMessage(env, row.job_id, row.thread_id, row.provider_email_id, messageId);
   await env.DB.prepare("UPDATE outbox SET state = 'sent', updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'accepted'")
     .bind(row.job_id).run();
-  return { state: 'sent', jobId: row.job_id, messageId: data.message_id };
+  return { state: 'sent', jobId: row.job_id, messageId };
 }
 
 async function holdUnknownSend(env, jobId) {
@@ -301,13 +313,21 @@ export async function sendNextOutbox(env, {
     FROM outbox o JOIN jobs j ON j.id = o.job_id
     JOIN threads t ON t.id = j.thread_id JOIN accounts a ON a.id = t.account_id
     WHERE o.state = 'accepted' AND a.active = 1
+      AND (o.updated_at <= datetime('now', '-1 minute') OR EXISTS (
+        SELECT 1 FROM messages m WHERE m.thread_id = j.thread_id
+          AND m.provider_email_id = o.provider_email_id AND m.direction = 'outbound'))
     ORDER BY o.updated_at, o.job_id LIMIT 1`).bind().first();
   if (accepted) return finalize(env, accepted, getSentEmail);
 
   const row = await env.DB.prepare(`SELECT o.job_id, j.thread_id, j.result_key, t.account_id, a.agent_email
     FROM outbox o JOIN jobs j ON j.id = o.job_id JOIN threads t ON t.id = j.thread_id
     JOIN accounts a ON a.id = t.account_id
-    WHERE o.state = 'queued' AND a.active = 1 ORDER BY o.updated_at, o.job_id LIMIT 1`).bind().first();
+    WHERE o.state = 'queued' AND a.active = 1
+      AND NOT EXISTS (SELECT 1 FROM jobs earlier
+        JOIN outbox prior ON prior.job_id = earlier.id
+        WHERE earlier.thread_id = j.thread_id AND earlier.rowid < j.rowid
+          AND prior.state IN ('queued', 'sending', 'uncertain', 'accepted'))
+    ORDER BY j.created_at, j.rowid LIMIT 1`).bind().first();
   if (!row) return { state: 'idle' };
   let payload;
   try { payload = await prepare(env, row); }

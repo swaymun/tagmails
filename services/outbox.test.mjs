@@ -207,19 +207,63 @@ test('an uncertain send is not retried; an accepted send can finish Message-ID l
   assert.equal(sqlite.prepare('SELECT state FROM outbox WHERE job_id = ?').get('job-1').state, 'uncertain');
   assert.equal((await sendNextOutbox(env, { sendEmail: async () => { throw new Error('Must not send again'); } })).state, 'idle');
 
-  await queuedTurn(fixture, { number: 2, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  await queuedTurn(fixture, { number: 2, from: 'owner@gmail.com', to: ['agent@wonder.test'], threadId: 'thread-2' });
   let sends = 0;
   const first = await sendNextOutbox(env, {
     sendEmail: async () => { sends += 1; return { data: { id: 'sent-2' } }; },
     getSentEmail: async () => ({ error: { message: 'Temporarily unavailable' } }),
   });
   assert.deepEqual(first, { state: 'accepted', jobId: 'job-2' });
+  sqlite.prepare("UPDATE outbox SET updated_at = datetime('now', '-2 minutes') WHERE job_id = ?")
+    .run('job-2');
   assert.deepEqual(await sendNextOutbox(env, {
     sendEmail: async () => { throw new Error('Must not send again'); },
     getSentEmail: async () => ({ data: { message_id: '<sent-2@tagmails.test>' } }),
   }), { state: 'sent', jobId: 'job-2', messageId: '<sent-2@tagmails.test>' });
   assert.equal(sends, 1);
   assert.equal(sqlite.prepare("SELECT count(*) n FROM messages WHERE direction = 'outbound'").get().n, 1);
+});
+
+test('accepted lookup delays one thread while other threads send and reply order stays intact', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'], jobId: 'z-first' });
+  await queuedTurn(fixture, { number: 2, from: 'owner@gmail.com', to: ['agent@wonder.test'],
+    inReplyTo: '<inbound-1@gmail.com>', jobId: 'a-second' });
+  await queuedTurn(fixture, { number: 3, from: 'owner@gmail.com', to: ['agent@wonder.test'],
+    threadId: 'thread-2', jobId: 'm-independent' });
+  const sent = [];
+  const provider = {
+    sendEmail: async (payload) => {
+      const jobId = payload.tags[0].value;
+      sent.push(jobId);
+      return { data: { id: `provider-${jobId}` } };
+    },
+    getSentEmail: async (id) => id === 'provider-z-first'
+      ? { error: { message: 'Message-ID unavailable' } }
+      : { data: { message_id: `<${id}@tagmails.test>` } },
+  };
+  assert.deepEqual(await sendNextOutbox(env, provider), { state: 'accepted', jobId: 'z-first' });
+  assert.deepEqual(await sendNextOutbox(env, provider), {
+    state: 'sent', jobId: 'm-independent', messageId: '<provider-m-independent@tagmails.test>',
+  });
+  assert.deepEqual(sent, ['z-first', 'm-independent']);
+  assert.equal((await sendNextOutbox(env, provider)).state, 'idle');
+  sqlite.prepare("UPDATE outbox SET updated_at = datetime('now', '-2 minutes') WHERE job_id = ?")
+    .run('z-first');
+  assert.deepEqual(await sendNextOutbox(env, provider), { state: 'accepted', jobId: 'z-first' });
+  assert.deepEqual(await sendNextOutbox(env, provider), { state: 'idle' });
+  assert.deepEqual(sent, ['z-first', 'm-independent']);
+  sqlite.prepare("UPDATE outbox SET updated_at = datetime('now', '-2 minutes') WHERE job_id = ?")
+    .run('z-first');
+  provider.getSentEmail = async (id) => ({ data: { message_id: `<${id}@tagmails.test>` } });
+  assert.deepEqual(await sendNextOutbox(env, provider), {
+    state: 'sent', jobId: 'z-first', messageId: '<provider-z-first@tagmails.test>',
+  });
+  assert.deepEqual(await sendNextOutbox(env, provider), {
+    state: 'sent', jobId: 'a-second', messageId: '<provider-a-second@tagmails.test>',
+  });
+  assert.deepEqual(sent, ['z-first', 'm-independent', 'a-second']);
 });
 
 test('an interrupted provider send becomes uncertain after the scheduled run limit', async () => {
