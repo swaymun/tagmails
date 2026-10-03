@@ -6,7 +6,7 @@ Status: internal working plan, 2026-10-02. No public launch date is set. The loc
 
 **Give your agent an email address.** Send a task to TagMails from Gmail, pick Codex or Claude when it matters, and get the result back in the same conversation. The connected Mac runs the work. The owner can bring someone into the thread by adding them in To or Cc; a later reply continues the agent session. The first public examples should focus on a catch-up from a messy thread, a concrete analysis task, and a follow-up decision. Show the agent's actual output, check results, and limitations.
 
-The initial audience is developers and small teams already using Codex or Claude Code on a Mac. The first offer is a private beta with Google sign-in for personal Gmail addresses and a single selected local workspace. Keep the email and storage price separate from any later API-funded model cost. Do not publish the proposed $0.05/task or 10% API margin as final until live usage and refunds are measured.
+The initial audience is developers and small teams already using Codex or Claude Code on a Mac. The first offer is a private beta with Google sign-in for personal Gmail addresses and a single selected local workspace. Keep the email and storage price separate from any later API-funded model cost. The [internal pricing model](PRICING_MODEL.md) uses current public rate cards to define what to measure; do not publish the proposed $0.05/task or 10% API margin as final until live usage and refunds are measured.
 
 ## Release gates
 
