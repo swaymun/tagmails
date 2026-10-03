@@ -148,6 +148,12 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   sqlite.prepare(`INSERT INTO jobs (id, thread_id, message_id, state, result_key, model_json)
     VALUES (?, ?, ?, 'completed', ?, ?)`).run(runId, 'receipt-thread', 'receipt-message', 'results/receipt.json',
       JSON.stringify({ id: 'claude-sonnet-5-5', effort: 'medium', source: 'explicit' }));
+  const laterRunId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  sqlite.prepare(`INSERT INTO messages (id, account_id, thread_id, message_id, direction, sender_email, object_key)
+    VALUES (?, ?, ?, ?, 'inbound', ?, ?)`).run('later-message', accountId, 'receipt-thread',
+    '<later@gmail.com>', identity.email, 'inbound/later.eml');
+  sqlite.prepare("INSERT INTO jobs (id, thread_id, message_id, state) VALUES (?, ?, ?, 'queued')")
+    .run(laterRunId, 'receipt-thread', 'later-message');
   sqlite.prepare("INSERT INTO outbox (job_id, state) VALUES (?, 'uncertain')").run(runId);
   const artifactId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
   sqlite.prepare(`INSERT INTO run_artifacts
@@ -194,6 +200,8 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.deepEqual(siteResult.deliveryRecipients, []);
   assert.equal(siteResult.result.transcript.events[0].text, 'Find <private> items');
   assert.equal(siteResult.artifacts[0].name, 'review <draft>.txt');
+  assert.deepEqual(siteResult.threadRuns.map((run) => run.id), [runId, laterRunId]);
+  assert.equal(siteResult.threadRuns[1].state, 'queued');
   const providerId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
   sqlite.prepare("UPDATE outbox SET state = 'sent', provider_email_id = ? WHERE job_id = ?")
     .run(providerId, runId);
@@ -221,7 +229,11 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.equal(guestResult.result.artifactIds, undefined);
   assert.equal(guestResult.result.reportedListCostUsd, undefined);
   assert.equal(guestResult.attempts, undefined);
+  assert.equal(guestResult.threadRuns, undefined);
   assert.deepEqual(guestResult.deliveryRecipients, [{ email: 'guest@gmail.com', status: 'bounced' }]);
+  assert.equal((await handleAccountRequest(new Request(`https://relay.test/api/runs/${laterRunId}`, {
+    headers: { Authorization: 'Bearer test', Origin: env.SITE_ORIGIN },
+  }), env, guestOptions)).status, 404);
   assert.equal(sqlite.prepare("SELECT count(*) n FROM accounts WHERE google_sub = 'guest-sub'").get().n, 0);
   const siteFileRequest = new Request(`https://relay.test/api/runs/${runId}/artifacts/${artifactId}`, {
     headers: { Authorization: 'Bearer test', Origin: env.SITE_ORIGIN },

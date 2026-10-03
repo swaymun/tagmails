@@ -313,7 +313,7 @@ async function siteAccountRequest(request, env, pathname, verifyIdentity) {
 }
 
 async function runRow(env, runId, accountId) {
-  const row = await env.DB.prepare(`SELECT j.id, j.state, j.attempts, j.created_at, j.result_key, j.model_json,
+  const row = await env.DB.prepare(`SELECT j.id, j.thread_id, j.state, j.attempts, j.created_at, j.result_key, j.model_json,
     t.subject, m.sender_email, o.state AS delivery_state, o.provider_email_id
     FROM jobs j JOIN threads t ON t.id = j.thread_id JOIN messages m ON m.id = j.message_id
     LEFT JOIN outbox o ON o.job_id = j.id
@@ -327,6 +327,17 @@ async function runRow(env, runId, accountId) {
     .bind(runId, row.provider_email_id).all() : { results: [] };
   return { ...row, selectedModel: selectedModelDetail(row.model_json), result, artifacts,
     deliveryRecipients: deliveries.results ?? deliveries };
+}
+
+async function recentThreadRuns(env, threadId, accountId) {
+  const rows = await env.DB.prepare(`SELECT j.id, j.state, j.created_at, m.sender_email
+    FROM jobs j JOIN messages m ON m.id = j.message_id
+    JOIN threads t ON t.id = j.thread_id
+    WHERE j.thread_id = ? AND t.account_id = ?
+    ORDER BY j.created_at DESC, j.id DESC LIMIT 20`)
+    .bind(threadId, accountId).all();
+  return (rows.results ?? rows).reverse().map((row) => ({ id: row.id, state: row.state,
+    createdAt: row.created_at, sender: row.sender_email }));
 }
 
 async function runViewer(env, runId, identity) {
@@ -402,6 +413,7 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
     return json({ id: row.id, state: row.state, subject: row.subject, sender: row.sender_email,
       selectedModel: row.selectedModel,
       createdAt: row.created_at, attempts: viewer.owner ? row.attempts : undefined,
+      ...(viewer.owner ? { threadRuns: await recentThreadRuns(env, row.thread_id, viewer.accountId) } : {}),
       deliveryState: row.delivery_state,
       deliveryRecipients: row.deliveryRecipients.filter((item) => viewer.owner || item.recipient_email === identity.email)
         .map((item) => ({ email: item.recipient_email, status: item.status })),
