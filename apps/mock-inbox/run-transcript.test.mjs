@@ -22,6 +22,15 @@ test('a streamed final answer is replaced with its longer result copy', () => {
   assert.equal(transcript.truncated, false);
 });
 
+test('an exact streamed final answer is labeled as the final answer', () => {
+  const transcript = runTranscript({ body: 'Explain the result.' });
+  addRunEvent(transcript, 'assistant', 'The answer is 42.');
+  finishRunTranscript(transcript, 'The answer is 42.');
+  assert.deepEqual(transcript.events.at(-1), {
+    kind: 'assistant', phase: 'final_answer', text: 'The answer is 42.',
+  });
+});
+
 test('transcript size stays below the completion limit and declares omitted content', () => {
   const transcript = runTranscript({ body: 'Inspect the run.' });
   for (let index = 0; index < 45; index += 1) addRunEvent(transcript, 'assistant', 'x'.repeat(800));

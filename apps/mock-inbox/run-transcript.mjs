@@ -43,7 +43,10 @@ export function finishRunTranscript(transcript, answer) {
   if (typeof answer !== 'string' || !answer.trim()) return transcript;
   const original = answer.trim();
   const last = transcript.events.at(-1);
-  if (last?.kind === 'assistant' && last.text === original) return transcript;
+  if (last?.kind === 'assistant' && last.text === original) {
+    last.phase = 'final_answer';
+    return transcript;
+  }
   // Claude can stream its final answer immediately before its result event.
   // Replace that short preview with the longer final answer instead of showing it twice.
   if (last?.kind === 'assistant' && original.startsWith(last.text)) {

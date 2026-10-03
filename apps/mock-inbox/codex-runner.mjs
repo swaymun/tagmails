@@ -151,6 +151,7 @@ async function runCodex(claim, workspace, home, sessionId, staged, write) {
   let bytes = 0;
   let approvals = 0;
   let answer = '';
+  let unphasedAnswer = '';
   let usage = null;
   const transcript = runTranscript(claim.request);
   let finish;
@@ -193,8 +194,11 @@ async function runCodex(claim, workspace, home, sessionId, staged, write) {
         send({ id: message.id, error: { code: -32601, message: 'TagMails does not grant runtime requests' } });
       }
     }
-    if (message.method === 'item/completed' && message.params?.item?.type === 'agentMessage' &&
-        message.params.item.phase === 'final_answer') answer = message.params.item.text || '';
+    if (message.method === 'item/completed' && message.params?.item?.type === 'agentMessage') {
+      const item = message.params.item;
+      if (item.phase === 'final_answer') answer = item.text || '';
+      else if (item.phase == null && typeof item.text === 'string' && item.text.trim()) unphasedAnswer = item.text;
+    }
     const event = codexRunEvent(message);
     if (event && message.params?.item?.phase !== 'final_answer') addRunEvent(transcript, event.kind, event.text);
     if (message.method === 'thread/tokenUsage/updated') usage = reportedUsage(message.params?.tokenUsage?.last) ?? usage;
@@ -244,9 +248,10 @@ async function runCodex(claim, workspace, home, sessionId, staged, write) {
       } catch { /* A usage read cannot fail a completed task. */ }
       finally { clearTimeout(allowanceTimeout); }
     }
-    return { result: { ...resultFromAnswer(answer, claim.model.id, approvals, usage, write),
+    const finalAnswer = answer || unphasedAnswer;
+    return { result: { ...resultFromAnswer(finalAnswer, claim.model.id, approvals, usage, write),
       ...(codexAllowance ? { codexAllowance } : {}),
-      transcript: finishRunTranscript(transcript, answer) }, threadId };
+      transcript: finishRunTranscript(transcript, finalAnswer) }, threadId };
   } finally {
     clearInterval(renew);
     clearTimeout(timeout);
