@@ -179,6 +179,6 @@ The private [TagMails Site](https://tagmails.saimun-h-shahee.chatgpt.site) serve
 
 ## Open decisions for plan review
 
-1. Decide whether to pursue clearance of `TagMails` despite Etag Digital's active `TagMail` email product, or choose another public name. Then complete professional mark review and authenticated registrar checkout before purchase. The domain is not acquired.
+1. Decide whether to pursue clearance of `TagMails` despite [Etag Digital's active TagMail email product](https://etagdigital.com/en/), or choose another public name. On October 3, 2026, the `.com` registry's [RDAP lookup for `tagmails.com`](https://rdap.verisign.com/com/v1/domain/tagmails.com) returned 404, consistent with an unregistered domain; this is not a reservation or a registrar checkout result. Complete professional mark review and authenticated registrar checkout before purchase. The domain is not acquired.
 2. Choose how long the hosted service retains messages, artifacts, and traces. The first proposal is 30 days for task payloads and artifacts, with a shorter default for raw inbound mail once the job is settled.
 3. Decide whether API-funded tasks launch with the first beta or after subscription-backed local execution is proven. The recommended sequence is after the local path is reliable and metering has real task samples.
