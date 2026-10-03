@@ -23,7 +23,7 @@ async function inbound(env, id = 'email-1') {
     'Model: Luna\nRead the status without changing files.',
   ].join('\r\n'));
   const message = {
-    providerEmailId: id, messageId, from: 'owner@gmail.com', to: ['agent@wonder.test'],
+    providerEmailId: id, messageId, from: 'owner@gmail.com', agentAddress: 'agent@wonder.test', to: ['agent@wonder.test'],
     cc: [], bcc: [], subject: 'Check routing', body: 'Model: Luna\nRead the status without changing files.',
     parentIds: [], rawMime,
   };

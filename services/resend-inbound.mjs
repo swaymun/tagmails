@@ -16,12 +16,16 @@ function recipients(value) {
   return (Array.isArray(value) ? value : []).map(mailbox);
 }
 
+function recipientAddresses(email) {
+  return [...new Set(['to', 'cc', 'bcc', 'received_for'].flatMap((field) => recipients(email[field])))];
+}
+
 function header(headers, name) {
   return headers?.get?.(name) ?? headers?.[name] ?? headers?.[name.toLowerCase()];
 }
 
 function deliveredTo(email, address) {
-  return ['to', 'cc', 'bcc', 'received_for'].some((field) => recipients(email[field]).includes(address));
+  return recipientAddresses(email).includes(address);
 }
 
 async function boundedRaw(response) {
@@ -36,7 +40,7 @@ async function boundedRaw(response) {
   return Buffer.concat(chunks);
 }
 
-export async function inspectResendInbound({ rawPayload, headers, webhookSecret, apiKey, agentAddress, getReceivedEmail, fetchRaw = fetch }) {
+export async function inspectResendInbound({ rawPayload, headers, webhookSecret, apiKey, agentAddress, resolveAgentAddress, getReceivedEmail, fetchRaw = fetch }) {
   if (!webhookSecret || !apiKey || typeof getReceivedEmail !== 'function') throw new Error('Resend inbound verification is not configured');
   const verifier = new Resend(apiKey);
   const event = verifier.webhooks.verify({
@@ -50,8 +54,15 @@ export async function inspectResendInbound({ rawPayload, headers, webhookSecret,
   });
   if (event?.type !== 'email.received') return { ignored: true };
   const metadata = event.data;
-  const agent = mailbox(agentAddress);
-  if (!EMAIL_ID.test(metadata?.email_id || '') || !MESSAGE_ID.test(metadata?.message_id || '') || !deliveredTo(metadata, agent)) {
+  if (!EMAIL_ID.test(metadata?.email_id || '') || !MESSAGE_ID.test(metadata?.message_id || '')) {
+    throw new Error('Resend event does not identify a received email');
+  }
+  const candidates = recipientAddresses(metadata);
+  if (candidates.length > 100) throw new Error('Resend event has too many recipients');
+  const selected = resolveAgentAddress ? await resolveAgentAddress(candidates) : agentAddress;
+  if (!selected) return { ignored: true };
+  const agent = mailbox(selected);
+  if (!candidates.includes(agent)) {
     throw new Error('Resend event does not identify an email delivered to this agent');
   }
 
@@ -71,6 +82,7 @@ export async function inspectResendInbound({ rawPayload, headers, webhookSecret,
     throw new Error('Raw email does not match the verified Resend metadata');
   }
   return {
+    agentAddress: agent,
     providerEmailId: metadata.email_id,
     eventId: header(headers, 'svix-id'),
     from: parsed.from,

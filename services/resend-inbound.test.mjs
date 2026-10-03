@@ -67,6 +67,23 @@ test('verified delivery accepts an agent who was Bcc on its own provider copy', 
   assert.deepEqual(message.bcc, []);
 });
 
+test('a verified event resolves one active agent address before retrieving mail', async () => {
+  const item = fixture();
+  let candidates;
+  const optionsWithResolver = { ...options(item), agentAddress: undefined,
+    resolveAgentAddress: async (addresses) => { candidates = addresses; return agent; } };
+  const message = await inspectResendInbound(optionsWithResolver);
+  assert.equal(message.agentAddress, agent);
+  assert.deepEqual(candidates, [agent, 'teammate@gmail.com']);
+  assert.deepEqual(await inspectResendInbound({ ...optionsWithResolver,
+    resolveAgentAddress: async () => null,
+    getReceivedEmail: async () => { throw new Error('Unmatched mail must not be fetched'); },
+  }), { ignored: true });
+  await assert.rejects(inspectResendInbound({ ...optionsWithResolver,
+    resolveAgentAddress: async () => 'other@wonder.test',
+  }), /does not identify/);
+});
+
 test('Resend intake rejects tampering, mismatched retrieval, failed authentication, and unsafe raw URLs', async () => {
   const item = fixture();
   await assert.rejects(inspectResendInbound({ ...options(item), rawPayload: item.rawPayload + ' ' }));

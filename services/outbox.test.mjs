@@ -4,8 +4,7 @@ import { bindings } from './bindings-fixture.mjs';
 import { sendNextOutbox } from './outbox.mjs';
 import { handleInbound } from './relay-worker.mjs';
 
-function queuedTurn({ env, sqlite }, { number, from, to, cc = [], references = [] }) {
-  const threadId = 'thread-1';
+function queuedTurn({ env, sqlite }, { number, from, to, cc = [], references = [], accountId = 'account-1', threadId = 'thread-1' }) {
   const id = `inbound-${number}`;
   const messageId = `<inbound-${number}@gmail.com>`;
   const raw = [
@@ -16,10 +15,10 @@ function queuedTurn({ env, sqlite }, { number, from, to, cc = [], references = [
     'Content-Type: text/plain; charset=utf-8', '', 'Please review this.',
   ].join('\r\n');
   sqlite.prepare('INSERT OR IGNORE INTO threads (id, account_id, subject) VALUES (?, ?, ?)')
-    .run(threadId, 'account-1', 'Shared work');
+    .run(threadId, accountId, 'Shared work');
   sqlite.prepare(`INSERT INTO messages
     (id, account_id, thread_id, provider_email_id, message_id, direction, sender_email, object_key)
-    VALUES (?, ?, ?, ?, ?, 'inbound', ?, ?)`).run(id, 'account-1', threadId, `provider-${number}`, messageId, from, `inbound/${number}.eml`);
+    VALUES (?, ?, ?, ?, ?, 'inbound', ?, ?)`).run(id, accountId, threadId, `provider-${number}`, messageId, from, `inbound/${number}.eml`);
   sqlite.prepare(`INSERT INTO jobs (id, thread_id, message_id, state, result_key)
     VALUES (?, ?, ?, 'completed', ?)`).run(`job-${number}`, threadId, id, `results/${number}.json`);
   sqlite.prepare('INSERT INTO outbox (job_id) VALUES (?)').run(`job-${number}`);
@@ -32,6 +31,7 @@ function queuedTurn({ env, sqlite }, { number, from, to, cc = [], references = [
 async function reaction(env, { providerEmailId, from, targetId }) {
   const message = {
     providerEmailId, messageId: `<${providerEmailId}@gmail.com>`, from,
+    agentAddress: 'agent@wonder.test',
     reaction: '👍', reactionTargetId: targetId,
   };
   const response = await handleInbound(new Request('https://relay.test/webhooks/resend', {
@@ -125,4 +125,22 @@ test('a revoked participant receives no queued result', async () => {
     sendEmail: async () => { throw new Error('Revoked guest should not receive mail'); },
   }), { state: 'blocked', jobId: 'job-1' });
   assert.equal(sqlite.prepare('SELECT state FROM outbox').get().state, 'blocked');
+});
+
+test('one outbox sends from each account address', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  sqlite.prepare('INSERT INTO accounts (id, google_sub, owner_email, agent_email) VALUES (?, ?, ?, ?)')
+    .run('account-2', 'google-2', 'second@gmail.com', 'u-second@tagmails.test');
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  await queuedTurn(fixture, { number: 2, from: 'second@gmail.com', to: ['u-second@tagmails.test'],
+    accountId: 'account-2', threadId: 'thread-2' });
+  const senders = [];
+  const provider = {
+    sendEmail: async (payload) => { senders.push(payload.from); return { data: { id: `sent-${senders.length}` } }; },
+    getSentEmail: async (id) => ({ data: { message_id: `<${id}@tagmails.test>` } }),
+  };
+  assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
+  assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
+  assert.deepEqual(senders, ['agent@wonder.test', 'u-second@tagmails.test']);
 });

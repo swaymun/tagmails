@@ -79,19 +79,18 @@ export async function sendNextOutbox(env, {
   sendEmail = (payload, options) => new Resend(env.RESEND_API_KEY).emails.send(payload, options),
   getSentEmail = (id) => new Resend(env.RESEND_API_KEY).emails.get(id),
 } = {}) {
-  if (!env.DB || !env.MAIL || !env.RESEND_API_KEY || !env.AGENT_ADDRESS) throw new Error('Outbound bindings are incomplete');
-  const agentAddress = env.AGENT_ADDRESS.trim().toLowerCase();
+  if (!env.DB || !env.MAIL || !env.RESEND_API_KEY) throw new Error('Outbound bindings are incomplete');
   const accepted = await env.DB.prepare(`SELECT o.job_id, o.provider_email_id, j.thread_id
     FROM outbox o JOIN jobs j ON j.id = o.job_id
     JOIN threads t ON t.id = j.thread_id JOIN accounts a ON a.id = t.account_id
-    WHERE o.state = 'accepted' AND a.agent_email = ?
-    ORDER BY o.updated_at, o.job_id LIMIT 1`).bind(agentAddress).first();
+    WHERE o.state = 'accepted' AND a.active = 1
+    ORDER BY o.updated_at, o.job_id LIMIT 1`).bind().first();
   if (accepted) return finalize(env, accepted, getSentEmail);
 
-  const row = await env.DB.prepare(`SELECT o.job_id, j.thread_id, j.result_key, t.account_id
+  const row = await env.DB.prepare(`SELECT o.job_id, j.thread_id, j.result_key, t.account_id, a.agent_email
     FROM outbox o JOIN jobs j ON j.id = o.job_id JOIN threads t ON t.id = j.thread_id
     JOIN accounts a ON a.id = t.account_id
-    WHERE o.state = 'queued' AND a.agent_email = ? ORDER BY o.updated_at, o.job_id LIMIT 1`).bind(agentAddress).first();
+    WHERE o.state = 'queued' AND a.active = 1 ORDER BY o.updated_at, o.job_id LIMIT 1`).bind().first();
   if (!row) return { state: 'idle' };
   const payload = await prepare(env, row);
   if (!payload) {
@@ -99,7 +98,7 @@ export async function sendNextOutbox(env, {
       .bind(row.job_id).run();
     return { state: 'blocked', jobId: row.job_id };
   }
-  if (payload.from !== agentAddress) throw new Error('Outbox sender does not match this relay');
+  if (payload.from !== row.agent_email.toLowerCase()) throw new Error('Outbox sender does not match its account');
   const claimed = await env.DB.prepare(`UPDATE outbox SET state = 'sending', payload_json = ?, updated_at = CURRENT_TIMESTAMP
     WHERE job_id = ? AND state = 'queued' RETURNING job_id`).bind(JSON.stringify(payload), row.job_id).first();
   if (!claimed) return { state: 'contended' };

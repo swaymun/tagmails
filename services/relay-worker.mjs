@@ -55,6 +55,15 @@ function visibleGuests(message, owner, agent) {
   return guests;
 }
 
+async function resolveAgentAddress(db, candidates) {
+  if (!candidates.length) return null;
+  const placeholders = candidates.map(() => '?').join(', ');
+  const rows = await db.prepare(`SELECT agent_email FROM accounts
+    WHERE active = 1 AND agent_email IN (${placeholders})`).bind(...candidates).all();
+  const accounts = rows.results ?? rows;
+  return accounts.length === 1 ? accounts[0].agent_email : null;
+}
+
 async function recordReaction(env, account, message) {
   const prior = await env.DB.prepare(`SELECT id FROM reactions
     WHERE account_id = ? AND (provider_email_id = ? OR message_id = ?) LIMIT 1`)
@@ -90,7 +99,7 @@ async function recordReaction(env, account, message) {
 
 export async function handleInbound(request, env, { inspect = inspectResendInbound, getReceivedEmail = (id) => receivedEmail(env, id), fetchRaw = fetch } = {}) {
   if (request.method !== 'POST' || new URL(request.url).pathname !== '/webhooks/resend') return new Response('Not found', { status: 404 });
-  if (!env.DB || !env.MAIL || !env.RESEND_WEBHOOK_SECRET || !env.RESEND_API_KEY || !env.AGENT_ADDRESS) {
+  if (!env.DB || !env.MAIL || !env.RESEND_WEBHOOK_SECRET || !env.RESEND_API_KEY) {
     throw new Error('Resend relay bindings and secrets are incomplete');
   }
   if (Number(request.headers.get('content-length') || 0) > MAX_WEBHOOK_BYTES) return new Response('Webhook too large', { status: 413 });
@@ -102,11 +111,12 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
   }
   const message = await inspect({
     rawPayload, headers: request.headers, webhookSecret: env.RESEND_WEBHOOK_SECRET,
-    apiKey: env.RESEND_API_KEY, agentAddress: env.AGENT_ADDRESS,
+    apiKey: env.RESEND_API_KEY,
+    resolveAgentAddress: (candidates) => resolveAgentAddress(env.DB, candidates),
     getReceivedEmail, fetchRaw,
   });
   if (message.ignored) return Response.json({ accepted: false });
-  const agent = env.AGENT_ADDRESS.trim().toLowerCase();
+  const agent = (message.agentAddress ?? '').trim().toLowerCase();
   const account = await env.DB.prepare('SELECT id, owner_email FROM accounts WHERE agent_email = ? AND active = 1')
     .bind(agent).first();
   if (!account) return Response.json({ accepted: false });

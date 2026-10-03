@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import test from 'node:test';
 import { handleInbound } from './relay-worker.mjs';
 import { bindings } from './bindings-fixture.mjs';
@@ -6,7 +7,7 @@ import { bindings } from './bindings-fixture.mjs';
 function mail(providerEmailId, from, overrides = {}) {
   return {
     providerEmailId, eventId: `event-${providerEmailId}`, messageId: `<${providerEmailId}@gmail.com>`,
-    from, to: ['agent@wonder.test'], cc: [], bcc: [], subject: 'Shared work', body: 'Review this.',
+    from, agentAddress: 'agent@wonder.test', to: ['agent@wonder.test'], cc: [], bcc: [], subject: 'Shared work', body: 'Review this.',
     parentIds: [], attachments: [], rawMime: Buffer.from(`From: ${from}\r\nMessage-ID: <${providerEmailId}@gmail.com>\r\n`),
     ...overrides,
   };
@@ -71,4 +72,60 @@ test('R2 failure leaves no job and a later delivery can be retried', async () =>
   env.MAIL.put = originalPut;
   assert.deepEqual(await deliver(env, message), { accepted: true, duplicate: false });
   assert.equal(sqlite.prepare('SELECT count(*) n FROM jobs').get().n, 1);
+});
+
+test('two account addresses route independently and cannot borrow each other\'s threads', async () => {
+  const { env, sqlite } = bindings();
+  sqlite.prepare('INSERT INTO accounts (id, google_sub, owner_email, agent_email) VALUES (?, ?, ?, ?)')
+    .run('account-2', 'google-2', 'second@gmail.com', 'u-second@tagmails.test');
+  const first = mail('email-1', 'owner@gmail.com', { agentAddress: 'agent@wonder.test' });
+  const second = mail('email-2', 'second@gmail.com', {
+    agentAddress: 'u-second@tagmails.test', to: ['u-second@tagmails.test'],
+  });
+  assert.deepEqual(await deliver(env, first), { accepted: true, duplicate: false });
+  assert.deepEqual(await deliver(env, second), { accepted: true, duplicate: false });
+  assert.deepEqual(sqlite.prepare('SELECT account_id FROM threads ORDER BY account_id').all()
+    .map((row) => row.account_id), ['account-1', 'account-2']);
+  assert.deepEqual(await deliver(env, mail('email-3', 'owner@gmail.com', {
+    agentAddress: 'u-second@tagmails.test', to: ['u-second@tagmails.test'],
+    parentIds: [first.messageId],
+  })), { accepted: false });
+  assert.equal(sqlite.prepare('SELECT count(*) n FROM jobs').get().n, 2);
+});
+
+test('a signed Resend delivery selects the matching account address', async () => {
+  const { env, sqlite } = bindings();
+  sqlite.prepare('INSERT INTO accounts (id, google_sub, owner_email, agent_email) VALUES (?, ?, ?, ?)')
+    .run('account-2', 'google-2', 'second@gmail.com', 'u-second@tagmails.test');
+  const secret = `whsec_${Buffer.from('synthetic-signed-inbound-secret').toString('base64')}`;
+  env.RESEND_WEBHOOK_SECRET = secret;
+  const id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const messageId = '<second-turn@gmail.com>';
+  const data = { email_id: id, message_id: messageId, from: 'second@gmail.com',
+    to: ['u-second@tagmails.test'], cc: [], bcc: [] };
+  const rawMime = [
+    'From: second@gmail.com', 'To: u-second@tagmails.test',
+    'Subject: Check this', `Message-ID: ${messageId}`,
+    'Content-Type: text/plain; charset=utf-8', '', 'Review this.',
+  ].join('\r\n');
+  const webhook = (recipients) => {
+    const payload = JSON.stringify({ type: 'email.received', data: { ...data, to: recipients } });
+    const eventId = 'msg_account_routing_test';
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signature = createHmac('sha256', Buffer.from(secret.slice(6), 'base64'))
+      .update(`${eventId}.${timestamp}.${payload}`).digest('base64');
+    return new Request('https://relay.test/webhooks/resend', { method: 'POST', body: payload,
+      headers: { 'svix-id': eventId, 'svix-timestamp': timestamp, 'svix-signature': `v1,${signature}` } });
+  };
+  const provider = {
+    getReceivedEmail: async () => ({ ...data, id, authentication: { dmarc: 'pass' },
+      raw: { download_url: 'https://inbound.resend.com/raw/account-2' } }),
+    fetchRaw: async () => new Response(rawMime),
+  };
+  assert.deepEqual(await (await handleInbound(webhook(data.to), env, provider)).json(),
+    { accepted: true, duplicate: false });
+  assert.equal(sqlite.prepare('SELECT account_id FROM messages').get().account_id, 'account-2');
+  assert.deepEqual(await (await handleInbound(webhook(['agent@wonder.test', 'u-second@tagmails.test']), env, {
+    ...provider, getReceivedEmail: async () => { throw new Error('Ambiguous mail must not be fetched'); },
+  })).json(), { accepted: false });
 });

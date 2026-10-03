@@ -36,7 +36,7 @@ export function bindings() {
       put: async (key, value) => objects.set(key, Buffer.from(value)),
       get: async (key) => objects.has(key) ? { arrayBuffer: async () => Uint8Array.from(objects.get(key)).buffer } : null,
     },
-    RESEND_API_KEY: 're_test', RESEND_WEBHOOK_SECRET: 'whsec_test', AGENT_ADDRESS: 'agent@wonder.test',
+    RESEND_API_KEY: 're_test', RESEND_WEBHOOK_SECRET: 'whsec_test',
   };
   return { env, sqlite, objects };
 }
