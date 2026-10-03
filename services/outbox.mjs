@@ -325,6 +325,38 @@ async function holdUnknownSend(env, jobId) {
   return { state: current?.state ?? 'uncertain', jobId };
 }
 
+export async function purgeSettledOutboundBodies(env) {
+  const found = await env.DB.prepare(`SELECT o.job_id, o.payload_json, t.account_id
+    FROM outbox o JOIN jobs j ON j.id = o.job_id
+    JOIN threads t ON t.id = j.thread_id
+    WHERE o.state IN ('accepted', 'sent') AND o.payload_json IS NOT NULL
+      AND (json_type(o.payload_json, '$.html') IS NOT NULL OR
+        json_type(o.payload_json, '$.text') IS NOT NULL)
+    ORDER BY o.updated_at, o.job_id LIMIT 20`).bind().all();
+  let purged = 0;
+  for (const row of found.results ?? found) {
+    let payload;
+    try { payload = JSON.parse(row.payload_json); }
+    catch { continue; }
+    if (typeof payload.subject !== 'string' || typeof payload.from !== 'string' ||
+        !Array.isArray(payload.to) || !Array.isArray(payload.tags)) continue;
+    const compact = {
+      from: payload.from, to: payload.to,
+      ...(Array.isArray(payload.cc) ? { cc: payload.cc } : {}),
+      subject: payload.subject,
+      tags: payload.tags,
+    };
+    try {
+      await env.MAIL.delete(`outbound/${row.account_id}/${row.job_id}.json`);
+      const updated = await env.DB.prepare(`UPDATE outbox SET payload_json = ?
+        WHERE job_id = ? AND state IN ('accepted', 'sent') AND payload_json = ?`)
+        .bind(JSON.stringify(compact), row.job_id, row.payload_json).run();
+      if ((updated.meta?.changes ?? updated.changes) === 1) purged += 1;
+    } catch { console.error('Settled outbound body cleanup is delayed', row.job_id); }
+  }
+  return purged;
+}
+
 export async function sendNextOutbox(env, {
   sendEmail = (payload, options) => new Resend(env.RESEND_API_KEY).emails.send(payload, options),
   getSentEmail = (id) => new Resend(env.RESEND_API_KEY).emails.get(id),

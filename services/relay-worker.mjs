@@ -4,7 +4,7 @@ import { routeModel } from './jev-route.mjs';
 import { inspectResendInbound } from './resend-inbound.mjs';
 import { knownAgentAddresses } from './agent-addresses.mjs';
 import { handleDeviceRequest } from './device-jobs.mjs';
-import { reconcileOneUnknownOutbox, reconcileSentEvent, recordDeliveryOutcome, sendNextOutbox } from './outbox.mjs';
+import { purgeSettledOutboundBodies, reconcileOneUnknownOutbox, reconcileSentEvent, recordDeliveryOutcome, sendNextOutbox } from './outbox.mjs';
 import { handleAccountRequest } from './account-auth.mjs';
 import { accountPage } from './account-page.mjs';
 import { handleTestWalletRequest, reconcileDueRefunds } from './billing-wallet.mjs';
@@ -312,5 +312,7 @@ export default {
       const result = await sendNextOutbox(env);
       if (['idle', 'contended'].includes(result.state)) break;
     }
+    try { await purgeSettledOutboundBodies(env); }
+    catch { console.error('Settled outbound body cleanup is delayed'); }
   },
 };

@@ -11,7 +11,11 @@ Resend's team dashboard displays received email bodies and attachments. Resend
 retains email and log data for 30 days on Free, Pro, and Scale plans. The
 TagMails relay separately keeps raw inbound MIME in R2 for up to seven days
 after a run settles, and a Cloudflare account administrator can access that
-storage. These properties do not meet a promise that the TagMails operator
+storage. The relay also keeps run results and transcripts in R2, and retains
+thread subjects and recipient metadata in D1. Settled outbound reply bodies
+are removed from the relay's outbox and R2 copy by scheduled cleanup; replies
+with an uncertain send outcome remain available for recovery. These properties
+do not meet a promise that the TagMails operator
 cannot browse customer messages. A shorter TagMails R2 retention period does
 not shorten Resend's copy.
 

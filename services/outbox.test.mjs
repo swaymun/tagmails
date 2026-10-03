@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { bindings } from './bindings-fixture.mjs';
-import { reconcileOneUnknownOutbox, reconcileSentEvent, recordDeliveryOutcome, sendNextOutbox } from './outbox.mjs';
+import { purgeSettledOutboundBodies, reconcileOneUnknownOutbox, reconcileSentEvent, recordDeliveryOutcome, sendNextOutbox } from './outbox.mjs';
 import { handleInbound } from './relay-worker.mjs';
 
 function queuedTurn({ env, sqlite }, { number, from, to, cc = [], inReplyTo = null, references = [], accountId = 'account-1', threadId = 'thread-1', jobId = `job-${number}`, model = null, receivedAgent = null }) {
@@ -40,6 +40,42 @@ async function reaction(env, { providerEmailId, from, targetId }) {
   }), env, { inspect: async () => message });
   return response.json();
 }
+
+test('settled replies purge rendered bodies while retaining delivery and reaction checks', async () => {
+  const fixture = bindings();
+  const { env, sqlite, objects } = fixture;
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  const provider = {
+    sendEmail: async () => ({ data: { id: 'sent-1' } }),
+    getSentEmail: async () => ({ data: { message_id: '<sent-1@tagmails.test>' } }),
+  };
+  assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
+  const key = 'outbound/account-1/job-1.json';
+  assert.ok(objects.has(key));
+  assert.ok(JSON.parse(sqlite.prepare("SELECT payload_json FROM outbox WHERE job_id = 'job-1'").get().payload_json).html);
+
+  const originalDelete = env.MAIL.delete;
+  env.MAIL.delete = async () => { throw new Error('Temporary R2 failure'); };
+  assert.equal(await purgeSettledOutboundBodies(env), 0);
+  assert.ok(objects.has(key));
+  env.MAIL.delete = originalDelete;
+  assert.equal(await purgeSettledOutboundBodies(env), 1);
+  assert.equal(await purgeSettledOutboundBodies(env), 0);
+  assert.equal(objects.has(key), false);
+  const compact = JSON.parse(sqlite.prepare("SELECT payload_json FROM outbox WHERE job_id = 'job-1'").get().payload_json);
+  assert.deepEqual(Object.keys(compact).sort(), ['from', 'subject', 'tags', 'to']);
+  assert.equal(compact.subject, 'Re: Shared work');
+  assert.deepEqual(await reaction(env, { providerEmailId: 'reaction-1', from: 'owner@gmail.com',
+    targetId: '<sent-1@tagmails.test>' }), { accepted: true, reaction: true, duplicate: false });
+  assert.deepEqual(await reconcileSentEvent(env, { jobId: 'job-1', providerEmailId: 'sent-1',
+    messageId: '<sent-1@tagmails.test>', from: 'agent@wonder.test',
+    to: ['owner@gmail.com'], cc: [], subject: 'Re: Shared work' }),
+  { accepted: true, duplicate: true });
+  assert.deepEqual(await recordDeliveryOutcome(env, { jobId: 'job-1', providerEmailId: 'sent-1',
+    recipient: 'owner@gmail.com', from: 'agent@wonder.test', subject: 'Re: Shared work',
+    status: 'delivered', eventAt: '2026-10-03T23:00:00.000Z', eventId: 'delivery-1' }),
+  { accepted: true, deliveryOutcome: true });
+});
 
 test('two sent turns preserve threading and only visible recipients may react', async () => {
   const fixture = bindings();
