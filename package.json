@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "lab": "node apps/mock-inbox/server.mjs",
+    "eval:email": "node scripts/evaluate-email.mjs",
     "test": "node --test"
   },
   "dependencies": {

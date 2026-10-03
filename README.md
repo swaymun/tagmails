@@ -104,9 +104,10 @@ This wallet is non-spendable and accepts no live Stripe key or live event. It ha
 
 ```sh
 npm test
+npm run eval:email
 ```
 
-The tests cover durable offline mail, a six-message owner/participant/agent thread across a restart, per-turn model selection, duplicate IDs, To/Cc/Bcc access and Bcc privacy, revocation, Gmail reaction MIME, approval and failure states, HTML escaping, header injection, interrupted job recovery, claim renewal and selected-job claiming, signed device claims and stale-lease rejection, fake Codex and Claude CLI create/resume cycles, raw MIME, attachments, import limits, a signed Resend event with retrieved raw email, and a two-turn mocked provider send with reaction capture and uncertain-send handling.
+The tests cover durable offline mail, a six-message owner/participant/agent thread across a restart, per-turn model selection, duplicate IDs, To/Cc/Bcc access and Bcc privacy, revocation, Gmail reaction MIME, approval and failure states, HTML escaping, header injection, interrupted job recovery, claim renewal and selected-job claiming, signed device claims and stale-lease rejection, fake Codex and Claude CLI create/resume cycles, raw MIME, attachments, import limits, a signed Resend event with retrieved raw email, and a two-turn mocked provider send with reaction capture and uncertain-send handling. The [v1 email response specification](EMAIL_RESPONSE_SPEC.md) and `eval:email` command provide a fixed eight-case multipart MIME corpus; each run writes parsed HTML, plain text, raw mail, and a report under ignored `.local/email-eval/` for review. It does not simulate Gmail rendering or prove link destinations.
 
 ## Current scope
 
