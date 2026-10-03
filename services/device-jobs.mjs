@@ -139,8 +139,9 @@ function validResult(value) {
     (Array.isArray(value[key]) && value[key].length <= 12 && value[key].every((item) => typeof item === 'string' && item.length <= 300))) &&
     (transcript === undefined || (transcript?.version === 1 && typeof transcript.truncated === 'boolean' &&
       Array.isArray(transcript.events) && transcript.events.length <= 48 &&
-      transcript.events.every((event) => event && ['request', 'assistant', 'tool'].includes(event.kind) &&
-        typeof event.text === 'string' && event.text.length > 0 && event.text.length <= 800))) &&
+      transcript.events.every((event, index) => event && ['request', 'assistant', 'tool'].includes(event.kind) &&
+        typeof event.text === 'string' && event.text.length > 0 &&
+        event.text.length <= (index === transcript.events.length - 1 && event.kind === 'assistant' ? 8000 : 800)))) &&
     (artifactIds === undefined || (Array.isArray(artifactIds) && artifactIds.length <= 5 &&
       artifactIds.every((id) => typeof id === 'string' && ARTIFACT_ID.test(id)) &&
       new Set(artifactIds).size === artifactIds.length)) &&

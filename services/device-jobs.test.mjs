@@ -99,11 +99,14 @@ test('a paired device receives a signed, account-scoped claim and completes it o
     transcript: { version: 1, truncated: false, events: [
       { kind: 'request', text: 'Read the status.' },
       { kind: 'tool', text: 'Read requested.' },
-      { kind: 'assistant', text: 'The local agent read the status.' }] },
+      { kind: 'assistant', text: 'The local agent read the status. '.repeat(170) }] },
     usage: { inputTokens: 1200, cachedInputTokens: 300, cacheCreationInputTokens: 0,
       outputTokens: 40, reasoningOutputTokens: 12 } };
   assert.equal((await call(env, paired.token, 'complete', { ...lease,
     result: { ...result, usage: { ...result.usage, inputTokens: -1 } } })).status, 400);
+  assert.equal((await call(env, paired.token, 'complete', { ...lease,
+    result: { ...result, transcript: { ...result.transcript, events: [
+      ...result.transcript.events.slice(0, -1), { kind: 'assistant', text: 'x'.repeat(8001) }] } } })).status, 400);
   assert.deepEqual(await call(env, paired.token, 'complete', { ...lease, result }), {
     status: 200, body: { completed: true, duplicate: false },
   });
