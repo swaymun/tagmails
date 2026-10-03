@@ -1,7 +1,10 @@
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use reqwest::blocking::Client;
+use ring::hmac;
 use serde_json::{json, Value};
 use std::env;
 use std::error::Error;
+use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -118,7 +121,7 @@ fn agent_result(claim: &Value, base: &str, runtime: &str) -> Result<Value, Box<d
     child
         .stdin
         .take()
-        .ok_or("Codex adapter stdin unavailable")?
+        .ok_or("Local agent adapter stdin unavailable")?
         .write_all(claim.to_string().as_bytes())?;
     let output = child.wait_with_output()?;
     if !output.status.success() {
@@ -128,7 +131,145 @@ fn agent_result(claim: &Value, base: &str, runtime: &str) -> Result<Value, Box<d
     Ok(result)
 }
 
+fn relay_post(
+    client: &Client,
+    base: &str,
+    path: &str,
+    token: &str,
+    body: Value,
+) -> Result<Value, Box<dyn Error>> {
+    let response = client
+        .post(format!("{base}{path}"))
+        .bearer_auth(token)
+        .json(&body)
+        .send()?
+        .error_for_status()?;
+    Ok(response.json()?)
+}
+
+fn verified_claim(response: &Value, token: &str) -> Result<Value, Box<dyn Error>> {
+    let payload = response["payload"]
+        .as_str()
+        .ok_or("Relay claim has no signed payload")?;
+    let signature = response["signature"]
+        .as_str()
+        .ok_or("Relay claim has no signature")?;
+    let bytes = URL_SAFE_NO_PAD.decode(payload)?;
+    let signature_bytes = URL_SAFE_NO_PAD.decode(signature)?;
+    hmac::verify(
+        &hmac::Key::new(hmac::HMAC_SHA256, token.as_bytes()),
+        &bytes,
+        &signature_bytes,
+    )
+    .map_err(|_| "Relay claim signature is invalid")?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+fn run_relay_once(base: &str) -> Result<(), Box<dyn Error>> {
+    if !env::args().any(|arg| arg == "--once") {
+        return Err("Relay prototype requires --once".into());
+    }
+    let url = reqwest::Url::parse(base)?;
+    let local = matches!(url.host_str(), Some("127.0.0.1" | "localhost"));
+    if (url.scheme() != "https" && !(url.scheme() == "http" && local && url.port().is_some()))
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err("Relay URL must be HTTPS, or an explicit localhost HTTP port".into());
+    }
+    let workspace = env::var("TAGMAILS_WORKSPACE")?;
+    if !Path::new(&workspace).is_absolute() || !Path::new(&workspace).is_dir() {
+        return Err("TAGMAILS_WORKSPACE must be an existing absolute directory".into());
+    }
+    let token_file = env::var("TAGMAILS_DEVICE_TOKEN_FILE")?;
+    if !Path::new(&token_file).is_absolute() {
+        return Err("TAGMAILS_DEVICE_TOKEN_FILE must be absolute".into());
+    }
+    let token_data = fs::read_to_string(token_file)?;
+    let token = token_data.trim();
+    if !token.starts_with("tm_dev_")
+        || token.len() != 50
+        || !token[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err("Device token file is invalid".into());
+    }
+    let client = Client::builder().timeout(Duration::from_secs(10)).build()?;
+    let response = relay_post(&client, base, "/api/device/claim", token, json!({}))?;
+    if response["claimed"] != true {
+        println!("No queued relay mail.");
+        return Ok(());
+    }
+    let mut claim = verified_claim(&response, token)?;
+    let job_id = claim["jobId"]
+        .as_str()
+        .ok_or("Claim has no job ID")?
+        .to_owned();
+    let lease_id = claim["leaseId"]
+        .as_str()
+        .ok_or("Claim has no lease ID")?
+        .to_owned();
+    let model = claim["model"]["id"].as_str().unwrap_or("");
+    let runtime = if model.starts_with("gpt-") {
+        "codex-readonly"
+    } else if model.starts_with("claude-") {
+        "claude-readonly"
+    } else {
+        return Err("Relay claim has an unsupported model".into());
+    };
+    claim["claimId"] = json!(lease_id);
+    claim["claimed"] = json!(true);
+    let result = match agent_result(&claim, base, runtime) {
+        Ok(result) => result,
+        Err(error) => {
+            eprintln!("Local agent adapter failed: {error}");
+            json!({"runtime":format!("{}-cli-readonly", runtime.split('-').next().unwrap_or("agent")),"state":"failed","summary":"The local agent adapter could not complete this turn."})
+        }
+    };
+    let completion = relay_post(
+        &client,
+        base,
+        "/api/device/complete",
+        token,
+        json!({"jobId":job_id,"leaseId":lease_id,"result":result}),
+    )?;
+    if completion["completed"] != true {
+        return Err("Relay did not acknowledge the completion".into());
+    }
+    println!(
+        "{job_id}: {} result stored in the relay",
+        result["state"].as_str().unwrap_or("unknown")
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relay_claim_rejects_tampered_payload() {
+        let token = "tm_dev_local_test";
+        let bytes = br#"{"jobId":"job-1"}"#;
+        let signature = hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, token.as_bytes()), bytes);
+        let mut response = json!({
+            "payload": URL_SAFE_NO_PAD.encode(bytes),
+            "signature": URL_SAFE_NO_PAD.encode(signature.as_ref()),
+        });
+        assert_eq!(verified_claim(&response, token).unwrap()["jobId"], "job-1");
+        response["payload"] = json!(URL_SAFE_NO_PAD.encode(br#"{"jobId":"job-2"}"#));
+        assert!(verified_claim(&response, token).is_err());
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
+    if let Ok(base) = env::var("TAGMAILS_RELAY_URL") {
+        return run_relay_once(&base);
+    }
     let base = env::var("TAGMAILS_LAB_URL").unwrap_or_else(|_| "http://127.0.0.1:4177".into());
     let url = reqwest::Url::parse(&base)?;
     if url.scheme() != "http" || url.host_str() != Some("127.0.0.1") || url.port().is_none() {

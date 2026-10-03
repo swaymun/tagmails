@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { renewClaim } from './claim-renew.mjs';
 
 const MODELS = new Set(['gpt-6-luna', 'gpt-6.1-sol']);
 const RUNTIME = 'codex-cli-readonly';
@@ -105,12 +106,7 @@ async function runCodex(claim, workspace, sessionId) {
   const renewEvery = Number(process.env.TAGMAILS_CLAIM_RENEW_MS || 15_000);
   const renew = setInterval(async () => {
     try {
-      const response = await fetch(`${process.env.TAGMAILS_LAB_URL || 'http://127.0.0.1:4177'}/api/renew`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId: claim.jobId, claimId: claim.claimId }),
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (!response.ok || !(await response.json()).renewed) throw new Error('Claim renewal failed');
+      await renewClaim(claim);
       renewFailures = 0;
     } catch {
       if (++renewFailures >= 3) { leaseLost = true; child.kill(); }

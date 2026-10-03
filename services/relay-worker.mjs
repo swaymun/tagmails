@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Resend } from 'resend';
 import { inspectResendInbound } from './resend-inbound.mjs';
+import { handleDeviceRequest } from './device-jobs.mjs';
 
 const MAX_WEBHOOK_BYTES = 128_000;
 
@@ -121,6 +122,10 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
 
 export default {
   async fetch(request, env) {
+    if (new URL(request.url).pathname.startsWith('/api/device/')) {
+      try { return await handleDeviceRequest(request, env); }
+      catch { return new Response('Device job request failed', { status: 500 }); }
+    }
     try { return await handleInbound(request, env); }
     catch { return new Response('Inbound mail could not be accepted', { status: 500 }); }
   },

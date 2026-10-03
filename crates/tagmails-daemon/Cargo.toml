@@ -2,8 +2,10 @@
 name = "tagmails-daemon"
 version = "0.1.0"
 edition = "2021"
-description = "Local TagMails daemon prototype for the synthetic Gmail lab"
+description = "Local TagMails agent daemon prototype"
 
 [dependencies]
 reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde_json = "1.0.151"
+base64 = "0.22.1"
+ring = "0.17.14"

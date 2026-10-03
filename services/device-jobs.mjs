@@ -1,0 +1,133 @@
+import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { parseInbound } from '../apps/mock-inbox/inbound.mjs';
+import { chooseModel } from '../apps/mock-inbox/model.mjs';
+
+const TOKEN = /^tm_dev_[A-Za-z0-9_-]{43}$/;
+const LEASE_SECONDS = 90;
+const MAX_RESULT_BYTES = 64_000;
+
+function json(value, status = 200) { return Response.json(value, { status }); }
+function digest(value) { return createHash('sha256').update(value).digest('hex'); }
+
+async function deviceFor(request, env) {
+  const token = request.headers.get('authorization')?.match(/^Bearer (\S+)$/)?.[1];
+  if (!TOKEN.test(token ?? '')) return null;
+  const device = await env.DB.prepare(`SELECT d.id, d.account_id FROM devices d
+    JOIN accounts a ON a.id = d.account_id
+    WHERE d.token_hash = ? AND d.revoked_at IS NULL AND a.active = 1 LIMIT 1`)
+    .bind(digest(token)).first();
+  return device ? { ...device, token } : null;
+}
+
+async function boundedJson(request) {
+  if (Number(request.headers.get('content-length') || 0) > MAX_RESULT_BYTES) throw new Error('Body too large');
+  const reader = request.body?.getReader();
+  if (!reader) throw new Error('Missing JSON body');
+  const chunks = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_RESULT_BYTES) { await reader.cancel(); throw new Error('Body too large'); }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  try { return JSON.parse(new TextDecoder().decode(Buffer.concat(chunks))); }
+  catch { throw new Error('Invalid JSON body'); }
+}
+
+async function claim(env, device) {
+  const leaseId = randomUUID();
+  const row = await env.DB.prepare(`UPDATE jobs SET
+    state = 'running', device_id = ?, lease_id = ?,
+    lease_until = datetime('now', '+${LEASE_SECONDS} seconds'), attempts = attempts + 1
+    WHERE id = (
+      SELECT j.id FROM jobs j JOIN threads t ON t.id = j.thread_id
+      WHERE t.account_id = ? AND (j.state = 'queued' OR
+        (j.state = 'running' AND (j.lease_until IS NULL OR j.lease_until <= CURRENT_TIMESTAMP)))
+      ORDER BY j.created_at, j.id LIMIT 1
+    ) RETURNING id, thread_id, message_id, lease_until`)
+    .bind(device.id, leaseId, device.account_id).first();
+  if (!row) return json({ claimed: false });
+  const message = await env.DB.prepare(`SELECT m.object_key, m.message_id, t.subject
+    FROM messages m JOIN threads t ON t.id = m.thread_id
+    WHERE m.id = ? AND m.account_id = ? LIMIT 1`).bind(row.message_id, device.account_id).first();
+  if (!message) throw new Error('Claimed job has no inbound message');
+  const object = await env.MAIL.get(message.object_key);
+  if (!object) throw new Error('Claimed job has no stored MIME');
+  const account = await env.DB.prepare('SELECT agent_email FROM accounts WHERE id = ?').bind(device.account_id).first();
+  const parsed = await parseInbound(await object.arrayBuffer(), account.agent_email, { verifiedDeliveryToAgent: true });
+  if (parsed.messageId !== message.message_id) throw new Error('Stored MIME no longer matches the claimed job');
+  const envelope = {
+    jobId: row.id, threadId: row.thread_id, leaseId, leaseUntil: row.lease_until,
+    model: chooseModel(parsed.body),
+    request: { from: parsed.from, subject: parsed.subject, body: parsed.body, attachments: parsed.attachments },
+  };
+  const bytes = Buffer.from(JSON.stringify(envelope));
+  const payload = bytes.toString('base64url');
+  const signature = createHmac('sha256', device.token).update(bytes).digest('base64url');
+  return json({ claimed: true, payload, signature });
+}
+
+async function renew(env, device, body) {
+  if (typeof body.jobId !== 'string' || typeof body.leaseId !== 'string') return json({ error: 'Invalid lease' }, 400);
+  const row = await env.DB.prepare(`UPDATE jobs SET lease_until = datetime('now', '+${LEASE_SECONDS} seconds')
+    WHERE id = ? AND device_id = ? AND lease_id = ? AND state = 'running'
+      AND lease_until > CURRENT_TIMESTAMP RETURNING lease_until`)
+    .bind(body.jobId, device.id, body.leaseId).first();
+  return row ? json({ renewed: true, leaseUntil: row.lease_until }) : json({ error: 'Lease expired or replaced' }, 409);
+}
+
+function validResult(value) {
+  if (!value || !['completed', 'failed', 'needs_approval', 'needs_clarification'].includes(value.state) ||
+      typeof value.summary !== 'string' || !value.summary.trim() || value.summary.length > 500) return false;
+  return ['details', 'checks'].every((key) => value[key] === undefined ||
+    (Array.isArray(value[key]) && value[key].length <= 12 && value[key].every((item) => typeof item === 'string' && item.length <= 300)));
+}
+
+async function complete(env, device, body) {
+  if (typeof body.jobId !== 'string' || typeof body.leaseId !== 'string' || !validResult(body.result)) {
+    return json({ error: 'Invalid completion' }, 400);
+  }
+  const serialized = JSON.stringify(body.result);
+  const resultHash = digest(serialized);
+  const current = await env.DB.prepare(`SELECT j.state, j.lease_id, j.result_hash,
+    (j.lease_until > CURRENT_TIMESTAMP) AS lease_valid
+    FROM jobs j JOIN threads t ON t.id = j.thread_id
+    WHERE j.id = ? AND j.device_id = ? AND t.account_id = ? LIMIT 1`)
+    .bind(body.jobId, device.id, device.account_id).first();
+  if (!current) return json({ error: 'Job not found' }, 404);
+  if (['completed', 'failed'].includes(current.state)) {
+    return current.lease_id === body.leaseId && current.result_hash === resultHash
+      ? json({ completed: true, duplicate: true }) : json({ error: 'Job already finished' }, 409);
+  }
+  if (current.state !== 'running' || current.lease_id !== body.leaseId || !current.lease_valid) {
+    return json({ error: 'Lease expired or replaced' }, 409);
+  }
+  const key = `results/${device.account_id}/${body.jobId}/${body.leaseId}.json`;
+  await env.MAIL.put(key, serialized, { httpMetadata: { contentType: 'application/json' } });
+  const state = body.result.state === 'failed' ? 'failed' : 'completed';
+  const updated = await env.DB.prepare(`UPDATE jobs SET state = ?, result_key = ?, result_hash = ?, lease_until = NULL
+    WHERE id = ? AND device_id = ? AND lease_id = ? AND state = 'running'
+      AND lease_until > CURRENT_TIMESTAMP RETURNING id`)
+    .bind(state, key, resultHash, body.jobId, device.id, body.leaseId).first();
+  return updated ? json({ completed: true, duplicate: false }) : json({ error: 'Lease expired or replaced' }, 409);
+}
+
+export async function handleDeviceRequest(request, env) {
+  const url = new URL(request.url);
+  if (request.method !== 'POST' || !['/api/device/claim', '/api/device/renew', '/api/device/complete'].includes(url.pathname)) {
+    return new Response('Not found', { status: 404 });
+  }
+  if (url.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(url.hostname)) return json({ error: 'HTTPS required' }, 403);
+  if (!env.DB || !env.MAIL) throw new Error('Device job bindings are incomplete');
+  const device = await deviceFor(request, env);
+  if (!device) return json({ error: 'Unauthorized device' }, 401);
+  if (url.pathname === '/api/device/claim') return claim(env, device);
+  let body;
+  try { body = await boundedJson(request); }
+  catch { return json({ error: 'Invalid or oversized JSON body' }, 400); }
+  return url.pathname === '/api/device/renew' ? renew(env, device, body) : complete(env, device, body);
+}

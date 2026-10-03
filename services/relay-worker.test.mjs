@@ -1,43 +1,7 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { handleInbound } from './relay-worker.mjs';
-
-function bindings() {
-  const sqlite = new DatabaseSync(':memory:');
-  sqlite.exec(fs.readFileSync(new URL('./migrations/0001_inbound.sql', import.meta.url), 'utf8'));
-  sqlite.prepare('INSERT INTO accounts (id, google_sub, owner_email, agent_email) VALUES (?, ?, ?, ?)')
-    .run('account-1', 'google-sub-1', 'owner@gmail.com', 'agent@wonder.test');
-  const db = {
-    prepare(sql) {
-      return {
-        bind(...args) {
-          const statement = sqlite.prepare(sql);
-          return { first: async () => statement.get(...args) ?? null, run: async () => statement.run(...args) };
-        },
-      };
-    },
-    async batch(statements) {
-      sqlite.exec('BEGIN');
-      try {
-        const results = [];
-        for (const statement of statements) results.push(await statement.run());
-        sqlite.exec('COMMIT');
-        return results;
-      } catch (error) {
-        sqlite.exec('ROLLBACK');
-        throw error;
-      }
-    },
-  };
-  const objects = new Map();
-  const env = {
-    DB: db, MAIL: { put: async (key, value) => objects.set(key, Buffer.from(value)) },
-    RESEND_API_KEY: 're_test', RESEND_WEBHOOK_SECRET: 'whsec_test', AGENT_ADDRESS: 'agent@wonder.test',
-  };
-  return { env, sqlite, objects };
-}
+import { bindings } from './bindings-fixture.mjs';
 
 function mail(providerEmailId, from, overrides = {}) {
   return {

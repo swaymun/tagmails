@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { renewClaim } from './claim-renew.mjs';
 
 const RUNTIME = 'claude-cli-readonly';
 const MODEL = 'claude-sonnet-5-5';
@@ -100,12 +101,7 @@ async function runClaude(claim, workspace, sessionId) {
   let renewFailures = 0;
   const renew = setInterval(async () => {
     try {
-      const response = await fetch(`${process.env.TAGMAILS_LAB_URL || 'http://127.0.0.1:4177'}/api/renew`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId: claim.jobId, claimId: claim.claimId }),
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (!response.ok || !(await response.json()).renewed) throw new Error('Claim renewal failed');
+      await renewClaim(claim);
       renewFailures = 0;
     } catch {
       if (++renewFailures >= 3) { leaseLost = true; child.kill(); }

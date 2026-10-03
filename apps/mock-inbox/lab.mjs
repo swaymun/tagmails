@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { escapeHtml, makeMime, readGeneratedMime, renderResult } from './mail.mjs';
 import { parseInbound } from './inbound.mjs';
+import { chooseModel } from './model.mjs';
 
 const OWNER = 'owner@gmail.com';
 const AGENT = 'agent@wonder.test';
@@ -13,24 +14,6 @@ function validAddress(value) { return /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(va
 function short(value, max) { return String(value ?? '').trim().slice(0, max); }
 function recipientList(value) {
   return [...new Set((Array.isArray(value) ? value : String(value ?? '').split(',')).map(cleanAddress).filter(Boolean))];
-}
-
-function chooseModel(body) {
-  const requested = body.match(/^Model:\s*(.+)$/im)?.[1]?.trim().toLowerCase();
-  if (!requested) return { id: 'gpt-6.1-sol', effort: 'medium', source: 'default' };
-  const choices = {
-    'codex': ['gpt-6.1-sol', 'medium'],
-    'gpt-6.1-sol': ['gpt-6.1-sol', 'medium'],
-    'gpt-6.1-sol medium': ['gpt-6.1-sol', 'medium'],
-    'claude': ['claude-sonnet-5-5', 'medium'],
-    'sonnet': ['claude-sonnet-5-5', 'medium'],
-    'claude-sonnet-5-5': ['claude-sonnet-5-5', 'medium'],
-    'claude-sonnet-5-5 medium': ['claude-sonnet-5-5', 'medium'],
-    'luna': ['gpt-6-luna', 'low'],
-    'gpt-6-luna': ['gpt-6-luna', 'low'],
-  };
-  const choice = choices[requested];
-  return choice ? { id: choice[0], effort: choice[1], source: 'explicit' } : { error: `“${short(requested, 80)}” is not available in this test. Use Codex, Claude, or Luna.` };
 }
 
 function newState() {
