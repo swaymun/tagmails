@@ -52,11 +52,15 @@ async function prepare(env, row) {
   const to = [request.from];
   const cc = visible;
   const references = [...new Set([...request.parentIds, request.messageId])].filter((id) => MESSAGE_ID.test(id)).slice(-40);
-  const origin = publicOrigin(env.PUBLIC_ORIGIN);
+  const siteOrigin = publicOrigin(env.SITE_ORIGIN);
+  const relayOrigin = publicOrigin(env.PUBLIC_ORIGIN);
   const ownerCanOpen = [request.from, ...visible].includes(owner);
+  const transcriptUrl = siteOrigin
+    ? `${siteOrigin}/run?id=${encodeURIComponent(row.job_id)}`
+    : relayOrigin ? `${relayOrigin}/runs/${encodeURIComponent(row.job_id)}` : null;
   const rendered = renderResult({
     state: result.state, summary: result.summary, details: result.details, checks: result.checks,
-    links: origin && ownerCanOpen ? [{ label: 'Owner run receipt', url: `${origin}/runs/${row.job_id}` }] : [],
+    links: transcriptUrl && ownerCanOpen ? [{ label: 'Run transcript', url: transcriptUrl }] : [],
     note: result.state === 'needs_approval'
       ? 'The agent is waiting for your approval in the connected app.'
       : 'This summary came from your connected local agent.',

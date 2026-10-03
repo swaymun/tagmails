@@ -145,10 +145,11 @@ test('one outbox sends from each account address', async () => {
   assert.deepEqual(senders, ['agent@wonder.test', 'u-second@tagmails.test']);
 });
 
-test('owner-addressed results link to the private receipt but a guest-only reply does not', async () => {
+test('owner-addressed results link to the private Site transcript but a guest-only reply does not', async () => {
   const fixture = bindings();
   const { env, sqlite } = fixture;
   env.PUBLIC_ORIGIN = 'https://relay.tagmails.test';
+  env.SITE_ORIGIN = 'https://site.tagmails.test';
   const receiptJobId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
   await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'], jobId: receiptJobId });
   const payloads = [];
@@ -157,9 +158,10 @@ test('owner-addressed results link to the private receipt but a guest-only reply
     getSentEmail: async (id) => ({ data: { message_id: `<${id}@tagmails.test>` } }),
   };
   assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
-  assert.ok(payloads[0].html.includes(`https://relay.tagmails.test/runs/${receiptJobId}`));
+  assert.ok(payloads[0].html.includes(`https://site.tagmails.test/run?id=${receiptJobId}`));
+  assert.doesNotMatch(payloads[0].html, /relay\.tagmails\.test\/runs/);
   sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)').run('thread-1', 'reviewer@gmail.com');
   await queuedTurn(fixture, { number: 2, from: 'reviewer@gmail.com', to: ['agent@wonder.test'] });
   assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
-  assert.doesNotMatch(payloads[1].html, /\/runs\/job-2/);
+  assert.doesNotMatch(payloads[1].html, /\/run\?id=|\/runs\//);
 });
