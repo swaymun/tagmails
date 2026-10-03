@@ -18,6 +18,9 @@ test('Jev routes a clear new-thread model request and defaults when uncertain', 
   assert.deepEqual(await routeModel('Compare Codex and Claude for me.', 'gpt-6.1-sol', {
     apiKey: 'test-key', fetcher: jev('claude', 0.54),
   }), { id: 'gpt-6.1-sol', effort: 'medium', source: 'default' });
+  assert.deepEqual(await routeModel('Use Gemini for this review.', 'gpt-6.1-sol', {
+    apiKey: 'test-key', fetcher: jev('unsupported', 0.97),
+  }), { error: 'That model is not available. Use Codex, Claude, or Luna.' });
 });
 
 test('explicit directives and replies do not call Jev', async () => {
@@ -48,4 +51,16 @@ test('Jev sees only the sender text before quoted mail', async () => {
       return Response.json({ answers: { route: { type: 'choice', choice: 'none',
         probabilities: { none: 0.97 } } } });
     } });
+});
+
+test('Jev considers a model request in the subject when the body is empty', async () => {
+  assert.deepEqual(await routeModel('', 'gpt-6.1-sol', {
+    subject: 'Use Claude to summarize the attached report', apiKey: 'test-key',
+    fetcher: async (_url, request) => {
+      assert.equal(JSON.parse(request.body).state,
+        'Subject: Use Claude to summarize the attached report\nBody:\n');
+      return Response.json({ answers: { route: { type: 'choice', choice: 'claude',
+        probabilities: { claude: 0.95 } } } });
+    },
+  }), { id: 'claude-sonnet-5-5', effort: 'medium', source: 'classified' });
 });

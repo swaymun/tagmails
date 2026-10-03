@@ -174,7 +174,7 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
     ORDER BY m.rowid DESC LIMIT 1`).bind(threadId).first() : null;
   const priorModel = previousJob?.model_json ? JSON.parse(previousJob.model_json) : null;
   const model = threadUnavailable ? null : await routeModel(message.body, account.default_model, {
-    apiKey: env.TYPESAFE_API_KEY, fetcher: fetchModel, priorModel,
+    apiKey: env.TYPESAFE_API_KEY, fetcher: fetchModel, priorModel, subject: message.subject,
   });
   const unavailableResult = threadUnavailable ? {
     runtime: 'relay', state: 'failed',

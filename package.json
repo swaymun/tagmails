@@ -5,6 +5,7 @@
   "scripts": {
     "lab": "node apps/mock-inbox/server.mjs",
     "eval:email": "node scripts/evaluate-email.mjs",
+    "eval:model-routing": "node scripts/evaluate-model-routing.mjs",
     "smoke:answer-export": "node scripts/smoke-answer-export.mjs",
     "smoke:file-export": "node scripts/smoke-file-export.mjs",
     "test": "node --test"
