@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Resend } from 'resend';
+import { addressParser } from 'postal-mime';
 import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.mjs';
 import { renderResult } from '../apps/mock-inbox/mail.mjs';
 import { releaseTestEmail, settleTestEmail } from './email-charges.mjs';
@@ -24,6 +25,16 @@ function sameRecipients(left, right) {
   return [...left].sort().every((email, index) => email === expected[index]);
 }
 
+function providerMailbox(value) {
+  const addresses = addressParser(String(value ?? ''));
+  if (addresses.length !== 1 || !addresses[0].address) throw new Error('Invalid provider mailbox');
+  return addresses[0].address.toLowerCase();
+}
+
+function providerRecipients(value) {
+  return (Array.isArray(value) ? value : []).map(providerMailbox);
+}
+
 export async function reconcileSentEvent(env, event) {
   const row = await env.DB.prepare('SELECT state, payload_json, provider_email_id FROM outbox WHERE job_id = ?')
     .bind(event.jobId).first();
@@ -41,6 +52,52 @@ export async function reconcileSentEvent(env, event) {
       AND (provider_email_id IS NULL OR provider_email_id = ?) RETURNING job_id`)
     .bind(event.providerEmailId, event.jobId, event.providerEmailId).first();
   return { accepted: Boolean(updated), sentEvent: true };
+}
+
+export async function reconcileOneUnknownOutbox(env, {
+  listSentEmails = (options) => new Resend(env.RESEND_API_KEY).emails.list(options),
+  getSentEmail = (id) => new Resend(env.RESEND_API_KEY).emails.get(id),
+} = {}) {
+  if (!env.DB || !env.RESEND_API_KEY) throw new Error('Outbound reconciliation bindings are incomplete');
+  // A provider lookup is read-only. Scan one held reply at most once every
+  // 15 minutes, and never infer acceptance from recipients or subject alone.
+  const row = await env.DB.prepare(`UPDATE outbox SET updated_at = CURRENT_TIMESTAMP
+    WHERE job_id = (SELECT job_id FROM outbox WHERE state = 'uncertain' AND payload_json IS NOT NULL
+      AND updated_at <= datetime('now', '-15 minutes') ORDER BY updated_at, job_id LIMIT 1)
+    AND state = 'uncertain' RETURNING job_id, payload_json`).bind().first();
+  if (!row) return { state: 'idle' };
+  let payload;
+  try { payload = JSON.parse(row.payload_json); }
+  catch { return { state: 'uncertain', jobId: row.job_id }; }
+  let page;
+  try { page = await listSentEmails({ limit: 100 }); }
+  catch { return { state: 'uncertain', jobId: row.job_id }; }
+  if (page?.error || !Array.isArray(page?.data?.data)) return { state: 'uncertain', jobId: row.job_id };
+  let checked = 0;
+  for (const summary of page.data.data) {
+    if (checked >= 10) break;
+    try {
+      if (payload.from !== providerMailbox(summary.from) || payload.subject !== summary.subject ||
+          !sameRecipients(payload.to, providerRecipients(summary.to)) ||
+          !sameRecipients(payload.cc ?? [], providerRecipients(summary.cc))) continue;
+    } catch { continue; }
+    checked += 1;
+    let retrieved;
+    try { retrieved = await getSentEmail(summary.id); }
+    catch { continue; }
+    const email = retrieved?.data;
+    if (retrieved?.error || email?.id !== summary.id ||
+        email.tags?.some(({ name, value }) => name === 'tagmails_job' && value === row.job_id) !== true ||
+        !MESSAGE_ID.test(email.message_id ?? '')) continue;
+    let event;
+    try { event = { jobId: row.job_id, providerEmailId: email.id, messageId: email.message_id,
+      from: providerMailbox(email.from), to: providerRecipients(email.to),
+      cc: providerRecipients(email.cc), subject: email.subject }; }
+    catch { continue; }
+    const matched = await reconcileSentEvent(env, event);
+    if (matched.accepted) return { state: 'accepted', jobId: row.job_id };
+  }
+  return { state: 'uncertain', jobId: row.job_id };
 }
 
 async function prepare(env, row) {

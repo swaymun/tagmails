@@ -3,7 +3,7 @@ import { Resend } from 'resend';
 import { chooseModel } from '../apps/mock-inbox/model.mjs';
 import { inspectResendInbound } from './resend-inbound.mjs';
 import { handleDeviceRequest } from './device-jobs.mjs';
-import { reconcileSentEvent, sendNextOutbox } from './outbox.mjs';
+import { reconcileOneUnknownOutbox, reconcileSentEvent, sendNextOutbox } from './outbox.mjs';
 import { handleAccountRequest } from './account-auth.mjs';
 import { accountPage } from './account-page.mjs';
 import { handleTestWalletRequest, reconcileDueRefunds } from './billing-wallet.mjs';
@@ -211,6 +211,8 @@ export default {
     catch { console.error('Test wallet refund reconciliation is delayed'); }
     try { await reconcileTestEmailCharges(env); await fundPendingTestEmails(env); }
     catch { console.error('Test email credit reconciliation is delayed'); }
+    try { await reconcileOneUnknownOutbox(env); }
+    catch { console.error('Uncertain outbound reconciliation is delayed'); }
     for (let index = 0; index < 10; index += 1) {
       const result = await sendNextOutbox(env);
       if (['idle', 'contended', 'accepted'].includes(result.state)) break;

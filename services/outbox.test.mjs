@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { bindings } from './bindings-fixture.mjs';
-import { sendNextOutbox } from './outbox.mjs';
+import { reconcileOneUnknownOutbox, sendNextOutbox } from './outbox.mjs';
 import { handleInbound } from './relay-worker.mjs';
 
 function queuedTurn({ env, sqlite }, { number, from, to, cc = [], references = [], accountId = 'account-1', threadId = 'thread-1', jobId = `job-${number}`, model = null }) {
@@ -214,6 +214,45 @@ test('a matching signed sent event reconciles an uncertain send without resendin
   }), { state: 'sent', jobId, messageId: event.messageId });
   assert.deepEqual(await (await notify(event)).json(), { accepted: true, duplicate: true });
   assert.equal(sqlite.prepare("SELECT count(*) n FROM messages WHERE direction = 'outbound'").get().n, 1);
+});
+
+test('provider lookup reconciles only an exactly tagged uncertain reply', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  const jobId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  const providerId = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'], jobId });
+  assert.equal((await sendNextOutbox(env, {
+    sendEmail: async () => { throw new Error('Connection lost after send'); },
+  })).state, 'uncertain');
+  await queuedTurn(fixture, { number: 2, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  sqlite.prepare("UPDATE outbox SET updated_at = datetime('now', '-20 minutes') WHERE job_id = ?").run(jobId);
+  let tag = 'another-job';
+  let lists = 0;
+  const provider = {
+    sendEmail: async () => { throw new Error('An uncertain reply must not be sent again'); },
+    listSentEmails: async (options) => {
+      lists += 1;
+      assert.deepEqual(options, { limit: 100 });
+      return { data: { data: [{ id: providerId, from: 'TagMails <agent@wonder.test>',
+        to: ['owner@gmail.com'], cc: null, subject: 'Re: Shared work' }] } };
+    },
+    getSentEmail: async () => ({ data: { id: providerId, message_id: '<found@tagmails.test>',
+      from: 'TagMails <agent@wonder.test>', to: ['owner@gmail.com'], cc: null,
+      subject: 'Re: Shared work', tags: [{ name: 'tagmails_job', value: tag }] } }),
+  };
+  assert.deepEqual(await reconcileOneUnknownOutbox(env, provider), { state: 'uncertain', jobId });
+  assert.equal(sqlite.prepare('SELECT state FROM outbox WHERE job_id = ?').get(jobId).state, 'uncertain');
+  assert.equal((await reconcileOneUnknownOutbox(env, provider)).state, 'idle');
+  assert.equal(lists, 1);
+  sqlite.prepare("UPDATE outbox SET updated_at = datetime('now', '-20 minutes') WHERE job_id = ?").run(jobId);
+  tag = jobId;
+  assert.deepEqual(await reconcileOneUnknownOutbox(env, provider), { state: 'accepted', jobId });
+  assert.equal(sqlite.prepare('SELECT provider_email_id FROM outbox WHERE job_id = ?').get(jobId).provider_email_id,
+    providerId);
+  assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
+  assert.equal(sqlite.prepare("SELECT count(*) n FROM messages WHERE direction = 'outbound'").get().n, 1);
+  assert.equal(sqlite.prepare('SELECT state FROM outbox WHERE job_id = ?').get('job-2').state, 'queued');
 });
 
 test('a sent event arriving before the send response cannot create a second reply', async () => {
