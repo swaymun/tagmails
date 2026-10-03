@@ -151,6 +151,26 @@ test('a revoked participant receives no queued result', async () => {
   assert.equal(sqlite.prepare('SELECT state FROM outbox').get().state, 'blocked');
 });
 
+test('revoking a participant after preparation blocks the provider send', async () => {
+  const fixture = bindings();
+  const { env, sqlite, objects } = fixture;
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com',
+    to: ['agent@wonder.test'], cc: ['reviewer@gmail.com'] });
+  sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)')
+    .run('thread-1', 'reviewer@gmail.com');
+  const put = env.MAIL.put;
+  env.MAIL.put = async (key, value, options) => {
+    await put(key, value, options);
+    if (key.startsWith('outbound/')) sqlite.prepare(`UPDATE participants SET revoked_at = CURRENT_TIMESTAMP
+      WHERE thread_id = ? AND email = ?`).run('thread-1', 'reviewer@gmail.com');
+  };
+  assert.deepEqual(await sendNextOutbox(env, {
+    sendEmail: async () => { throw new Error('Revoked participant must not receive mail'); },
+  }), { state: 'blocked', jobId: 'job-1' });
+  assert.equal(sqlite.prepare('SELECT state FROM outbox').get().state, 'blocked');
+  assert.equal(objects.has('outbound/account-1/job-1.json'), false);
+});
+
 test('one outbox sends from each account address', async () => {
   const fixture = bindings();
   const { env, sqlite } = fixture;

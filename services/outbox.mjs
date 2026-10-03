@@ -87,6 +87,17 @@ async function prepare(env, row) {
   };
 }
 
+async function recipientsStillAuthorized(env, threadId, payload) {
+  const account = await env.DB.prepare(`SELECT a.owner_email FROM threads t
+    JOIN accounts a ON a.id = t.account_id WHERE t.id = ? AND a.active = 1`)
+    .bind(threadId).first();
+  if (!account) return false;
+  const participants = await env.DB.prepare(`SELECT email FROM participants
+    WHERE thread_id = ? AND revoked_at IS NULL`).bind(threadId).all();
+  const allowed = new Set([account.owner_email, ...(participants.results ?? participants).map((row) => row.email)]);
+  return [...payload.to, ...(payload.cc ?? [])].every((email) => allowed.has(email));
+}
+
 async function finalize(env, row, getSentEmail) {
   await settleTestEmail(env, row.job_id);
   const { data, error } = await getSentEmail(row.provider_email_id);
@@ -145,6 +156,14 @@ export async function sendNextOutbox(env, {
     await env.DB.prepare("UPDATE outbox SET state = 'queued', payload_json = NULL WHERE job_id = ? AND state = 'sending'")
       .bind(row.job_id).run();
     throw error;
+  }
+  if (!await recipientsStillAuthorized(env, row.thread_id, payload)) {
+    await env.DB.prepare("UPDATE outbox SET state = 'blocked', payload_json = NULL, updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'sending'")
+      .bind(row.job_id).run();
+    await releaseTestEmail(env, row.job_id);
+    try { await env.MAIL.delete(objectKey); }
+    catch (error) { console.error('Blocked outbox payload deletion is delayed', error); }
+    return { state: 'blocked', jobId: row.job_id };
   }
   let sent;
   try {
