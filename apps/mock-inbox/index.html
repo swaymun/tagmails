@@ -128,10 +128,10 @@
       <div class="lab-actions"><button id="toggleDaemon" class="lab-primary">Connect mock daemon</button><button id="processNext" class="lab-secondary">Process next email</button></div>
       <div id="queuedJobs"></div>
       <a class="landing-link" href="/landing/">View TagMails landing page prototype ↗</a>
-      <h2>Import a test email</h2><p>Import a raw .eml with agent@wonder.test in To, Cc, or Bcc. It stays on this computer; sender identity is simulated.</p>
+      <h2>Import a test email</h2><p>Import a raw .eml with agent@wonder.test in To, Cc, or Bcc. It stays on this computer; sender identity is simulated. This lab knows its own Bcc field. Real Gmail mail may hide other Bcc recipients from the agent, so the owner must grant them reply access from setup.</p>
       <form id="importForm" class="import-form"><label for="emlFile">Choose an .eml file</label><input id="emlFile" type="file" accept=".eml,message/rfc822"><button type="submit">Import email</button></form>
       <button id="importSample" class="sample-button" type="button">Import sample email with image</button>
-      <h2>Load an example</h2><p>These drafts model the kind of work you can delegate from a conversation. Start an email with <code>Model: Claude</code>, <code>Model: Codex</code>, or <code>Model: Luna</code> to choose a route.</p>
+      <h2>Load an example</h2><p>These drafts model the kind of work you can delegate from a conversation. No model line is needed: this synthetic lab uses Codex by default. To preview another route here, start with <code>Model: Claude</code> or <code>Model: Luna</code>. The live email pilot also understands requests such as “use Luna.”</p>
       <div class="scenario-list">
         <button data-scenario="catchup"><strong>Catch me up</strong><span>Decisions and open questions</span></button>
         <button data-scenario="incident"><strong>Investigate a bug</strong><span>Turn a report into a draft fix</span></button>
