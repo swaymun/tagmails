@@ -22,6 +22,12 @@ test('LaunchAgent preview defaults to read-only and requires an explicit write c
   const read = preview();
   assert.equal(read.status, 0, read.stderr);
   assert.match(read.stdout, /<key>TAGMAILS_WORKSPACE_ACCESS<\/key><string>read<\/string>/);
+  if (process.platform === 'darwin') {
+    const plist = path.join(root, 'com.tagmails.daemon.plist');
+    fs.writeFileSync(plist, read.stdout);
+    const lint = spawnSync('plutil', ['-lint', plist], { encoding: 'utf8' });
+    assert.equal(lint.status, 0, lint.stderr || lint.stdout);
+  }
   const write = preview(['--workspace-access', 'write']);
   assert.equal(write.status, 0, write.stderr);
   assert.match(write.stdout, /<key>TAGMAILS_WORKSPACE_ACCESS<\/key><string>write<\/string>/);

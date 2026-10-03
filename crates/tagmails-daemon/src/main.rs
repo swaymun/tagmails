@@ -112,9 +112,16 @@ fn agent_result(claim: &Value, base: &str, runtime: &str) -> Result<Value, Box<d
         "claude-readonly" | "claude-write" => "claude-runner.mjs",
         _ => return Err("Unsupported local agent runtime".into()),
     };
-    let runner = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../apps/mock-inbox")
-        .join(file);
+    let executable = env::current_exe()?;
+    let root = executable
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .ok_or("Daemon must run from the project's target directory")?;
+    let runner = root.join("apps/mock-inbox").join(file);
+    if !runner.is_file() {
+        return Err("Local agent adapter is missing beside the daemon checkout".into());
+    }
     let mut child = Command::new("node")
         .arg(runner)
         .env("TAGMAILS_LAB_URL", base)
