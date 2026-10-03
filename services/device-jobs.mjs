@@ -194,7 +194,7 @@ async function complete(env, device, body) {
 
 export async function handleDeviceRequest(request, env) {
   const url = new URL(request.url);
-  if (!((request.method === 'GET' && url.pathname === '/api/device/attachment') ||
+  if (!((request.method === 'GET' && ['/api/device/attachment', '/api/device/status'].includes(url.pathname)) ||
     (request.method === 'POST' && ['/api/device/claim', '/api/device/renew', '/api/device/complete', '/api/device/artifacts'].includes(url.pathname)))) {
     return new Response('Not found', { status: 404 });
   }
@@ -202,6 +202,9 @@ export async function handleDeviceRequest(request, env) {
   if (!env.DB || !env.MAIL) throw new Error('Device job bindings are incomplete');
   const device = await deviceFor(request, env);
   if (!device) return json({ error: 'Unauthorized device' }, 401);
+  if (url.pathname === '/api/device/status') return Response.json({ paired: true }, {
+    headers: { 'Cache-Control': 'no-store' },
+  });
   if (url.pathname === '/api/device/attachment') return attachment(request, env, device, url);
   if (url.pathname === '/api/device/claim') return claim(env, device);
   if (url.pathname === '/api/device/artifacts') return uploadRunArtifact(request, env, device);

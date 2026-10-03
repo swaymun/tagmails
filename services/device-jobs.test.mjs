@@ -122,6 +122,22 @@ test('a paired device receives a signed, account-scoped claim and completes it o
   assert.deepEqual(JSON.parse(objects.get(job.result_key).toString()).transcript, result.transcript);
 });
 
+test('device status confirms an active token without claiming queued mail', async () => {
+  const { env, sqlite } = bindings();
+  const paired = device(sqlite);
+  await inbound(env);
+  const request = (token) => handleDeviceRequest(new Request('https://relay.test/api/device/status', {
+    headers: { Authorization: `Bearer ${token}` },
+  }), env);
+  const active = await request(paired.token);
+  assert.equal(active.status, 200);
+  assert.deepEqual(await active.json(), { paired: true });
+  assert.equal(active.headers.get('cache-control'), 'no-store');
+  assert.equal(sqlite.prepare('SELECT state FROM jobs').get().state, 'queued');
+  sqlite.prepare('UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE id = ?').run(paired.id);
+  assert.equal((await request(paired.token)).status, 401);
+});
+
 test('a signed guest claim cannot request the owner-only answer export', async () => {
   const { env, sqlite } = bindings();
   const paired = device(sqlite);

@@ -9,7 +9,7 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -201,6 +201,30 @@ fn validate_relay_base(base: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn valid_device_token(token: &str) -> bool {
+    token.strip_prefix("tm_dev_").is_some_and(|secret| {
+        secret.len() == 43
+            && secret
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    })
+}
+
+fn device_is_paired(client: &Client, base: &str, token: &str) -> Result<bool, Box<dyn Error>> {
+    let response = client
+        .get(format!("{}/api/device/status", base.trim_end_matches('/')))
+        .bearer_auth(token)
+        .send()?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Ok(false);
+    }
+    let status: Value = response.error_for_status()?.json()?;
+    if status["paired"] != true {
+        return Err("Relay returned an invalid device status".into());
+    }
+    Ok(true)
+}
+
 fn pair_relay(base: &str, code: &str) -> Result<(), Box<dyn Error>> {
     validate_relay_base(base)?;
     if !code.starts_with("tm_pair_")
@@ -220,6 +244,33 @@ fn pair_relay(base: &str, code: &str) -> Result<(), Box<dyn Error>> {
     if name.trim().is_empty() || name.len() > 80 {
         return Err("TAGMAILS_DEVICE_NAME must be 1-80 characters".into());
     }
+    let client = Client::builder().timeout(Duration::from_secs(10)).build()?;
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if !metadata.file_type().is_file() {
+                return Err("Existing device token path is not a regular file".into());
+            }
+            #[cfg(unix)]
+            if metadata.permissions().mode() & 0o077 != 0 {
+                return Err("Existing device token file must be owner-only".into());
+            }
+            let existing = fs::read_to_string(path)?;
+            let token = existing.trim();
+            if !valid_device_token(token) {
+                return Err("Existing device token file is invalid".into());
+            }
+            return match device_is_paired(&client, base, token) {
+                Ok(true) => {
+                    println!("Existing device token is active on this relay. Confirm its account in TagMails setup.");
+                    Ok(())
+                }
+                Ok(false) => Err("Existing device token is not active on this relay. Move it aside and create a new pairing code before retrying.".into()),
+                Err(error) => Err(format!("Could not check the existing device token; it was kept for recovery: {error}").into()),
+            };
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
     let mut secret = [0u8; 32];
     SystemRandom::new()
         .fill(&mut secret)
@@ -232,32 +283,41 @@ fn pair_relay(base: &str, code: &str) -> Result<(), Box<dyn Error>> {
     let mut file = options.open(path)?;
     file.write_all(format!("{token}\n").as_bytes())?;
     file.sync_all()?;
-    let client = Client::builder().timeout(Duration::from_secs(10)).build()?;
-    let response = client
+    let sent = client
         .post(format!("{}/api/device/pair", base.trim_end_matches('/')))
         .json(&json!({"code":code,"token":token,"name":name.trim()}))
-        .send()
-        .map_err(|error| {
-            format!("Pairing could not be confirmed; token file kept for recovery: {error}")
-        })?;
-    if response.status().is_client_error() {
-        fs::remove_file(path)?;
-        return Err(format!(
-            "Pairing was rejected ({}); token file removed",
-            response.status()
-        )
-        .into());
+        .send();
+    let (rejected, reason) = match sent {
+        Ok(response) => {
+            let status = response.status();
+            if status.is_success() {
+                if response
+                    .json::<Value>()
+                    .is_ok_and(|body| body["paired"] == true)
+                {
+                    println!("Device paired. Token saved at {token_file}.");
+                    return Ok(());
+                }
+            }
+            (status.is_client_error(), format!("Relay returned {status}"))
+        }
+        Err(error) => (false, error.to_string()),
+    };
+    match device_is_paired(&client, base, &token) {
+        Ok(true) => println!(
+            "Device pairing confirmed after an interrupted response. Token saved at {token_file}."
+        ),
+        Ok(false) if rejected => {
+            fs::remove_file(path)?;
+            return Err(format!("Pairing was rejected ({reason}); token file removed").into());
+        }
+        Ok(false) => {
+            return Err(format!("Pairing could not be confirmed ({reason}); token file kept for recovery. Retry this command after the relay is reachable.").into());
+        }
+        Err(error) => {
+            return Err(format!("Pairing could not be confirmed ({reason}); token file kept for recovery. Status check failed: {error}").into());
+        }
     }
-    let response = response
-        .error_for_status()
-        .map_err(|error| {
-            format!("Pairing could not be confirmed; token file kept for recovery: {error}")
-        })?
-        .json::<Value>()?;
-    if response["paired"] != true {
-        return Err("Relay did not confirm the device pairing".into());
-    }
-    println!("Device paired. Token saved at {token_file}.");
     Ok(())
 }
 
@@ -527,12 +587,7 @@ fn run_relay(base: &str) -> Result<(), Box<dyn Error>> {
     }
     let token_data = fs::read_to_string(token_file)?;
     let token = token_data.trim();
-    if !token.starts_with("tm_dev_")
-        || token.len() != 50
-        || !token[7..]
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
-    {
+    if !valid_device_token(token) {
         return Err("Device token file is invalid".into());
     }
     let client = Client::builder().timeout(Duration::from_secs(10)).build()?;
@@ -564,6 +619,7 @@ fn run_relay(base: &str) -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
 
     #[test]
     fn relay_claim_rejects_tampered_payload() {
@@ -577,6 +633,50 @@ mod tests {
         assert_eq!(verified_claim(&response, token).unwrap()["jobId"], "job-1");
         response["payload"] = json!(URL_SAFE_NO_PAD.encode(br#"{"jobId":"job-2"}"#));
         assert!(verified_claim(&response, token).is_err());
+    }
+
+    #[test]
+    fn pairing_recovers_an_interrupted_response_without_creating_a_second_token() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            for expected in ["POST", "GET", "GET"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut bytes = [0u8; 4096];
+                let length = stream.read(&mut bytes).unwrap();
+                let request = String::from_utf8_lossy(&bytes[..length]).to_lowercase();
+                assert!(request.starts_with(&expected.to_lowercase()));
+                if expected == "GET" {
+                    assert!(request.contains("authorization: bearer tm_dev_"));
+                }
+                let response = if expected == "POST" {
+                    "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                } else {
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"paired\":true}"
+                };
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let file = env::temp_dir().join(format!("tagmails-pair-test-{nonce}"));
+        let previous = env::var_os("TAGMAILS_DEVICE_TOKEN_FILE");
+        env::set_var("TAGMAILS_DEVICE_TOKEN_FILE", &file);
+        let code = format!("tm_pair_{}", "a".repeat(27));
+        assert!(pair_relay(&base, &code).is_ok());
+        let original = fs::read_to_string(&file).unwrap();
+        assert!(valid_device_token(original.trim()));
+        assert!(pair_relay(&base, &code).is_ok());
+        assert_eq!(fs::read_to_string(&file).unwrap(), original);
+        server.join().unwrap();
+        fs::remove_file(&file).unwrap();
+        if let Some(value) = previous {
+            env::set_var("TAGMAILS_DEVICE_TOKEN_FILE", value);
+        } else {
+            env::remove_var("TAGMAILS_DEVICE_TOKEN_FILE");
+        }
     }
 
     #[test]
