@@ -35,6 +35,13 @@ const fixtures = [
     links: [{ label: 'Open image draft', url: 'https://example.test/private/image/1' }],
   },
   {
+    id: 'unsafe-links-only', title: 'Agent reply',
+    result: { state: 'completed', summary: 'No public link is available.',
+      links: [{ label: 'Untrusted link', url: 'javascript:alert(1)' }] },
+    phrases: ['No public link is available.'],
+    absent: ['Untrusted link', 'javascript:alert(1)', '<h2>Open</h2>', '\nOpen\n'],
+  },
+  {
     id: 'video-link', title: 'Agent reply',
     result: { state: 'completed', summary: 'The video review cut is ready.',
       checks: ['Playback stays in the private viewer.'],

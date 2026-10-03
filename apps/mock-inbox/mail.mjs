@@ -42,12 +42,12 @@ export function renderResult(result) {
   const note = typeof result.note === 'string' && result.note.trim() ? result.note.trim() : null;
   const items = (result.details ?? []).map((item) => `<li>${escapeHtml(item)}</li>`).join('');
   const checks = (result.checks ?? []).map((item) => `<li>${escapeHtml(item)}</li>`).join('');
-  const links = (result.links ?? []).map(({ label, url }) => {
-    const href = safeUrl(url);
-    return href ? `<li><a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a></li>` : '';
-  }).join('');
+  const safeLinks = (result.links ?? []).map(({ label, url }) => ({ label, url: safeUrl(url) }))
+    .filter(({ url }) => url);
+  const links = safeLinks.map(({ label, url }) =>
+    `<li><a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a></li>`).join('');
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>body{font:16px/1.55 Arial,sans-serif;color:#252a33;max-width:640px;margin:0 auto;padding:24px}h1{font-size:22px;line-height:1.2;margin:0 0 18px}h2{font-size:14px;margin:24px 0 6px}p,ul{margin:0 0 14px}a{color:#164db1;text-underline-offset:2px}.note{background:#f3f6fa;padding:12px 14px;border-radius:8px;color:#454d59}.foot{border-top:1px solid #dae0e9;padding-top:16px;margin-top:24px;color:#52606d;font-size:14px}</style></head><body><h1>${title}</h1><p>${escapeHtml(result.summary)}</p>${items ? `<h2>What happened</h2><ul>${items}</ul>` : ''}${checks ? `<h2>Checks and limits</h2><ul>${checks}</ul>` : ''}${links ? `<h2>Open</h2><ul>${links}</ul>` : ''}${note ? `<p class="note">${escapeHtml(note)}</p>` : ''}<p class="foot">Reply to this email to continue the same task.</p></body></html>`;
-  const text = [title, '', result.summary, '', ...(result.details?.length ? ['What happened', ...result.details.map((item) => `- ${item}`), ''] : []), ...(result.checks?.length ? ['Checks and limits', ...result.checks.map((item) => `- ${item}`), ''] : []), ...(result.links?.length ? ['Open', ...result.links.filter(({ url }) => safeUrl(url)).map(({ label, url }) => `${label}: ${safeUrl(url)}`), ''] : []), ...(note ? [note, ''] : []), 'Reply to this email to continue the same task.'].join('\n');
+  const text = [title, '', result.summary, '', ...(result.details?.length ? ['What happened', ...result.details.map((item) => `- ${item}`), ''] : []), ...(result.checks?.length ? ['Checks and limits', ...result.checks.map((item) => `- ${item}`), ''] : []), ...(safeLinks.length ? ['Open', ...safeLinks.map(({ label, url }) => `${label}: ${url}`), ''] : []), ...(note ? [note, ''] : []), 'Reply to this email to continue the same task.'].join('\n');
   return { html, text };
 }
 
