@@ -43,3 +43,47 @@ Sources: [Resend inbound visibility](https://resend.com/blog/inbound-emails),
 Cloudflare references: [Email Worker receive API](https://developers.cloudflare.com/email-service/api/route-emails/email-handler/),
 [catch-all routing](https://developers.cloudflare.com/email-service/configuration/email-routing-addresses/),
 [email preview setting](https://developers.cloudflare.com/email-service/observability/logs/).
+
+## Migration constraints checked October 3, 2026
+
+- Cloudflare Email Service requires Cloudflare DNS. `tagmails.com` still uses
+  GoDaddy nameservers, and its apex MX still points to Resend. Adding an Email
+  Worker alone cannot receive mail for this domain. Prepare and compare the
+  complete DNS zone before a nameserver and MX cutover; preserve the Site
+  ownership/certificate TXT records, current web records, DKIM, DMARC, and any
+  unrelated records. The website traffic cutover is a separate decision.
+- Cloudflare's catch-all Worker route is available only at the apex. Its inbound
+  limit is **25 MiB for the entire MIME message**. The current relay permits a
+  38 MB raw message with up to 25 MB of decoded attachments, so those limits
+  must be lowered together before migration. Cloudflare outbound mail to
+  arbitrary recipients is limited to **5 MiB total**; larger agent files need
+  expiring download links. The 25 MiB outbound exception applies only to
+  verified destination addresses and is not a customer promise.
+- Sending to arbitrary recipients requires Workers Paid. The current included
+  allowance is 3,000 sends per month, then $0.35 per 1,000. This is a provider
+  cost assumption for pricing review, not a confirmed TagMails bill. Email
+  Routing itself is available on Workers Free and Paid.
+- Disabling outbound preview removes its body preview, but Cloudflare's email
+  activity and analytics still expose metadata such as sender, recipient,
+  subject, message ID, and authentication/delivery status. The relay's own R2
+  plaintext and the off-device Jev request remain separate privacy gaps.
+- The current Cloudflare account has no Email Routing zone for TagMails. The
+  domain remains partially verified at Resend despite a publicly resolving
+  `rsend` CNAME. A Resend verification restart was requested; it returned to
+  Pending and may take hours. Do not assume either provider is ready from DNS
+  lookup alone.
+
+Before switching the live MX, verify the Email Worker with test mail on a
+Cloudflare-managed domain, including envelope/header sender alignment,
+To/Cc/Bcc and alias routing, duplicate delivery, sender authentication,
+reactions, attachments at the actual provider limit, and a delayed or failed
+Worker invocation. Then prove outbound threading, uncertain-send recovery,
+delivery/bounce state, and Gmail rendering with preview disabled. Reinspect
+both provider dashboards using the same test messages. Keep the owner-only
+Resend development route until those checks pass.
+
+Sources: [Cloudflare setup and DNS requirement](https://developers.cloudflare.com/email-service/get-started/route-emails/),
+[routing rules and catch-all](https://developers.cloudflare.com/email-service/configuration/email-routing-addresses/),
+[email size limits](https://developers.cloudflare.com/email-service/platform/limits/),
+[pricing](https://developers.cloudflare.com/email-service/platform/pricing/),
+[activity log and preview](https://developers.cloudflare.com/email-service/observability/logs/).
