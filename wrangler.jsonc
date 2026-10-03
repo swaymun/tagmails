@@ -6,7 +6,7 @@
   "d1_databases": [{ "binding": "DB", "database_name": "tagmails-relay", "migrations_dir": "services/migrations" }],
   "r2_buckets": [{ "binding": "MAIL", "bucket_name": "tagmails-relay-mail" }],
   "triggers": { "crons": ["* * * * *"] },
-  "secrets": { "required": ["RESEND_API_KEY", "RESEND_WEBHOOK_SECRET", "GOOGLE_CLIENT_ID", "AGENT_DOMAIN", "PUBLIC_ORIGIN", "SITE_ORIGIN"] },
+  "secrets": { "required": ["RESEND_API_KEY", "RESEND_WEBHOOK_SECRET", "GOOGLE_CLIENT_ID", "AGENT_DOMAIN", "PUBLIC_ORIGIN"] },
   "env": {
     "dev": {
       "name": "tagmails-relay-dev",

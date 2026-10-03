@@ -225,3 +225,17 @@ test('owner-addressed results link to the private Site transcript but a guest-on
   assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
   assert.doesNotMatch(payloads[1].html, /\/run\?id=|\/runs\//);
 });
+
+test('without a separate Site, an owner reply links to the Worker receipt', async () => {
+  const fixture = bindings();
+  fixture.env.PUBLIC_ORIGIN = 'https://relay.tagmails.test';
+  const jobId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'], jobId });
+  let sent;
+  assert.equal((await sendNextOutbox(fixture.env, {
+    sendEmail: async (payload) => { sent = payload; return { data: { id: 'sent-owner' } }; },
+    getSentEmail: async () => ({ data: { message_id: '<sent-owner@tagmails.test>' } }),
+  })).state, 'sent');
+  assert.ok(sent.html.includes(`https://relay.tagmails.test/runs/${jobId}`));
+  assert.doesNotMatch(sent.html, /\/run\?id=/);
+});

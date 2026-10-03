@@ -4,6 +4,8 @@ TagMails gives an existing local coding agent an email address. This repository 
 
 TagMails source is [MIT licensed](LICENSE). The separate Site checkout has its own MIT license. Third-party dependencies retain their own licenses. Neither checkout is a public source release yet.
 
+An initial [self-hosting starter](SELF_HOSTING.md) provides a separate Worker configuration and setup sequence. The configuration builds locally; a fresh-account deployment and full live email loop are still unverified.
+
 ## Run the internal inbox
 
 Requires Node.js 20.19 or newer and Rust for the optional worker.
