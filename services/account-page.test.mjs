@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import vm from 'node:vm';
-import { accountPage } from './account-page.mjs';
+import { accountPage, runReceiptPage } from './account-page.mjs';
 
 test('account setup generates a shell-quoted workspace command', async () => {
   const html = await accountPage().text();
@@ -29,4 +29,15 @@ test('account setup makes write access an explicit command choice', async () => 
     location: { origin: 'https://relay.test' },
   });
   assert.match(command, /--workspace-access write/);
+});
+
+test('run receipt distinguishes provider acceptance from inbox delivery', async () => {
+  const run = { id: 'run-1', subject: 'Review draft', state: 'completed', attempts: 1,
+    sender_email: 'owner@gmail.com', created_at: '2026-10-03 10:00:00',
+    result: { summary: 'Draft reviewed.' }, delivery_state: 'accepted' };
+  const accepted = await runReceiptPage(run).text();
+  assert.match(accepted, /waiting for its Message-ID/);
+  assert.match(accepted, /inbox delivery is not confirmed/);
+  const blocked = await runReceiptPage({ ...run, delivery_state: 'blocked' }).text();
+  assert.match(blocked, /stopped before sending.*will not be retried automatically/);
 });

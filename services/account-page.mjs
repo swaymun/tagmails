@@ -311,6 +311,8 @@ h1{font-size:clamp(2rem,6vw,3.25rem);line-height:1.1;margin:.35em 0}h2{font-size
     ? 'This run stopped before an agent result was saved. If it may have edited files, inspect the workspace.'
     : 'The agent has not submitted a result yet.'))}</p>
 ${run.delivery_state === 'uncertain' ? '<p class="muted">Email delivery needs review. This reply will not be sent again automatically.</p>' : ''}
+${run.delivery_state === 'accepted' ? '<p class="muted">The mail provider accepted the reply. The relay is waiting for its Message-ID before finishing this email thread. Later replies in this thread will wait; inbox delivery is not confirmed.</p>' : ''}
+${run.delivery_state === 'blocked' ? '<p class="muted">This reply was stopped before sending. It needs review and will not be retried automatically.</p>' : ''}
 ${run.delivery_state === 'sent' ? '<p class="muted">Resend accepted the reply. Inbox delivery is reported separately below when available.</p>' : ''}
 ${run.deliveryRecipients?.length ? `<h2>Recipient delivery</h2>${list(run.deliveryRecipients.map((item) => `${item.recipient_email}: ${item.status}`))}<p class="muted">Only reported recipients are listed. Other recipients may still be pending or unconfirmed.</p>` : ''}
 ${details.length ? `<h2>What happened</h2>${list(details)}` : ''}
