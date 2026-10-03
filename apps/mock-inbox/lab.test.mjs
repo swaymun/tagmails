@@ -287,6 +287,30 @@ test('Rust claim completes once and an expired claim cannot complete newer work'
   assert.equal(lab.state.threads[0].messages.length, 2);
 });
 
+test('a renewed claim stays assigned and a real Codex result is labeled honestly', (t) => {
+  const { lab } = freshLab(t);
+  lab.send({ from: 'owner@gmail.com', subject: 'Local read', body: 'Summarize the selected files.' });
+  const claim = lab.claimNext();
+  lab.state.jobs[0].claimedAt = new Date(Date.now() - 61_000).toISOString();
+  assert.equal(lab.renewClaim(claim.jobId, claim.claimId).renewed, true);
+  assert.equal(lab.claimNext().claimed, false);
+  assert.equal(lab.completeClaim(claim.jobId, claim.claimId, {
+    runtime: 'codex-cli-readonly', state: 'completed', summary: 'Codex read the selected workspace.',
+  }).state, 'completed');
+  assert.equal(lab.state.jobs[0].runtime, 'codex-cli-readonly');
+  assert.match(lab.state.threads[0].messages.at(-1).text, /Codex CLI completed locally in read-only mode/);
+  assert.throws(() => lab.renewClaim(claim.jobId, claim.claimId), /expired or been replaced/);
+});
+
+test('the real-run worker can claim only the selected queued job', (t) => {
+  const { lab } = freshLab(t);
+  const first = lab.send({ from: 'owner@gmail.com', subject: 'First', body: 'First task.' });
+  const second = lab.send({ from: 'owner@gmail.com', subject: 'Second', body: 'Second task.' });
+  assert.equal(lab.claimNext('job-missing').claimed, false);
+  assert.equal(lab.claimNext(second.jobId).jobId, second.jobId);
+  assert.equal(lab.state.jobs.find((job) => job.id === first.jobId).state, 'queued');
+});
+
 test('the seeded inbox shows seven use cases with newest mail first', (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tagmails-seed-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));

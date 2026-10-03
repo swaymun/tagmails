@@ -1,6 +1,6 @@
 # TagMails
 
-TagMails gives an existing local coding agent an email address. This repository currently contains the product plan and an **internal, synthetic Gmail-style test inbox**. It does not send email, invoke a model, change files on behalf of a message, or charge money.
+TagMails gives an existing local coding agent an email address. This repository currently contains the product plan and an **internal, synthetic Gmail-style test inbox**. By default it sends no email, invokes no model, changes no files on behalf of a message, and charges no money. An explicit one-job Codex read-only mode is available for local testing.
 
 ## Run the internal inbox
 
@@ -29,14 +29,29 @@ To process queued mail with the local Rust prototype, keep the inbox server runn
 cargo run -p tagmails-daemon
 ```
 
-The worker polls the localhost lab, claims one queued task at a time, and returns a structured synthetic result. Use `cargo run -p tagmails-daemon -- --once` to process at most one task. It does not invoke Codex or Claude. The built-in **Process next email** button is also available for UI testing without Rust.
+The worker polls the localhost lab, claims one queued task at a time, and returns a structured synthetic result. Use `cargo run -p tagmails-daemon -- --once` to process at most one task. The built-in **Process next email** button is also available for UI testing without Rust.
+
+### Opt-in local Codex read-only run
+
+With the lab running, send a synthetic message in the inbox and copy its queued `job-...` ID from **Internal test controls**. Choose a local scratch workspace and run one job with a signed-in Codex CLI:
+
+```sh
+TAGMAILS_RUNTIME=codex-readonly \
+TAGMAILS_WORKSPACE=/absolute/path/to/scratch-workspace \
+TAGMAILS_JOB_ID=job-123 \
+cargo run -p tagmails-daemon -- --once
+```
+
+The adapter accepts Luna and GPT-6.1 Sol routes, uses Codex's read-only sandbox, saves the Codex session ID per email thread in ignored `.local/codex-sessions.json`, and resumes it for later selected jobs on that thread. It saves completed job results before returning them to the lab, so a retry can reuse the result. It renews the lab claim during a long turn and stops the CLI after three minutes. The lab labels these replies as local Codex runs. The selected job ID and `--once` are required because this synthetic localhost inbox has no authenticated sender or production provider verification.
+
+This mode cannot inspect attachments or change project files. It is a Codex CLI prototype; the planned app-server integration, runtime approval flow, and production workspace boundary are still outstanding. Do not point this prototype at a private workspace you would not want the locally signed-in Codex CLI to read.
 
 ```sh
 npm test
 ```
 
-The tests cover durable offline mail, a six-message owner/participant/agent thread across a restart, per-turn model selection, duplicate IDs, To/Cc/Bcc access and Bcc privacy, revocation, Gmail reaction MIME, approval and failure states, HTML escaping, header injection, interrupted job recovery, expired Rust claim rejection, raw MIME, attachments, and import limits.
+The tests cover durable offline mail, a six-message owner/participant/agent thread across a restart, per-turn model selection, duplicate IDs, To/Cc/Bcc access and Bcc privacy, revocation, Gmail reaction MIME, approval and failure states, HTML escaping, header injection, interrupted job recovery, claim renewal and selected-job claiming, a fake Codex CLI create/resume cycle, raw MIME, attachments, and import limits.
 
 ## Current scope
 
-The lab uses deterministic mock runners. Isolated CLI probes verified one new and one resumed Codex turn, plus one new Claude Sonnet 5.5 turn. Claude CLI resume stopped at its budget gate before replying; details are in [PLAN.md](PLAN.md). Real Codex and Claude adapters, a production Rust daemon, hosted relay, Google sign-in, payment ledger, real delivery, and artifact storage are next stages. TagMails is the selected public brand; `tagmails.com` has not been purchased or verified for use.
+The lab uses deterministic mock runners by default. The opt-in Codex CLI adapter completed an isolated new and resumed Luna turn, then a two-turn synthetic inbox thread through the Rust worker. Claude CLI resumed work stopped at its budget gate before replying; details are in [PLAN.md](PLAN.md). A production Codex app-server adapter, Claude adapter, production Rust daemon, hosted relay, Google sign-in, payment ledger, real delivery, and artifact storage remain. TagMails is the selected public brand; `tagmails.com` has not been purchased or verified for use.

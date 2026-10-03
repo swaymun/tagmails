@@ -124,6 +124,7 @@
     <div class="lab-content">
       <div class="lab-status"><span class="lab-indicator" id="daemonIndicator"></span><div><strong id="daemonStatus">Mock daemon offline</strong><small id="jobStatus">0 queued</small></div></div>
       <div class="lab-actions"><button id="toggleDaemon" class="lab-primary">Connect mock daemon</button><button id="processNext" class="lab-secondary">Process next email</button></div>
+      <div id="queuedJobs"></div>
       <a class="landing-link" href="/landing/">View TagMails landing page prototype ↗</a>
       <h2>Import a test email</h2><p>Import a raw .eml with agent@wonder.test in To, Cc, or Bcc. It stays on this computer; sender identity is simulated.</p>
       <form id="importForm" class="import-form"><label for="emlFile">Choose an .eml file</label><input id="emlFile" type="file" accept=".eml,message/rfc822"><button type="submit">Import email</button></form>

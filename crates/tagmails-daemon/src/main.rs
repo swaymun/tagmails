@@ -2,6 +2,9 @@ use reqwest::blocking::Client;
 use serde_json::{json, Value};
 use std::env;
 use std::error::Error;
+use std::io::Write;
+use std::path::Path;
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
@@ -96,6 +99,29 @@ fn mock_result(claim: &Value, attachment_evidence: Vec<String>) -> Value {
     })
 }
 
+fn codex_result(claim: &Value, base: &str) -> Result<Value, Box<dyn Error>> {
+    let runner =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/mock-inbox/codex-runner.mjs");
+    let mut child = Command::new("node")
+        .arg(runner)
+        .env("TAGMAILS_LAB_URL", base)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    child
+        .stdin
+        .take()
+        .ok_or("Codex adapter stdin unavailable")?
+        .write_all(claim.to_string().as_bytes())?;
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        return Err("Codex adapter process failed".into());
+    }
+    let result: Value = serde_json::from_slice(&output.stdout)?;
+    Ok(result)
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let base = env::var("TAGMAILS_LAB_URL").unwrap_or_else(|_| "http://127.0.0.1:4177".into());
     let url = reqwest::Url::parse(&base)?;
@@ -103,16 +129,49 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("This prototype connects only to an explicit 127.0.0.1 HTTP lab port".into());
     }
     let once = env::args().any(|arg| arg == "--once");
+    let runtime = env::var("TAGMAILS_RUNTIME").unwrap_or_else(|_| "mock".into());
+    if runtime != "mock" && runtime != "codex-readonly" {
+        return Err("TAGMAILS_RUNTIME must be mock or codex-readonly".into());
+    }
+    let selected_job = if runtime == "codex-readonly" {
+        if !once {
+            return Err("Codex read-only prototype requires --once".into());
+        }
+        let job = env::var("TAGMAILS_JOB_ID")?;
+        if !job.starts_with("job-")
+            || job.len() == 4
+            || !job[4..].chars().all(|ch| ch.is_ascii_digit())
+        {
+            return Err("TAGMAILS_JOB_ID must name one queued lab job".into());
+        }
+        let workspace = env::var("TAGMAILS_WORKSPACE")?;
+        if !Path::new(&workspace).is_absolute() || !Path::new(&workspace).is_dir() {
+            return Err("TAGMAILS_WORKSPACE must be an existing absolute directory".into());
+        }
+        Some(job)
+    } else {
+        None
+    };
     let client = Client::builder().timeout(Duration::from_secs(10)).build()?;
-    println!("TagMails Rust mock daemon polling {base}. Press Ctrl-C to stop.");
+    println!("TagMails Rust {runtime} daemon polling {base}. Press Ctrl-C to stop.");
     loop {
-        match post(&client, &base, "/api/claim", json!({})) {
+        match post(&client, &base, "/api/claim", json!({"jobId":selected_job})) {
             Ok(claim) if claim["claimed"] == true => {
-                let result = match attachment_evidence(&client, &base, &claim) {
-                    Ok(evidence) => mock_result(&claim, evidence),
-                    Err(error) => {
-                        eprintln!("Could not read mock attachment: {error}");
-                        json!({"state":"failed","summary":"The local worker could not read an attached file.","checks":["No model was called and no files changed."]})
+                let result = if runtime == "codex-readonly" {
+                    match codex_result(&claim, &base) {
+                        Ok(result) => result,
+                        Err(error) => {
+                            eprintln!("Local Codex adapter failed: {error}");
+                            json!({"runtime":"codex-cli-readonly","state":"failed","summary":"The local Codex adapter could not complete this turn."})
+                        }
+                    }
+                } else {
+                    match attachment_evidence(&client, &base, &claim) {
+                        Ok(evidence) => mock_result(&claim, evidence),
+                        Err(error) => {
+                            eprintln!("Could not read mock attachment: {error}");
+                            json!({"state":"failed","summary":"The local worker could not read an attached file.","checks":["No model was called and no files changed."]})
+                        }
                     }
                 };
                 let id = claim["jobId"].as_str().ok_or("Claim has no job ID")?;

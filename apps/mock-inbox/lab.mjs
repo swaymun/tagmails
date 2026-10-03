@@ -201,7 +201,7 @@ export class Lab {
     this.save();
   }
 
-  claimNext() {
+  claimNext(selectedJobId = null) {
     this.heartbeat();
     for (const job of this.state.jobs) {
       if (job.state === 'running' && job.claimedAt && Date.now() - Date.parse(job.claimedAt) > 60_000) {
@@ -211,7 +211,7 @@ export class Lab {
         this.event('recovered', 'Expired mock claim returned to the queue.', job.threadId, job.id);
       }
     }
-    const job = this.state.jobs.find((item) => item.state === 'queued');
+    const job = this.state.jobs.find((item) => item.state === 'queued' && (!selectedJobId || item.id === selectedJobId));
     if (!job) { this.save(); return { claimed: false }; }
     const thread = this.state.threads.find((item) => item.id === job.threadId);
     const request = thread.messages.find((item) => item.id === job.requestMessageId);
@@ -233,24 +233,38 @@ export class Lab {
     };
   }
 
+  renewClaim(jobId, claimId) {
+    const job = this.state.jobs.find((item) => item.id === jobId);
+    if (!job || job.state !== 'running' || !claimId || job.claimId !== claimId) throw new Error('Mock claim has expired or been replaced');
+    job.claimedAt = now();
+    this.heartbeat();
+    this.save();
+    return { renewed: true };
+  }
+
   completeClaim(jobId, claimId, input) {
     const job = this.state.jobs.find((item) => item.id === jobId);
     if (!job) throw new Error('Claimed job not found');
     if (job.state !== 'running') return { duplicate: true, state: job.state };
     if (!claimId || claimId !== job.claimId) throw new Error('Mock claim has expired or been replaced');
     if (!input || !['completed', 'failed', 'needs_approval', 'needs_clarification'].includes(input.state)) throw new Error('Invalid mock result state');
+    const realCodex = input.runtime === 'codex-cli-readonly';
+    if (input.runtime && !realCodex) throw new Error('Unknown local runtime');
     const result = {
       state: input.state,
       summary: short(input.summary, 500),
       details: Array.isArray(input.details) ? input.details.slice(0, 12).map((item) => short(item, 300)) : [],
       checks: Array.isArray(input.checks) ? input.checks.slice(0, 12).map((item) => short(item, 300)) : [],
-      links: [{ label: 'View simulated run', url: `${this.origin}/trace/${job.id}` }],
-      note: 'Synthetic response from the local Rust mock daemon. No model was called and no files were changed.',
+      links: [{ label: realCodex ? 'View local run' : 'View simulated run', url: `${this.origin}/trace/${job.id}` }],
+      note: realCodex
+        ? `${input.state === 'completed' ? 'Codex CLI completed locally in read-only mode.' : 'The local Codex route did not complete.'} This lab has not sent or received a real email.`
+        : 'Synthetic response from the local Rust mock daemon. No model was called and no files were changed.',
     };
     if (!result.summary) throw new Error('Mock result needs a summary');
     const thread = this.state.threads.find((item) => item.id === job.threadId);
     const request = thread.messages.find((item) => item.id === job.requestMessageId);
     job.state = result.state;
+    if (realCodex) job.runtime = input.runtime;
     delete job.claimedAt;
     delete job.claimId;
     this.reply(thread, request, job, result);

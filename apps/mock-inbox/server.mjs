@@ -61,7 +61,12 @@ function tracePage(id) {
   const thread = lab.state.threads.find((item) => item.id === job.threadId);
   const events = lab.state.events.filter((item) => item.jobId === id).slice().reverse();
   const rows = events.map((item) => `<li><time>${escapeHtml(item.at)}</time><strong>${escapeHtml(item.type)}</strong><span>${escapeHtml(item.description)}</span></li>`).join('');
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Simulated run · ${escapeHtml(id)}</title><style>body{font:16px/1.6 Arial,sans-serif;color:#202124;max-width:760px;margin:48px auto;padding:0 24px}a{color:#1a73e8}h1{font-size:28px}small{color:#5f6368}ul{list-style:none;padding:0}li{display:grid;grid-template-columns:180px 110px 1fr;gap:12px;padding:12px 0;border-bottom:1px solid #dadce0}time{font-size:12px;color:#5f6368}.notice{background:#fef7e0;padding:14px 18px;border-radius:8px}@media(max-width:650px){li{grid-template-columns:1fr;gap:0}}</style></head><body><a href="/">← Back to inbox</a><h1>Simulated run</h1><p class="notice">This is an internal fixture. No model ran, no code changed, and no external action occurred.</p><p><strong>Thread:</strong> ${escapeHtml(thread.subject)}<br><strong>Route:</strong> ${escapeHtml(job.model.id ?? 'unresolved')} ${escapeHtml(job.model.effort ?? '')}<br><strong>Status:</strong> ${escapeHtml(job.state)}</p><h2>Events</h2><ul>${rows}</ul><small>Local test data, visible only on this computer.</small></body></html>`;
+  const realCodex = job.runtime === 'codex-cli-readonly';
+  const label = realCodex ? 'Local Codex run' : 'Simulated run';
+  const notice = realCodex
+    ? `${job.state === 'completed' ? 'Codex CLI completed in read-only mode against the selected local workspace.' : 'The local Codex route did not complete.'} This fixture did not use a real email provider.`
+    : 'This is an internal fixture. No model ran, no code changed, and no external action occurred.';
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${label} · ${escapeHtml(id)}</title><style>body{font:16px/1.6 Arial,sans-serif;color:#202124;max-width:760px;margin:48px auto;padding:0 24px}a{color:#1a73e8}h1{font-size:28px}small{color:#5f6368}ul{list-style:none;padding:0}li{display:grid;grid-template-columns:180px 110px 1fr;gap:12px;padding:12px 0;border-bottom:1px solid #dadce0}time{font-size:12px;color:#5f6368}.notice{background:#fef7e0;padding:14px 18px;border-radius:8px}@media(max-width:650px){li{grid-template-columns:1fr;gap:0}}</style></head><body><a href="/">← Back to inbox</a><h1>${label}</h1><p class="notice">${notice}</p><p><strong>Thread:</strong> ${escapeHtml(thread.subject)}<br><strong>Route:</strong> ${escapeHtml(job.model.id ?? 'unresolved')} ${escapeHtml(job.model.effort ?? '')}<br><strong>Status:</strong> ${escapeHtml(job.state)}</p><h2>Events</h2><ul>${rows}</ul><small>Local test data, visible only on this computer.</small></body></html>`;
 }
 
 const server = http.createServer(async (req, res) => {
@@ -115,7 +120,8 @@ const server = http.createServer(async (req, res) => {
         case '/api/daemon': lab.setOnline(data.online); result = { online: lab.state.online }; break;
         case '/api/process': result = lab.processNext(); break;
         case '/api/heartbeat': lab.heartbeat(); result = { online: true }; break;
-        case '/api/claim': result = lab.claimNext(); break;
+        case '/api/claim': result = lab.claimNext(data.jobId); break;
+        case '/api/renew': result = lab.renewClaim(data.jobId, data.claimId); break;
         case '/api/complete': result = lab.completeClaim(data.jobId, data.claimId, data.result); break;
         case '/api/guest': result = lab.guestAction(data.threadId, data.email, data.action); break;
         case '/api/react': result = lab.react(data); break;
