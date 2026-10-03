@@ -3,6 +3,8 @@ import { Resend } from 'resend';
 import { inspectResendInbound } from './resend-inbound.mjs';
 import { handleDeviceRequest } from './device-jobs.mjs';
 import { sendNextOutbox } from './outbox.mjs';
+import { handleAccountRequest } from './account-auth.mjs';
+import { accountPage } from './account-page.mjs';
 
 const MAX_WEBHOOK_BYTES = 128_000;
 
@@ -153,6 +155,11 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
 
 export default {
   async fetch(request, env) {
+    if (request.method === 'GET' && new URL(request.url).pathname === '/account') return accountPage();
+    try {
+      const account = await handleAccountRequest(request, env);
+      if (account) return account;
+    } catch { return new Response('Account request failed', { status: 500 }); }
     if (new URL(request.url).pathname.startsWith('/api/device/')) {
       try { return await handleDeviceRequest(request, env); }
       catch { return new Response('Device job request failed', { status: 500 }); }

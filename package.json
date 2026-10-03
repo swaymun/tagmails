@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "html-to-text": "10.0.1",
+    "jose": "6.2.12",
     "postal-mime": "2.7.5",
     "resend": "6.32.0"
   },

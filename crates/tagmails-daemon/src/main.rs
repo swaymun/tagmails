@@ -1,11 +1,15 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use reqwest::blocking::Client;
 use ring::hmac;
+use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::{json, Value};
 use std::env;
 use std::error::Error;
 use std::fs;
+use std::fs::OpenOptions;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
@@ -13,7 +17,7 @@ use std::time::Duration;
 
 fn post(client: &Client, base: &str, path: &str, body: Value) -> Result<Value, Box<dyn Error>> {
     let response = client
-        .post(format!("{base}{path}"))
+        .post(format!("{}{path}", base.trim_end_matches('/')))
         .json(&body)
         .send()?
         .error_for_status()?;
@@ -139,7 +143,7 @@ fn relay_post(
     body: Value,
 ) -> Result<Value, Box<dyn Error>> {
     let response = client
-        .post(format!("{base}{path}"))
+        .post(format!("{}{path}", base.trim_end_matches('/')))
         .bearer_auth(token)
         .json(&body)
         .send()?
@@ -165,10 +169,7 @@ fn verified_claim(response: &Value, token: &str) -> Result<Value, Box<dyn Error>
     Ok(serde_json::from_slice(&bytes)?)
 }
 
-fn run_relay_once(base: &str) -> Result<(), Box<dyn Error>> {
-    if !env::args().any(|arg| arg == "--once") {
-        return Err("Relay prototype requires --once".into());
-    }
+fn validate_relay_base(base: &str) -> Result<(), Box<dyn Error>> {
     let url = reqwest::Url::parse(base)?;
     let local = matches!(url.host_str(), Some("127.0.0.1" | "localhost"));
     if (url.scheme() != "https" && !(url.scheme() == "http" && local && url.port().is_some()))
@@ -180,6 +181,74 @@ fn run_relay_once(base: &str) -> Result<(), Box<dyn Error>> {
     {
         return Err("Relay URL must be HTTPS, or an explicit localhost HTTP port".into());
     }
+    Ok(())
+}
+
+fn pair_relay(base: &str, code: &str) -> Result<(), Box<dyn Error>> {
+    validate_relay_base(base)?;
+    if !code.starts_with("tm_pair_")
+        || code.len() != 35
+        || !code[8..]
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err("Pairing code is invalid".into());
+    }
+    let token_file = env::var("TAGMAILS_DEVICE_TOKEN_FILE")?;
+    let path = Path::new(&token_file);
+    if !path.is_absolute() {
+        return Err("TAGMAILS_DEVICE_TOKEN_FILE must be absolute".into());
+    }
+    let name = env::var("TAGMAILS_DEVICE_NAME").unwrap_or_else(|_| "Mac".into());
+    if name.trim().is_empty() || name.len() > 80 {
+        return Err("TAGMAILS_DEVICE_NAME must be 1-80 characters".into());
+    }
+    let mut secret = [0u8; 32];
+    SystemRandom::new()
+        .fill(&mut secret)
+        .map_err(|_| "Could not generate a device token")?;
+    let token = format!("tm_dev_{}", URL_SAFE_NO_PAD.encode(secret));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path)?;
+    file.write_all(format!("{token}\n").as_bytes())?;
+    file.sync_all()?;
+    let client = Client::builder().timeout(Duration::from_secs(10)).build()?;
+    let response = client
+        .post(format!("{}/api/device/pair", base.trim_end_matches('/')))
+        .json(&json!({"code":code,"token":token,"name":name.trim()}))
+        .send()
+        .map_err(|error| {
+            format!("Pairing could not be confirmed; token file kept for recovery: {error}")
+        })?;
+    if response.status().is_client_error() {
+        fs::remove_file(path)?;
+        return Err(format!(
+            "Pairing was rejected ({}); token file removed",
+            response.status()
+        )
+        .into());
+    }
+    let response = response
+        .error_for_status()
+        .map_err(|error| {
+            format!("Pairing could not be confirmed; token file kept for recovery: {error}")
+        })?
+        .json::<Value>()?;
+    if response["paired"] != true {
+        return Err("Relay did not confirm the device pairing".into());
+    }
+    println!("Device paired. Token saved at {token_file}.");
+    Ok(())
+}
+
+fn run_relay_once(base: &str) -> Result<(), Box<dyn Error>> {
+    if !env::args().any(|arg| arg == "--once") {
+        return Err("Relay prototype requires --once".into());
+    }
+    validate_relay_base(base)?;
     let workspace = env::var("TAGMAILS_WORKSPACE")?;
     if !Path::new(&workspace).is_absolute() || !Path::new(&workspace).is_dir() {
         return Err("TAGMAILS_WORKSPACE must be an existing absolute directory".into());
@@ -268,6 +337,13 @@ mod tests {
 
 fn main() -> Result<(), Box<dyn Error>> {
     if let Ok(base) = env::var("TAGMAILS_RELAY_URL") {
+        let args: Vec<String> = env::args().collect();
+        if let Some(index) = args.iter().position(|arg| arg == "--pair") {
+            let code = args
+                .get(index + 1)
+                .ok_or("Pass a pairing code after --pair")?;
+            return pair_relay(&base, code);
+        }
         return run_relay_once(&base);
     }
     let base = env::var("TAGMAILS_LAB_URL").unwrap_or_else(|_| "http://127.0.0.1:4177".into());
