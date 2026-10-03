@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import test from 'node:test';
-import { handleInbound } from './relay-worker.mjs';
+import { completeOneModelClarification, handleInbound } from './relay-worker.mjs';
 import { bindings } from './bindings-fixture.mjs';
+import { sendNextOutbox } from './outbox.mjs';
 
 function mail(providerEmailId, from, overrides = {}) {
   return {
@@ -40,6 +41,33 @@ test('one Jev call routes the initial email and replies retain that route', asyn
     { id: 'claude-sonnet-5-5', effort: 'medium', source: 'classified' },
     { id: 'claude-sonnet-5-5', effort: 'medium', source: 'thread' },
   ]);
+});
+
+test('a malformed model request gets a relay clarification without a paired Mac', async () => {
+  const { env, sqlite } = bindings();
+  env.RESEND_TEST_FROM = 'onboarding@resend.dev';
+  env.SITE_ORIGIN = 'https://tagmails.chatgpt.site';
+  const body = 'Model: Luna please review this';
+  const message = mail('invalid-model', 'owner@gmail.com', { body,
+    rawMime: Buffer.from(['From: owner@gmail.com', 'To: agent@wonder.test',
+      'Subject: Pilot', 'Message-ID: <invalid-model@gmail.com>',
+      'Content-Type: text/plain; charset=utf-8', '', body].join('\r\n')) });
+  assert.deepEqual(await deliver(env, message), { accepted: true, duplicate: false });
+  assert.equal(await completeOneModelClarification(env), true);
+  assert.equal(await completeOneModelClarification(env), false);
+  let reply;
+  assert.equal((await sendNextOutbox(env, {
+    sendEmail: async (payload) => { reply = payload; return { data: { id: 'clarification-sent' } }; },
+    getSentEmail: async () => ({ data: { message_id: '<clarification-sent@resend.dev>' } }),
+  })).state, 'sent');
+  assert.equal(reply.from, 'onboarding@resend.dev');
+  assert.equal(reply.replyTo, 'agent@wonder.test');
+  assert.deepEqual(reply.to, ['owner@gmail.com']);
+  assert.match(reply.text, /Which model should I use\?/);
+  assert.match(reply.text, /Put Model: Codex, Model: Claude, or Model: Luna on its own line/);
+  assert.match(reply.text, /Run details/);
+  assert.match(reply.text, /No local agent ran/);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM outbox').get().n, 1);
 });
 
 test('verified ingress stores one durable job, deduplicates, and grants only visible owner recipients', async () => {

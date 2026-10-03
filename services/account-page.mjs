@@ -149,7 +149,7 @@ async function refresh() {
   $('defaultModel').value = savedDefaultModel;
   $('delivery').textContent = account.deliveryReady
     ? 'Mail delivery is configured for this address.'
-    : 'Address reserved. Email delivery is not connected yet.';
+    : 'This address can receive development test mail. tagmails.com mail awaits domain verification.';
   const next = new URLSearchParams(location.search).get('next');
   if (next?.startsWith('/runs/') && /^[0-9a-f-]{36}$/i.test(next.slice(6))) { location.assign(next); return; }
   try { await devices(); }

@@ -61,6 +61,34 @@ function visibleGuests(message, owner, agent) {
   return guests;
 }
 
+export async function completeOneModelClarification(env) {
+  const row = await env.DB.prepare(`SELECT j.id, t.account_id,
+      json_extract(j.model_json, '$.error') AS error
+    FROM jobs j JOIN threads t ON t.id = j.thread_id
+    JOIN accounts a ON a.id = t.account_id
+    JOIN messages m ON m.id = j.message_id
+    WHERE j.state = 'queued' AND a.active = 1
+      AND json_type(j.model_json, '$.error') = 'text'
+      AND (m.sender_email = a.owner_email OR EXISTS (
+        SELECT 1 FROM participants p WHERE p.thread_id = t.id
+          AND p.email = m.sender_email AND p.revoked_at IS NULL))
+    ORDER BY j.created_at, j.rowid LIMIT 1`).bind().first();
+  if (!row) return false;
+  const key = `results/${row.account_id}/${row.id}/model-clarification.json`;
+  const result = { runtime: 'relay', state: 'needs_clarification', summary: row.error,
+    checks: ['No local agent ran and no task credit was charged.'] };
+  await env.MAIL.put(key, JSON.stringify(result), { httpMetadata: { contentType: 'application/json' } });
+  const [updated] = await env.DB.batch([
+    env.DB.prepare(`UPDATE jobs SET state = 'completed', result_key = ?
+      WHERE id = ? AND state = 'queued' AND json_extract(model_json, '$.error') = ?`)
+      .bind(key, row.id, row.error),
+    env.DB.prepare(`INSERT OR IGNORE INTO outbox (job_id)
+      SELECT id FROM jobs WHERE id = ? AND state = 'completed' AND result_key = ?`)
+      .bind(row.id, key),
+  ]);
+  return (updated.meta?.changes ?? updated.changes) === 1;
+}
+
 async function resolveAgentAddress(db, candidates) {
   if (!candidates.length) return null;
   const placeholders = candidates.map(() => '?').join(', ');
@@ -232,6 +260,11 @@ export default {
     }
   },
   async scheduled(_event, env) {
+    try {
+      for (let index = 0; index < 10; index += 1) {
+        if (!await completeOneModelClarification(env)) break;
+      }
+    } catch { console.error('Model clarification is delayed'); }
     try { await deleteSettledInboundMime(env); }
     catch { console.error('Inbound MIME cleanup is delayed'); }
     try { await deleteExpiredRunArtifacts(env); }

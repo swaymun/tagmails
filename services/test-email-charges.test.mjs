@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash, createHmac } from 'node:crypto';
 import test from 'node:test';
 import { bindings } from './bindings-fixture.mjs';
-import { handleInbound } from './relay-worker.mjs';
+import { completeOneModelClarification, handleInbound } from './relay-worker.mjs';
 import { handleDeviceRequest } from './device-jobs.mjs';
 import { handleAccountRequest } from './account-auth.mjs';
 import { recordDeliveryOutcome, sendNextOutbox } from './outbox.mjs';
@@ -107,16 +107,20 @@ test('an invalid model gets a free clarification reply while funded work still w
     body: 'Model: Not available\n\nPlease check this.',
   })).awaitingCredits, false);
   assert.deepEqual(await testWalletSnapshot(env, 'account-1'), { balanceCents: 0, waitingEmails: 1 });
-  const claimed = await claim(env, token);
-  assert.equal(claimed.claimed, true);
-  const envelope = JSON.parse(Buffer.from(claimed.payload, 'base64url').toString());
-  assert.match(envelope.model.error, /not available/i);
-  await env.MAIL.put('results/clarification.json', JSON.stringify({
-    state: 'needs_clarification', summary: envelope.model.error,
-  }));
-  sqlite.prepare("UPDATE jobs SET state = 'completed', result_key = ? WHERE id = ?")
-    .run('results/clarification.json', envelope.jobId);
-  sqlite.prepare('INSERT INTO outbox (job_id) VALUES (?)').run(envelope.jobId);
+  assert.deepEqual(await claim(env, token), { claimed: false });
+  assert.equal(await completeOneModelClarification(env), true);
+  assert.equal(await completeOneModelClarification(env), false);
+  const clarification = sqlite.prepare(`SELECT j.state, j.result_key, o.state AS outbox_state
+    FROM jobs j JOIN outbox o ON o.job_id = j.id
+    JOIN messages m ON m.id = j.message_id WHERE m.provider_email_id = ?`).get('invalid-1');
+  assert.equal(clarification.state, 'completed');
+  assert.equal(clarification.outbox_state, 'queued');
+  const saved = await env.MAIL.get(clarification.result_key);
+  const result = JSON.parse(Buffer.from(await saved.arrayBuffer()).toString());
+  assert.equal(result.runtime, 'relay');
+  assert.equal(result.state, 'needs_clarification');
+  assert.match(result.summary, /could not read the Model line/i);
+  assert.deepEqual(await claim(env, token), { claimed: false });
   assert.equal((await sendNextOutbox(env, {
     sendEmail: async () => ({ data: { id: 'sent-clarification' } }),
     getSentEmail: async () => ({ data: { message_id: '<sent-clarification@tagmails.test>' } }),

@@ -222,6 +222,7 @@ async function prepare(env, row) {
     : relayOrigin ? `${relayOrigin}/runs/${encodeURIComponent(row.job_id)}` : null;
   const participantTranscriptReady = siteOrigin && env.SITE_PARTICIPANT_TRANSCRIPTS === 'true';
   const sharedWithParticipant = [...to, ...cc].some((email) => email !== owner);
+  const runLinkLabel = result.runtime === 'relay' ? 'Run details' : 'Run transcript';
   const fileNote = result.artifactIds?.length && ownerCanOpen && siteOrigin
     ? [`${result.artifactIds.length} file${result.artifactIds.length === 1 ? '' : 's'} available on the private run page for seven days.`]
     : [];
@@ -231,7 +232,7 @@ async function prepare(env, row) {
     state: result.state, summary: result.summary,
     details: [...(selectedModel ? [selectedModel] : []), ...(result.details ?? []), ...fileNote], checks: result.checks,
     links: transcriptUrl && (ownerCanOpen || participantTranscriptReady)
-      ? [{ label: sharedWithParticipant && !participantTranscriptReady ? 'Run transcript (owner only)' : 'Run transcript',
+      ? [{ label: sharedWithParticipant && !participantTranscriptReady ? `${runLinkLabel} (owner only)` : runLinkLabel,
         url: transcriptUrl }] : [],
     note: result.runtime === 'relay'
       ? 'No local agent ran for this email.'

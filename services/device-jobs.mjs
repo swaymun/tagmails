@@ -48,12 +48,13 @@ async function claim(env, device) {
     .bind(device.id).run();
   const leaseId = randomUUID();
   const funded = testBillingEnabled(env)
-    ? `AND (json_extract(j.model_json, '$.error') IS NOT NULL OR EXISTS
-        (SELECT 1 FROM test_email_charges c WHERE c.job_id = j.id AND c.state = 'reserved'))`
+    ? `AND EXISTS
+        (SELECT 1 FROM test_email_charges c WHERE c.job_id = j.id AND c.state = 'reserved')`
     : '';
   const eligible = `(j.state = 'queued' OR
       (j.state = 'running' AND (j.lease_until IS NULL OR j.lease_until <= CURRENT_TIMESTAMP)))
     ${funded}
+    AND json_extract(j.model_json, '$.error') IS NULL
     AND (m.sender_email = a.owner_email OR EXISTS (
       SELECT 1 FROM participants p WHERE p.thread_id = t.id AND p.email = m.sender_email AND p.revoked_at IS NULL))
     AND NOT EXISTS (SELECT 1 FROM jobs earlier WHERE earlier.thread_id = j.thread_id

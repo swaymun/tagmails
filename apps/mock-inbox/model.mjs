@@ -43,5 +43,7 @@ export function chooseModel(body, defaultModel = 'gpt-6.1-sol') {
     'gpt-6-luna': ['gpt-6-luna', 'low'],
   };
   const choice = choices[requested];
-  return choice ? { id: choice[0], effort: choice[1], source: 'explicit' } : { error: `“${requested.slice(0, 80)}” is not available. Use Codex, Claude, or Luna.` };
+  return choice ? { id: choice[0], effort: choice[1], source: 'explicit' } : {
+    error: 'I could not read the Model line. Put Model: Codex, Model: Claude, or Model: Luna on its own line, then write the task below.',
+  };
 }
