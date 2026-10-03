@@ -5,6 +5,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { stageAgentAttachments } from './agent-attachments.mjs';
+import { formatAgentAnswer } from './answer-result.mjs';
 import { renewClaim } from './claim-renew.mjs';
 import { addRunEvent, claudeRunEvents, finishRunTranscript, runTranscript } from './run-transcript.mjs';
 
@@ -77,16 +78,16 @@ function promptFor(claim, attachmentPrompt = '', write = false) {
 }
 
 function resultFromAnswer(answer, write) {
-  const clean = answer.trim().slice(0, 5000);
-  if (!clean) return fail('Claude completed without a readable answer.', write);
-  const paragraphs = clean.split(/\n\s*\n/).map((item) => item.trim()).filter(Boolean);
+  const formatted = formatAgentAnswer(answer);
+  if (!formatted) return fail('Claude completed without a readable answer.', write);
   return {
     runtime: runtime(write),
     state: 'completed',
-    summary: paragraphs.shift().slice(0, 500),
-    details: paragraphs.join('\n\n').match(/[\s\S]{1,300}/g)?.slice(0, 12) ?? [],
+    summary: formatted.summary,
+    details: formatted.details,
     checks: [write ? `Claude ${MODEL} completed with file tools in the selected workspace; review its reported edits and checks.`
-      : `Claude ${MODEL} completed with read-only file tools; no write tool was available.`],
+      : `Claude ${MODEL} completed with read-only file tools; no write tool was available.`,
+    ...(formatted.truncated ? ['The agent answer was shortened to fit this email. Reply to request the omitted portion.'] : [])],
   };
 }
 

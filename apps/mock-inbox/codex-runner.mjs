@@ -4,6 +4,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { stageAgentAttachments } from './agent-attachments.mjs';
+import { formatAgentAnswer } from './answer-result.mjs';
 import { prepareCodexProfile, PROFILE, WRITE_PROFILE } from './codex-profile.mjs';
 import { renewClaim } from './claim-renew.mjs';
 import { addRunEvent, codexRunEvent, finishRunTranscript, runTranscript } from './run-transcript.mjs';
@@ -11,7 +12,6 @@ import { addRunEvent, codexRunEvent, finishRunTranscript, runTranscript } from '
 const MODELS = new Set(['gpt-6-luna', 'gpt-6.1-sol']);
 const runtimeFor = (write) => write ? 'codex-app-server-write' : 'codex-app-server-readonly';
 const MAX_EVENTS = 2 * 1024 * 1024;
-const MAX_ANSWER = 5000;
 const MAX_CLAIM = 8 * 1024 * 1024;
 const SESSION_ID = /^[0-9a-f-]{36}$/i;
 
@@ -74,17 +74,17 @@ export function promptFor(claim, attachmentPrompt = '', write = false) {
 }
 
 function resultFromAnswer(answer, model, approvals, usage, write) {
-  const clean = answer.trim().slice(0, MAX_ANSWER);
-  if (!clean) return fail('Codex completed without a readable answer.', write);
-  const paragraphs = clean.split(/\n\s*\n/).map((item) => item.trim()).filter(Boolean);
+  const formatted = formatAgentAnswer(answer);
+  if (!formatted) return fail('Codex completed without a readable answer.', write);
   return {
     runtime: runtimeFor(write),
     state: approvals ? 'needs_approval' : 'completed',
-    summary: paragraphs.shift().slice(0, 500),
-    details: paragraphs.join('\n\n').match(/[\s\S]{1,300}/g)?.slice(0, 12) ?? [],
+    summary: formatted.summary,
+    details: formatted.details,
     checks: [write
       ? `Codex ${model} ran with selected-workspace writes and no command network access.`
       : `Codex ${model} ran with workspace-only reads, no writes, and no command network access.`,
+    ...(formatted.truncated ? ['The agent answer was shortened to fit this email. Reply to request the omitted portion.'] : []),
     ...(approvals ? [`${approvals} request(s) to expand permissions were declined.${write ? ' Local edits may already have occurred.' : ''}`] : [])],
     ...(usage ? { usage } : {}),
   };
