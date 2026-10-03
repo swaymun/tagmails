@@ -58,6 +58,7 @@ test('a paired device receives a signed, account-scoped claim and completes it o
   const signedJob = envelope(body);
   assert.deepEqual(signedJob.model, { id: 'gpt-6-luna', effort: 'low', source: 'explicit' });
   assert.equal(signedJob.request.from, 'owner@gmail.com');
+  assert.equal(signedJob.request.fromOwner, true);
   assert.match(signedJob.request.body, /Read the status/);
   assert.equal(body.signature, createHmac('sha256', paired.token).update(Buffer.from(body.payload, 'base64url')).digest('base64url'));
   assert.deepEqual((await call(env, paired.token, 'claim')).body, { claimed: false });
@@ -86,6 +87,30 @@ test('a paired device receives a signed, account-scoped claim and completes it o
   assert.equal(sqlite.prepare('SELECT state FROM outbox').get().state, 'queued');
   assert.equal(JSON.parse(objects.get(job.result_key).toString()).summary, result.summary);
   assert.deepEqual(JSON.parse(objects.get(job.result_key).toString()).transcript, result.transcript);
+});
+
+test('a signed guest claim cannot request the owner-only answer export', async () => {
+  const { env, sqlite } = bindings();
+  const paired = device(sqlite);
+  await inbound(env);
+  const owner = envelope((await call(env, paired.token, 'claim')).body);
+  assert.equal((await call(env, paired.token, 'complete', { jobId: owner.jobId, leaseId: owner.leaseId,
+    result: { state: 'completed', summary: 'Owner turn done.' } })).status, 200);
+  sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)')
+    .run(owner.threadId, 'guest@gmail.com');
+  const messageId = '<guest-reply@gmail.com>';
+  const body = 'TagMails-Attach: answer.txt\nModel: Luna\nSummarize this.';
+  const guest = await handleInbound(new Request('https://relay.test/webhooks/resend', {
+    method: 'POST', body: '{}',
+  }), env, { inspect: async () => ({ providerEmailId: 'guest-reply', messageId,
+    from: 'guest@gmail.com', agentAddress: 'agent@wonder.test', to: ['agent@wonder.test'],
+    cc: [], bcc: [], subject: 'Re: Check routing', body, parentIds: ['<email-1@gmail.com>'],
+    rawMime: Buffer.from(`From: guest@gmail.com\r\nTo: agent@wonder.test\r\nSubject: Re: Check routing\r\nMessage-ID: ${messageId}\r\nReferences: <email-1@gmail.com>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}`),
+  }) });
+  assert.equal(guest.status, 200);
+  const claim = envelope((await call(env, paired.token, 'claim')).body);
+  assert.equal(claim.request.from, 'guest@gmail.com');
+  assert.equal(claim.request.fromOwner, false);
 });
 
 test('expired leases are reclaimed and a stale or different device cannot complete them', async () => {

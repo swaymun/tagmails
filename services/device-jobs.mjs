@@ -66,7 +66,7 @@ async function claim(env, device) {
   if (!message) throw new Error('Claimed job has no inbound message');
   const object = await env.MAIL.get(message.object_key);
   if (!object) throw new Error('Claimed job has no stored MIME');
-  const account = await env.DB.prepare('SELECT agent_email FROM accounts WHERE id = ?').bind(device.account_id).first();
+  const account = await env.DB.prepare('SELECT agent_email, owner_email FROM accounts WHERE id = ?').bind(device.account_id).first();
   const parsed = await parseInbound(await object.arrayBuffer(), account.agent_email, {
     verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false,
   });
@@ -74,7 +74,8 @@ async function claim(env, device) {
   const envelope = {
     jobId: row.id, threadId: row.thread_id, leaseId, leaseUntil: row.lease_until,
     model: chooseModel(parsed.body),
-    request: { from: parsed.from, subject: parsed.subject, body: parsed.body,
+    request: { from: parsed.from, fromOwner: parsed.from === account.owner_email,
+      subject: parsed.subject, body: parsed.body,
       attachments: parsed.attachments.map((attachment, index) => ({
         ...attachment, path: `/api/device/attachment?jobId=${row.id}&leaseId=${leaseId}&index=${index}`,
       })) },

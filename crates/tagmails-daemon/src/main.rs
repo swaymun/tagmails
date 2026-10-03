@@ -267,6 +267,61 @@ fn relay_result(claim: &Value, base: &str) -> Result<Value, Box<dyn Error>> {
     })
 }
 
+fn wants_answer_file(claim: &Value) -> bool {
+    claim["request"]["fromOwner"] == true
+        && claim["request"]["body"]
+            .as_str()
+            .and_then(|body| body.lines().next())
+            .map(|line| line.trim_end() == "TagMails-Attach: answer.txt")
+            .unwrap_or(false)
+}
+
+fn answer_file(result: &Value) -> Vec<u8> {
+    let mut lines = Vec::new();
+    if let Some(summary) = result["summary"].as_str() {
+        lines.push(summary.to_owned());
+    }
+    for field in ["details", "checks"] {
+        if let Some(items) = result[field].as_array() {
+            for item in items {
+                if let Some(text) = item.as_str() {
+                    lines.push(text.to_owned());
+                }
+            }
+        }
+    }
+    format!("{}\n", lines.join("\n\n")).into_bytes()
+}
+
+fn upload_answer_file(
+    client: &Client,
+    base: &str,
+    token: &str,
+    job_id: &str,
+    lease_id: &str,
+    result: &Value,
+) -> Result<(), Box<dyn Error>> {
+    let bytes = answer_file(result);
+    let response: Value = client
+        .post(format!(
+            "{}/api/device/artifacts?jobId={job_id}&leaseId={lease_id}",
+            base.trim_end_matches('/')
+        ))
+        .bearer_auth(token)
+        .header("Content-Type", "text/plain")
+        .header("Content-Length", bytes.len().to_string())
+        .header("X-TagMails-Filename", "answer.txt")
+        .header("X-TagMails-Upload-Id", lease_id)
+        .body(bytes)
+        .send()?
+        .error_for_status()?
+        .json()?;
+    if response["id"] != lease_id {
+        return Err("Relay returned a different answer file ID".into());
+    }
+    Ok(())
+}
+
 fn relay_iteration(client: &Client, base: &str, token: &str) -> Result<bool, Box<dyn Error>> {
     let response = relay_post(client, base, "/api/device/claim", token, json!({}))?;
     if response["claimed"] != true {
@@ -283,7 +338,11 @@ fn relay_iteration(client: &Client, base: &str, token: &str) -> Result<bool, Box
         .to_owned();
     claim["claimId"] = json!(lease_id);
     claim["claimed"] = json!(true);
-    let result = relay_result(&claim, base)?;
+    let mut result = relay_result(&claim, base)?;
+    if result["state"] == "completed" && wants_answer_file(&claim) {
+        upload_answer_file(client, base, token, &job_id, &lease_id, &result)?;
+        result["artifactIds"] = json!([lease_id]);
+    }
     let completion = relay_post(
         client,
         base,
@@ -379,6 +438,23 @@ mod tests {
         .unwrap();
         assert_eq!(result["state"], "needs_clarification");
         assert_eq!(result["summary"], "Use Codex, Claude, or Luna.");
+    }
+
+    #[test]
+    fn answer_file_requires_an_explicit_owner_command_and_contains_only_the_visible_answer() {
+        let owner = json!({"request":{"fromOwner":true,
+            "body":"TagMails-Attach: answer.txt\nModel: Luna\nSummarize this."}});
+        assert!(wants_answer_file(&owner));
+        assert!(!wants_answer_file(&json!({"request":{"fromOwner":false,
+            "body":"TagMails-Attach: answer.txt\nSummarize this."}})));
+        assert!(!wants_answer_file(&json!({"request":{"fromOwner":true,
+            "body":"Please summarize.\nTagMails-Attach: answer.txt"}})));
+        let result = json!({"summary":"Done.","details":["Found two items."],
+            "checks":["No files changed."],"transcript":{"events":[{"text":"Private step"}]}});
+        assert_eq!(
+            String::from_utf8(answer_file(&result)).unwrap(),
+            "Done.\n\nFound two items.\n\nNo files changed.\n"
+        );
     }
 }
 
