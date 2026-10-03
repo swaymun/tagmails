@@ -161,8 +161,8 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
   if (!threadId) statements.push(env.DB.prepare('INSERT INTO threads (id, account_id, subject) VALUES (?, ?, ?)')
     .bind(newThreadId, account.id, message.subject.slice(0, 300)));
   statements.push(env.DB.prepare(`INSERT INTO messages
-    (id, account_id, thread_id, provider_email_id, message_id, direction, sender_email, object_key)
-    VALUES (?, ?, ?, ?, ?, 'inbound', ?, ?)`).bind(id, account.id, newThreadId, message.providerEmailId, message.messageId, message.from, objectKey));
+    (id, account_id, thread_id, provider_email_id, message_id, direction, sender_email, object_key, agent_email)
+    VALUES (?, ?, ?, ?, ?, 'inbound', ?, ?, ?)`).bind(id, account.id, newThreadId, message.providerEmailId, message.messageId, message.from, objectKey, agent));
   for (const guest of guests) {
     statements.push(env.DB.prepare(`INSERT INTO participants (thread_id, email) VALUES (?, ?)
       ON CONFLICT(thread_id, email) DO UPDATE SET revoked_at = NULL`).bind(newThreadId, guest));

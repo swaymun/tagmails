@@ -4,7 +4,7 @@ import { bindings } from './bindings-fixture.mjs';
 import { reconcileOneUnknownOutbox, reconcileSentEvent, recordDeliveryOutcome, sendNextOutbox } from './outbox.mjs';
 import { handleInbound } from './relay-worker.mjs';
 
-function queuedTurn({ env, sqlite }, { number, from, to, cc = [], inReplyTo = null, references = [], accountId = 'account-1', threadId = 'thread-1', jobId = `job-${number}`, model = null }) {
+function queuedTurn({ env, sqlite }, { number, from, to, cc = [], inReplyTo = null, references = [], accountId = 'account-1', threadId = 'thread-1', jobId = `job-${number}`, model = null, receivedAgent = null }) {
   const id = `inbound-${number}`;
   const messageId = `<inbound-${number}@gmail.com>`;
   const raw = [
@@ -18,8 +18,8 @@ function queuedTurn({ env, sqlite }, { number, from, to, cc = [], inReplyTo = nu
   sqlite.prepare('INSERT OR IGNORE INTO threads (id, account_id, subject) VALUES (?, ?, ?)')
     .run(threadId, accountId, 'Shared work');
   sqlite.prepare(`INSERT INTO messages
-    (id, account_id, thread_id, provider_email_id, message_id, direction, sender_email, object_key)
-    VALUES (?, ?, ?, ?, ?, 'inbound', ?, ?)`).run(id, accountId, threadId, `provider-${number}`, messageId, from, `inbound/${number}.eml`);
+    (id, account_id, thread_id, provider_email_id, message_id, direction, sender_email, object_key, agent_email)
+    VALUES (?, ?, ?, ?, ?, 'inbound', ?, ?, ?)`).run(id, accountId, threadId, `provider-${number}`, messageId, from, `inbound/${number}.eml`, receivedAgent);
   sqlite.prepare(`INSERT INTO jobs (id, thread_id, message_id, state, result_key, model_json)
     VALUES (?, ?, ?, 'completed', ?, ?)`).run(jobId, threadId, id, `results/${number}.json`, model && JSON.stringify(model));
   sqlite.prepare('INSERT INTO outbox (job_id) VALUES (?)').run(jobId);
@@ -90,6 +90,23 @@ test('two sent turns preserve threading and only visible recipients may react', 
     { accepted: true, reaction: true, duplicate: false });
   assert.equal((await sendNextOutbox(env, provider)).state, 'idle');
   assert.equal(payloads.length, 2);
+});
+
+test('a queued message received at the old alias replies from the new account address', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com',
+    to: ['agent@wonder.test'], receivedAgent: 'agent@wonder.test' });
+  sqlite.prepare('UPDATE accounts SET agent_email = ? WHERE id = ?').run('agent@tagmails.test', 'account-1');
+  let sent;
+  assert.equal((await sendNextOutbox(env, {
+    sendEmail: async (payload) => { sent = payload; return { data: { id: 'migrated-sent' } }; },
+    getSentEmail: async () => ({ data: { message_id: '<migrated-sent@tagmails.test>' } }),
+  })).state, 'sent');
+  assert.equal(sent.from, 'agent@tagmails.test');
+  assert.deepEqual(sent.to, ['owner@gmail.com']);
+  assert.equal(sent.cc, undefined);
+  assert.equal(sent.headers['In-Reply-To'], '<inbound-1@gmail.com>');
 });
 
 test('development sender replies to the account owner through the inbound alias', async () => {

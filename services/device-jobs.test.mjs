@@ -65,6 +65,18 @@ test('queued mail keeps its selected default after the account preference change
     { id: 'gpt-6-luna', effort: 'low', source: 'explicit' });
 });
 
+test('a queued message stays claimable after the account address changes', async () => {
+  const { env, sqlite } = bindings();
+  const paired = device(sqlite);
+  await inbound(env, 'before-domain-move');
+  assert.equal(sqlite.prepare('SELECT agent_email FROM messages').get().agent_email, 'agent@wonder.test');
+  sqlite.prepare('UPDATE accounts SET agent_email = ? WHERE id = ?').run('agent@tagmails.test', 'account-1');
+  const claim = await call(env, paired.token, 'claim');
+  assert.equal(claim.status, 200);
+  assert.equal(claim.body.claimed, true);
+  assert.match(envelope(claim.body).request.body, /Read the status/);
+});
+
 test('replies inherit the original route without reclassifying quoted model lines', async () => {
   const { env, sqlite } = bindings();
   sqlite.prepare('UPDATE accounts SET default_model = ? WHERE id = ?').run('claude-sonnet-5-5', 'account-1');
@@ -272,6 +284,7 @@ test('a 24 MB MIME attachment stays out of the claim and requires its active dev
       cc: [], bcc: [], subject: 'Large input', body: 'Inspect the attached file.', parentIds: [], rawMime }),
   });
   assert.equal(response.status, 200);
+  sqlite.prepare('UPDATE accounts SET agent_email = ? WHERE id = ?').run('agent@tagmails.test', 'account-1');
   const lease = envelope((await call(env, paired.token, 'claim')).body);
   assert.ok(JSON.stringify(lease).length < 2_000);
   assert.equal(lease.request.attachments[0].size, contents.length);
@@ -289,6 +302,7 @@ test('a 24 MB MIME attachment stays out of the claim and requires its active dev
     result: { state: 'completed', summary: 'I read the attached input.' } })).status, 200);
   const sent = await sendNextOutbox(env, {
     sendEmail: async (payload) => {
+      assert.equal(payload.from, 'agent@tagmails.test');
       assert.equal(payload.to[0], 'owner@gmail.com');
       assert.match(payload.text, /I read the attached input/);
       return { data: { id: randomUUID() } };

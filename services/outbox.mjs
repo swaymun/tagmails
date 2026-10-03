@@ -163,7 +163,7 @@ export async function reconcileOneUnknownOutbox(env, {
 
 async function prepare(env, row) {
   const inbound = await env.DB.prepare(`SELECT m.object_key, m.message_id, m.sender_email,
-      t.subject, a.owner_email, a.agent_email, j.model_json
+      t.subject, a.owner_email, a.agent_email, COALESCE(m.agent_email, a.agent_email) AS received_agent_email, j.model_json
     FROM jobs j JOIN messages m ON m.id = j.message_id
     JOIN threads t ON t.id = j.thread_id JOIN accounts a ON a.id = t.account_id
     WHERE j.id = ? LIMIT 1`).bind(row.job_id).first();
@@ -174,7 +174,7 @@ async function prepare(env, row) {
   const rawBytes = await raw.arrayBuffer();
   let request;
   try {
-    request = await parseInbound(rawBytes, inbound.agent_email, {
+    request = await parseInbound(rawBytes, inbound.received_agent_email, {
       verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false,
     });
   } catch { throw new InvalidOutboxSource('Stored inbound MIME cannot be parsed'); }
@@ -192,7 +192,9 @@ async function prepare(env, row) {
       .bind(row.thread_id, request.from).first();
     if (!sender) return null;
   }
-  const recipients = [...new Set([...request.to, ...request.cc])].filter((email) => email !== agent && email !== request.from);
+  const receivedAgent = inbound.received_agent_email.toLowerCase();
+  const recipients = [...new Set([...request.to, ...request.cc])].filter((email) =>
+    email !== agent && email !== receivedAgent && email !== request.from);
   const visible = [];
   for (const email of recipients) {
     if (email === owner) { visible.push(email); continue; }

@@ -77,14 +77,14 @@ async function claim(env, device) {
     ) RETURNING id, thread_id, message_id, lease_until, model_json`)
     .bind(device.id, leaseId, device.account_id, device.id).first();
   if (!row) return json({ claimed: false });
-  const message = await env.DB.prepare(`SELECT m.object_key, m.message_id, t.subject
+  const message = await env.DB.prepare(`SELECT m.object_key, m.message_id, m.agent_email, t.subject
     FROM messages m JOIN threads t ON t.id = m.thread_id
     WHERE m.id = ? AND m.account_id = ? LIMIT 1`).bind(row.message_id, device.account_id).first();
   if (!message) throw new Error('Claimed job has no inbound message');
   const object = await env.MAIL.get(message.object_key);
   if (!object) throw new Error('Claimed job has no stored MIME');
   const account = await env.DB.prepare('SELECT agent_email, owner_email, default_model FROM accounts WHERE id = ?').bind(device.account_id).first();
-  const parsed = await parseInbound(await object.arrayBuffer(), account.agent_email, {
+  const parsed = await parseInbound(await object.arrayBuffer(), message.agent_email ?? account.agent_email, {
     verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false,
   });
   if (parsed.messageId !== message.message_id) throw new Error('Stored MIME no longer matches the claimed job');
@@ -111,7 +111,7 @@ async function attachment(request, env, device, url) {
       !/^[0-9a-f-]{36}$/i.test(leaseId ?? '') || !/^[0-4]$/.test(index ?? '')) {
     return json({ error: 'Invalid attachment request' }, 400);
   }
-  const message = await env.DB.prepare(`SELECT m.object_key, m.message_id, a.agent_email
+  const message = await env.DB.prepare(`SELECT m.object_key, m.message_id, COALESCE(m.agent_email, a.agent_email) AS agent_email
     FROM jobs j JOIN threads t ON t.id = j.thread_id
     JOIN messages m ON m.id = j.message_id
     JOIN accounts a ON a.id = t.account_id
