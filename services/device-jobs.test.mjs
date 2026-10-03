@@ -18,16 +18,17 @@ function device(sqlite, accountId = 'account-1') {
 
 function envelope(body) { return JSON.parse(Buffer.from(body.payload, 'base64url').toString('utf8')); }
 
-async function inbound(env, id = 'email-1', body = 'Model: Luna\nRead the status without changing files.') {
+async function inbound(env, id = 'email-1', body = 'Model: Luna\nRead the status without changing files.', parentIds = []) {
   const messageId = `<${id}@gmail.com>`;
   const rawMime = Buffer.from([
     'From: owner@gmail.com', 'To: agent@wonder.test', 'Subject: Check routing',
-    `Message-ID: ${messageId}`, 'Content-Type: text/plain; charset=utf-8', '',
+    `Message-ID: ${messageId}`, ...(parentIds.length ? [`References: ${parentIds.join(' ')}`] : []),
+    'Content-Type: text/plain; charset=utf-8', '',
     body,
   ].join('\r\n'));
   const message = {
     providerEmailId: id, messageId, from: 'owner@gmail.com', agentAddress: 'agent@wonder.test', to: ['agent@wonder.test'],
-    cc: [], bcc: [], subject: 'Check routing', parentIds: [], rawMime, body,
+    cc: [], bcc: [], subject: 'Check routing', parentIds, rawMime, body,
   };
   const response = await handleInbound(new Request('https://relay.test/webhooks/resend', { method: 'POST', body: '{}' }), env, {
     inspect: async () => message,
@@ -61,6 +62,19 @@ test('queued mail keeps its selected default after the account preference change
   const second = await call(env, paired.token, 'claim');
   assert.deepEqual(envelope(second.body).model,
     { id: 'gpt-6-luna', effort: 'low', source: 'explicit' });
+});
+
+test('quoted model lines do not reroute a received reply', async () => {
+  const { env, sqlite } = bindings();
+  sqlite.prepare('UPDATE accounts SET default_model = ? WHERE id = ?').run('claude-sonnet-5-5', 'account-1');
+  await inbound(env, 'original-route', 'Model: Luna\nDraft the review.');
+  await inbound(env, 'quoted-route', 'Please review this.\n\nOn Friday, Alex wrote:\nModel: Luna',
+    ['<original-route@gmail.com>']);
+  const jobs = sqlite.prepare(`SELECT j.thread_id, j.model_json FROM jobs j
+    JOIN messages m ON m.id = j.message_id ORDER BY m.provider_email_id`).all();
+  assert.equal(jobs[0].thread_id, jobs[1].thread_id);
+  assert.deepEqual(JSON.parse(jobs[1].model_json),
+    { id: 'claude-sonnet-5-5', effort: 'medium', source: 'default' });
 });
 
 test('a paired device receives a signed, account-scoped claim and completes it once', async () => {

@@ -243,7 +243,7 @@ document.addEventListener('DOMContentLoaded', () => {
     <select id="defaultModel"><option value="gpt-6.1-sol">Codex · GPT-6.1 Sol · medium</option>
       <option value="claude-sonnet-5-5">Claude Code · Sonnet 5.5 · medium</option></select>
     <button id="saveDefaultModel" class="secondary">Save default model</button>
-    <p class="muted">Write <code>Model: Codex</code>, <code>Model: Claude</code>, or <code>Model: Luna</code> in an email to override it for that message.</p>
+    <p class="muted">Start an email with <code>Model: Codex</code>, <code>Model: Claude</code>, or <code>Model: Luna</code> to override it for that message. Put the line before your request and any quoted replies.</p>
     <button id="signOut" class="secondary">Sign out</button></section>
   <section class="card"><h2>Pair a Mac</h2><p>Create a one-time code, then run the setup command in your TagMails checkout. The device token stays in a file on your Mac.</p>
     <button id="pair">Create pairing code</button><p><code id="pairCode"></code></p><pre id="pairCommand"></pre>

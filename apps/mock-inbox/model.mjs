@@ -1,9 +1,28 @@
 export const ACCOUNT_DEFAULT_MODELS = ['gpt-6.1-sol', 'claude-sonnet-5-5'];
 
+function requestedModel(body) {
+  let inDirectives = false;
+  for (const line of String(body ?? '').split(/\r?\n/)) {
+    if (!line.trim()) {
+      if (inDirectives) break;
+      continue;
+    }
+    const model = line.match(/^Model:[ \t]*(.*)$/i);
+    if (model) return model[1].trim().toLowerCase();
+    if (/^TagMails-(?:Attach|File):/i.test(line)) {
+      inDirectives = true;
+      continue;
+    }
+    break;
+  }
+  return null;
+}
+
 export function chooseModel(body, defaultModel = 'gpt-6.1-sol') {
-  const requested = String(body ?? '').match(/^Model:\s*(.+)$/im)?.[1]?.trim().toLowerCase();
-  if (!requested) return { id: ACCOUNT_DEFAULT_MODELS.includes(defaultModel) ? defaultModel : 'gpt-6.1-sol',
+  const requested = requestedModel(body);
+  if (requested === null) return { id: ACCOUNT_DEFAULT_MODELS.includes(defaultModel) ? defaultModel : 'gpt-6.1-sol',
     effort: 'medium', source: 'default' };
+  if (!requested) return { error: 'Choose Codex, Claude, or Luna after Model:.' };
   const choices = {
     codex: ['gpt-6.1-sol', 'medium'],
     'gpt-6.1-sol': ['gpt-6.1-sol', 'medium'],
