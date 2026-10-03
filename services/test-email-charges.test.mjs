@@ -81,6 +81,24 @@ test('pilot credits reserve oldest queued email once, isolate accounts, and gate
   assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM test_email_charges WHERE account_id = ?').get('account-1').n, 1);
 });
 
+test('one credit funds the first turn when same-second job IDs sort in reverse order', async () => {
+  const { env, sqlite } = pilot();
+  const token = device(sqlite);
+  assert.equal((await deliver(env, 'first')).awaitingCredits, true);
+  assert.equal((await deliver(env, 'second', 'owner@gmail.com', {
+    parentIds: ['<first@gmail.com>'],
+  })).awaitingCredits, true);
+  sqlite.prepare("UPDATE jobs SET id = 'z-first' WHERE message_id = (SELECT id FROM messages WHERE message_id = '<first@gmail.com>')").run();
+  sqlite.prepare("UPDATE jobs SET id = 'a-second' WHERE message_id = (SELECT id FROM messages WHERE message_id = '<second@gmail.com>')").run();
+  assert.equal(sqlite.prepare('SELECT COUNT(DISTINCT thread_id) n FROM jobs').get().n, 1);
+  credit(sqlite, 'account-1', 5, 'one-turn');
+  assert.equal(await reservePendingTestEmails(env, 'account-1'), 1);
+  assert.equal(sqlite.prepare('SELECT job_id FROM test_email_charges').get().job_id, 'z-first');
+  const claimed = await claim(env, token);
+  assert.equal(claimed.claimed, true);
+  assert.equal(JSON.parse(Buffer.from(claimed.payload, 'base64url').toString()).jobId, 'z-first');
+});
+
 test('an invalid model gets a free clarification reply while funded work still waits', async () => {
   const { env, sqlite } = pilot();
   const token = device(sqlite);

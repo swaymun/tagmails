@@ -31,7 +31,7 @@ export async function reservePendingTestEmails(env, accountId, limit = 20) {
         AND (SELECT COALESCE(SUM(amount_cents), 0) FROM credit_ledger WHERE account_id = t.account_id)
           - (SELECT COALESCE(SUM(amount_cents), 0) FROM test_email_charges
              WHERE account_id = t.account_id AND state != 'released') >= ?
-      ORDER BY j.created_at, j.id LIMIT 1`)
+      ORDER BY j.created_at, j.rowid LIMIT 1`)
       .bind(TEST_EMAIL_CENTS, accountId, TEST_EMAIL_CENTS).run();
     if (!changed(result)) break;
     reserved += 1;
