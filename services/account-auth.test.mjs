@@ -196,6 +196,7 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.equal(siteRun.headers.get('cache-control'), 'no-store');
   const siteResult = await siteRun.json();
   assert.equal(siteResult.selectedModel, 'Selected model: Claude Code Sonnet 5.5 (medium; requested in this email).');
+  assert.equal(siteResult.threadId, 'receipt-thread');
   assert.equal(siteResult.deliveryState, 'uncertain');
   assert.deepEqual(siteResult.deliveryRecipients, []);
   assert.equal(siteResult.result.transcript.events[0].text, 'Find <private> items');
@@ -230,6 +231,7 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.equal(guestResult.result.reportedListCostUsd, undefined);
   assert.equal(guestResult.attempts, undefined);
   assert.equal(guestResult.threadRuns, undefined);
+  assert.equal(guestResult.threadId, undefined);
   assert.deepEqual(guestResult.deliveryRecipients, [{ email: 'guest@gmail.com', status: 'bounced' }]);
   assert.equal((await handleAccountRequest(new Request(`https://relay.test/api/runs/${laterRunId}`, {
     headers: { Authorization: 'Bearer test', Origin: env.SITE_ORIGIN },
@@ -274,6 +276,50 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   }), env)).status, 401);
   assert.equal((await handleAccountRequest(request('/api/auth/logout', 'POST', {}, cookie), env, options)).status, 200);
   assert.equal((await handleAccountRequest(request('/api/account/me', 'GET', undefined, cookie), env, options)).status, 401);
+});
+
+test('the owner can page through one email thread without exposing private result fields', async () => {
+  const { env, sqlite } = bindings();
+  env.GOOGLE_CLIENT_ID = clientId;
+  env.SITE_ORIGIN = 'https://tagmails.chatgpt.site';
+  const threadId = '11111111-1111-4111-8111-111111111111';
+  sqlite.prepare('INSERT INTO threads (id, account_id, subject) VALUES (?, ?, ?)')
+    .run(threadId, 'account-1', 'Multi-turn review');
+  const id = (number) => `00000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
+  for (let number = 1; number <= 22; number += 1) {
+    sqlite.prepare(`INSERT INTO messages (id, account_id, thread_id, message_id, direction, sender_email, object_key)
+      VALUES (?, ?, ?, ?, 'inbound', ?, ?)`).run(`message-${number}`, 'account-1', threadId,
+      `<turn-${number}@gmail.com>`, 'owner@gmail.com', `inbound/${number}.eml`);
+    sqlite.prepare(`INSERT INTO jobs (id, thread_id, message_id, state, result_key)
+      VALUES (?, ?, ?, 'completed', ?)`).run(id(number), threadId, `message-${number}`,
+        number === 22 ? 'results/last.json' : null);
+  }
+  await env.MAIL.put('results/last.json', JSON.stringify({ summary: 'The last answer.',
+    artifactIds: ['private-file'], usage: { inputTokens: 999 },
+    transcript: { version: 1, truncated: false, events: [
+      { kind: 'request', text: 'What changed?' }, { kind: 'assistant', text: 'The last answer.' },
+    ] } }));
+  const route = (suffix = '', verifyIdentity = async () => ({ sub: 'google-sub-1', email: 'owner@gmail.com' })) =>
+    handleAccountRequest(new Request(`https://relay.test/api/site/threads/${threadId}/transcript${suffix}`, {
+      headers: { Origin: env.SITE_ORIGIN, Authorization: 'Bearer test' },
+    }), env, { verifyIdentity });
+  const first = await (await route()).json();
+  assert.equal(first.thread.subject, 'Multi-turn review');
+  assert.equal(first.runs.length, 20);
+  assert.equal(first.runs[0].id, id(3));
+  assert.equal(first.runs.at(-1).id, id(22));
+  assert.equal(first.nextBefore, id(3));
+  assert.equal(first.runs.at(-1).transcript.events[1].text, 'The last answer.');
+  assert.doesNotMatch(JSON.stringify(first), /private-file|inputTokens/);
+  const older = await (await route(`?before=${first.nextBefore}`)).json();
+  assert.deepEqual(older.runs.map((run) => run.id), [id(1), id(2)]);
+  assert.equal(older.nextBefore, null);
+  assert.equal((await route('?before=bad')).status, 400);
+  assert.equal((await route(`?before=${'f'.repeat(36)}`)).status, 400);
+  assert.equal((await route('', async () => ({ sub: 'guest', email: 'guest@gmail.com' }))).status, 404);
+  sqlite.prepare('INSERT INTO accounts (id, google_sub, owner_email, agent_email) VALUES (?, ?, ?, ?)')
+    .run('account-2', 'other-sub', 'other@gmail.com', 'other-agent@wonder.test');
+  assert.equal((await route('', async () => ({ sub: 'other-sub', email: 'other@gmail.com' }))).status, 404);
 });
 
 test('the private Site can show the owner account and manage only its paired devices', async () => {

@@ -297,6 +297,11 @@ async function siteAccountRequest(request, env, pathname, verifyIdentity) {
   if (pathname === '/api/site/threads' && request.method === 'GET') {
     return json(await accountThreads(env, account.id), 200, headers);
   }
+  const threadTranscriptId = pathname.match(/^\/api\/site\/threads\/([0-9a-f-]{36})\/transcript$/i)?.[1];
+  if (threadTranscriptId && request.method === 'GET') {
+    return threadTranscriptPage(env, account.id, threadTranscriptId,
+      new URL(request.url).searchParams.get('before'), headers);
+  }
   const participantAction = pathname.match(/^\/api\/site\/threads\/([0-9a-f-]{36})\/(invite|revoke)$/i);
   if (participantAction && request.method === 'POST') {
     return changeParticipant(request, env, account, participantAction[1], participantAction[2], headers);
@@ -338,6 +343,49 @@ async function recentThreadRuns(env, threadId, accountId) {
     .bind(threadId, accountId).all();
   return (rows.results ?? rows).reverse().map((row) => ({ id: row.id, state: row.state,
     createdAt: row.created_at, sender: row.sender_email }));
+}
+
+function visibleTranscript(value) {
+  if (value?.version !== 1 || !Array.isArray(value.events)) return null;
+  return { version: 1, truncated: value.truncated === true,
+    events: value.events.slice(0, 48).flatMap((event) =>
+      event && ['request', 'assistant', 'tool'].includes(event.kind) && typeof event.text === 'string'
+        ? [{ kind: event.kind, text: event.text.slice(0, event.kind === 'assistant' ? 8000 : 800) }]
+        : []) };
+}
+
+async function threadTranscriptPage(env, accountId, threadId, before, headers) {
+  const thread = await env.DB.prepare('SELECT id, subject FROM threads WHERE id = ? AND account_id = ?')
+    .bind(threadId, accountId).first();
+  if (!thread) return json({ error: 'Thread not found' }, 404, headers);
+  let cursor = null;
+  if (before !== null) {
+    if (!/^[0-9a-f-]{36}$/i.test(before)) return json({ error: 'Invalid cursor' }, 400, headers);
+    cursor = await env.DB.prepare('SELECT id, created_at FROM jobs WHERE id = ? AND thread_id = ?')
+      .bind(before, threadId).first();
+    if (!cursor) return json({ error: 'Invalid cursor' }, 400, headers);
+  }
+  const rows = await env.DB.prepare(`SELECT j.id, j.state, j.created_at, j.result_key, j.model_json,
+    m.sender_email FROM jobs j JOIN messages m ON m.id = j.message_id
+    WHERE j.thread_id = ? AND (? IS NULL OR j.created_at < ? OR (j.created_at = ? AND j.id < ?))
+    ORDER BY j.created_at DESC, j.id DESC LIMIT 21`)
+    .bind(threadId, cursor?.created_at ?? null, cursor?.created_at ?? null,
+      cursor?.created_at ?? null, cursor?.id ?? null).all();
+  const page = (rows.results ?? rows).slice(0, 20);
+  const runs = await Promise.all(page.map(async (row) => {
+    const saved = row.result_key ? await env.MAIL.get(row.result_key) : null;
+    let result = null;
+    if (saved) {
+      try { result = JSON.parse(new TextDecoder().decode(await saved.arrayBuffer())); }
+      catch { /* An unreadable result must not break the rest of the thread. */ }
+    }
+    return { id: row.id, state: row.state, createdAt: row.created_at,
+      sender: row.sender_email, selectedModel: selectedModelDetail(row.model_json),
+      summary: typeof result?.summary === 'string' ? result.summary : null,
+      transcript: visibleTranscript(result?.transcript) };
+  }));
+  return json({ thread, runs: runs.reverse(),
+    nextBefore: (rows.results ?? rows).length > 20 ? page.at(-1).id : null }, 200, headers);
 }
 
 async function runViewer(env, runId, identity) {
@@ -413,6 +461,7 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
     return json({ id: row.id, state: row.state, subject: row.subject, sender: row.sender_email,
       selectedModel: row.selectedModel,
       createdAt: row.created_at, attempts: viewer.owner ? row.attempts : undefined,
+      ...(viewer.owner ? { threadId: row.thread_id } : {}),
       ...(viewer.owner ? { threadRuns: await recentThreadRuns(env, row.thread_id, viewer.accountId) } : {}),
       deliveryState: row.delivery_state,
       deliveryRecipients: row.deliveryRecipients.filter((item) => viewer.owner || item.recipient_email === identity.email)
