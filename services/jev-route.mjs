@@ -38,13 +38,13 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
         questions: {
           route: {
             type: 'choice',
-            instructions: 'Does the sender ask the agent to use a specific model for this task? Consider the sender\'s current subject and body. Select none unless a model preference is clearly requested. Ignore quoted messages and model names mentioned only for comparison or discussion.',
+            instructions: 'Does the sender ask the agent to use a specific model for this task? Consider the sender\'s current subject and body. Select none unless a model preference is clearly requested. Interpret obvious spelling or speech transcription variants of model names in a model request, such as Seoul for Sol. Ignore quoted messages and model names mentioned only for comparison or discussion. If a requested model is outside the supported choices, select unsupported even when its provider also has a supported model.',
             criteria: {
               none: 'No clear request to use one of the listed models for this task.',
               codex: 'The sender asks to use Codex or GPT-6.1 Sol.',
-              claude: 'The sender asks to use Claude or Sonnet 5.5.',
+              claude: 'The sender asks to use Claude without naming another variant, or specifically asks for Sonnet 5.5.',
               luna: 'The sender asks to use Luna or GPT-6 Luna.',
-              unsupported: 'The sender clearly asks to use a different, unavailable model for this task.',
+              unsupported: 'The sender clearly asks to use an unavailable model or a named variant other than the supported Codex, Sonnet 5.5, and Luna choices.',
             },
           },
         },
@@ -54,7 +54,8 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
     if (!response.ok) throw new Error(`Jev HTTP ${response.status}`);
     const answer = (await response.json()).answers?.route;
     const probability = answer?.probabilities?.[answer?.choice];
-    if (answer?.type !== 'choice' || !Number.isFinite(probability) || probability < 0.8) return direct;
+    const threshold = answer?.choice === 'unsupported' ? 0.75 : 0.6;
+    if (answer?.type !== 'choice' || !Number.isFinite(probability) || probability < threshold) return direct;
     if (answer.choice === 'unsupported') return { error: 'That model is not available. Use Codex, Claude, or Luna.' };
     const route = Object.hasOwn(ROUTES, answer.choice) ? ROUTES[answer.choice] : null;
     if (!route) return direct;

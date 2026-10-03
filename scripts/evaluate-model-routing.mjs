@@ -12,6 +12,8 @@ const cases = [
   { id: 'natural-sonnet', body: 'Run this task with Sonnet 5.5, please.', expected: claude },
   { id: 'natural-codex', body: 'Please use Codex to check the bug report.', expected: codex },
   { id: 'natural-sol', body: 'Use GPT-6.1 Sol on the attached plan.', expected: codex },
+  { id: 'natural-seoul', body: 'Please use Seoul for this review.', expected: codex },
+  { id: 'seoul-location', body: 'Find hotels in Seoul for my trip.', expected: codex },
   { id: 'natural-luna', body: 'Use Luna for a quick first pass.', expected: luna },
   { id: 'natural-gpt-luna', body: 'Please run this with GPT-6 Luna.', expected: luna },
   { id: 'subject-claude', subject: 'Use Claude to summarize the attached report', body: '', expected: claude },
@@ -32,7 +34,7 @@ const cases = [
   { id: 'empty-body', body: '', expected: codex, calls: 0 },
 ];
 const classifiedCases = new Set(['natural-claude', 'natural-sonnet', 'natural-codex',
-  'natural-sol', 'natural-luna', 'natural-gpt-luna', 'subject-claude']);
+  'natural-sol', 'natural-seoul', 'natural-luna', 'natural-gpt-luna', 'subject-claude']);
 const explicitCases = new Set(['explicit-directive', 'reply-override']);
 
 if (process.argv.includes('--list')) {
