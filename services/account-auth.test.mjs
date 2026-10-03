@@ -89,6 +89,33 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   }), env);
   assert.deepEqual(await claim.json(), { claimed: false });
 
+  const runId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const accountId = sqlite.prepare('SELECT id FROM accounts WHERE google_sub = ?').get(identity.sub).id;
+  sqlite.prepare('INSERT INTO threads (id, account_id, subject) VALUES (?, ?, ?)')
+    .run('receipt-thread', accountId, 'Private <review>');
+  sqlite.prepare(`INSERT INTO messages (id, account_id, thread_id, message_id, direction, sender_email, object_key)
+    VALUES (?, ?, ?, ?, 'inbound', ?, ?)`).run('receipt-message', accountId, 'receipt-thread',
+    '<receipt@gmail.com>', identity.email, 'inbound/receipt.eml');
+  sqlite.prepare(`INSERT INTO jobs (id, thread_id, message_id, state, result_key)
+    VALUES (?, ?, ?, 'completed', ?)`).run(runId, 'receipt-thread', 'receipt-message', 'results/receipt.json');
+  await env.MAIL.put('results/receipt.json', JSON.stringify({ state: 'completed', summary: 'Checked <safely>',
+    details: ['Found one item.'], checks: ['No external action.'] }));
+  const receipt = await handleAccountRequest(request(`/runs/${runId}`, 'GET', undefined, cookie), env, options);
+  assert.equal(receipt.status, 200);
+  const html = await receipt.text();
+  assert.match(html, /Checked &lt;safely&gt;/);
+  assert.doesNotMatch(html, /<safely>/);
+  assert.match(html, /Private &lt;review&gt;/);
+  assert.equal(receipt.headers.get('cache-control'), 'no-store');
+  const redirect = await handleAccountRequest(request(`/runs/${runId}`), env, options);
+  assert.equal(redirect.status, 302);
+  assert.match(redirect.headers.get('location'), /\/account\?next=/);
+  const other = await handleAccountRequest(request('/api/auth/google', 'POST', { credential: 'test' }), env, {
+    verifyIdentity: async () => ({ sub: 'google-sub-1', email: 'owner@gmail.com' }),
+  });
+  const otherCookie = other.headers.get('set-cookie').split(';')[0];
+  assert.equal((await handleAccountRequest(request(`/runs/${runId}`, 'GET', undefined, otherCookie), env, options)).status, 404);
+
   assert.equal((await handleAccountRequest(request(`/api/account/devices/${deviceId}/revoke`, 'POST', {}, cookie), env, options)).status, 200);
   assert.equal((await handleDeviceRequest(new Request('https://relay.test/api/device/claim', {
     method: 'POST', headers: { Authorization: `Bearer ${token}` },

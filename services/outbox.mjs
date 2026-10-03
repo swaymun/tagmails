@@ -5,6 +5,17 @@ import { renderResult } from '../apps/mock-inbox/mail.mjs';
 
 const MESSAGE_ID = /^<[^<>\s]+@[^<>\s]+>$/;
 
+function publicOrigin(value) {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    const local = ['localhost', '127.0.0.1'].includes(url.hostname);
+    if ((url.protocol !== 'https:' && !(local && url.protocol === 'http:' && url.port)) ||
+        url.pathname !== '/' || url.search || url.hash || url.username || url.password) return null;
+    return url.origin;
+  } catch { return null; }
+}
+
 async function prepare(env, row) {
   const inbound = await env.DB.prepare(`SELECT m.object_key, m.message_id, m.sender_email,
       t.subject, a.owner_email, a.agent_email
@@ -40,8 +51,11 @@ async function prepare(env, row) {
   const to = [request.from];
   const cc = visible;
   const references = [...new Set([...request.parentIds, request.messageId])].filter((id) => MESSAGE_ID.test(id)).slice(-40);
+  const origin = publicOrigin(env.PUBLIC_ORIGIN);
+  const ownerCanOpen = [request.from, ...visible].includes(owner);
   const rendered = renderResult({
-    ...result,
+    state: result.state, summary: result.summary, details: result.details, checks: result.checks,
+    links: origin && ownerCanOpen ? [{ label: 'Owner run receipt', url: `${origin}/runs/${row.job_id}` }] : [],
     note: result.state === 'needs_approval'
       ? 'The agent is waiting for your approval in the connected app.'
       : 'This summary came from your connected local agent.',

@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { runReceiptPage } from './account-page.mjs';
 
 const googleKeys = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
 const DEVICE_TOKEN = /^tm_dev_[A-Za-z0-9_-]{43}$/;
@@ -129,7 +130,8 @@ async function pair(request, env) {
 
 export async function handleAccountRequest(request, env, { verifyIdentity = verifyGoogleCredential } = {}) {
   const { pathname } = new URL(request.url);
-  if (!pathname.startsWith('/api/auth/') && !pathname.startsWith('/api/account/') && pathname !== '/api/device/pair') return null;
+  const runId = pathname.match(/^\/runs\/([0-9a-f-]{36})$/i)?.[1];
+  if (!pathname.startsWith('/api/auth/') && !pathname.startsWith('/api/account/') && pathname !== '/api/device/pair' && !runId) return null;
   if (!env.DB) throw new Error('Account database is not configured');
   if (pathname === '/api/auth/config' && request.method === 'GET') {
     return env.GOOGLE_CLIENT_ID && DOMAIN.test(env.AGENT_DOMAIN ?? '')
@@ -139,6 +141,18 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
   if (pathname === '/api/auth/google' && request.method === 'POST') return signIn(request, env, verifyIdentity);
   if (pathname === '/api/device/pair' && request.method === 'POST') return pair(request, env);
   const account = await accountFor(request, env);
+  if (runId && request.method === 'GET') {
+    if (!account) return Response.redirect(`${new URL(request.url).origin}/account?next=${encodeURIComponent(pathname)}`, 302);
+    const row = await env.DB.prepare(`SELECT j.id, j.state, j.attempts, j.created_at, j.result_key,
+      t.subject, m.sender_email, o.state AS delivery_state
+      FROM jobs j JOIN threads t ON t.id = j.thread_id JOIN messages m ON m.id = j.message_id
+      LEFT JOIN outbox o ON o.job_id = j.id
+      WHERE j.id = ? AND t.account_id = ? LIMIT 1`).bind(runId, account.id).first();
+    if (!row) return new Response('Run not found', { status: 404 });
+    const saved = row.result_key ? await env.MAIL.get(row.result_key) : null;
+    const result = saved ? JSON.parse(new TextDecoder().decode(await saved.arrayBuffer())) : null;
+    return runReceiptPage({ ...row, result });
+  }
   if (pathname === '/api/account/me' && request.method === 'GET') {
     return account ? json({ ownerEmail: account.owner_email, agentEmail: account.agent_email,
       deliveryReady: env.MAIL_DELIVERY_READY === 'true' }) : json({ error: 'Sign in required' }, 401);

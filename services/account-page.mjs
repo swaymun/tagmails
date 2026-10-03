@@ -85,9 +85,12 @@ async function refresh() {
   $('delivery').textContent = account.deliveryReady
     ? 'Mail delivery is configured for this address.'
     : 'Address reserved. Email delivery is not connected yet.';
+  const next = new URLSearchParams(location.search).get('next');
+  if (next?.startsWith('/runs/') && /^[0-9a-f-]{36}$/i.test(next.slice(6))) { location.assign(next); return; }
   try { await devices(); status(''); }
   catch { $('devices').textContent = 'Devices could not be loaded. Reload to try again.'; status('Account loaded, but device status is unavailable.'); }
 }
+
 let pairCode = '';
 function pairCommand() {
   return 'mkdir -p "$HOME/.config/tagmails" && TAGMAILS_RELAY_URL=' + location.origin +
@@ -135,5 +138,40 @@ document.addEventListener('DOMContentLoaded', () => {
     'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
     'Content-Security-Policy': `default-src 'none'; script-src 'nonce-${nonce}' https://accounts.google.com; style-src 'nonce-${nonce}'; img-src https: data:; frame-src https://accounts.google.com; connect-src 'self' https://accounts.google.com; base-uri 'none'; form-action 'none'`,
     'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'strict-origin-when-cross-origin',
+  } });
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character]);
+}
+
+export function runReceiptPage(run) {
+  const nonce = randomBytes(16).toString('base64');
+  const title = ({ queued: 'Queued', running: 'Running', completed: 'Completed', failed: 'Failed' })[run.state] ?? 'Run';
+  const details = Array.isArray(run.result?.details) ? run.result.details : [];
+  const checks = Array.isArray(run.result?.checks) ? run.result.checks : [];
+  const list = (items) => `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(run.subject)} · TagMails run</title><style nonce="${nonce}">
+:root{font:16px/1.55 system-ui,sans-serif;color:#242424;background:#f7f4ed}body{margin:0}main{max-width:720px;margin:7vh auto;padding:0 24px 80px}
+a{color:#255d53}a:focus-visible{outline:3px solid #b98432;outline-offset:3px}.eyebrow{letter-spacing:.12em;text-transform:uppercase;font-size:.72rem;font-weight:700;color:#57776f}
+h1{font-size:clamp(2rem,6vw,3.25rem);line-height:1.1;margin:.35em 0}h2{font-size:1.05rem;margin:28px 0 8px}p{margin:8px 0 16px}.card{background:#fff;border:1px solid #ddd9cf;border-radius:14px;padding:24px;margin:24px 0}
+.status{display:inline-block;background:#e5eee8;color:#225440;border-radius:30px;padding:4px 11px;font-size:.8rem;font-weight:700}.muted{color:#62625c}.meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 24px;margin-top:24px;font-size:.9rem}
+.meta strong{display:block;color:#242424}.meta span{overflow-wrap:anywhere}li{margin:6px 0}@media(max-width:520px){.meta{grid-template-columns:1fr}}
+</style></head><body><main><p class="eyebrow">tagmails. / run receipt</p><a href="/account">Account</a>
+<h1>${escapeHtml(run.subject)}</h1><span class="status">${title}</span>
+<section class="card"><h2>Outcome</h2><p>${escapeHtml(run.result?.summary ?? 'The agent has not submitted a result yet.')}</p>
+${details.length ? `<h2>What happened</h2>${list(details)}` : ''}
+${checks.length ? `<h2>Checks and limits</h2>${list(checks)}` : ''}
+<div class="meta"><span><strong>Sender</strong>${escapeHtml(run.sender_email)}</span><span><strong>Received</strong>${escapeHtml(run.created_at)} UTC</span>
+<span><strong>Attempts</strong>${escapeHtml(run.attempts)}</span><span><strong>Email delivery</strong>${escapeHtml(run.delivery_state ?? 'Not queued')}</span></div></section>
+<p class="muted">This receipt shows the recorded outcome and delivery state. A step-by-step agent trace is not stored yet.</p>
+</main></body></html>`;
+  return new Response(html, { headers: {
+    'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
+    'Content-Security-Policy': `default-src 'none'; style-src 'nonce-${nonce}'; base-uri 'none'; frame-ancestors 'none'`,
+    'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
   } });
 }

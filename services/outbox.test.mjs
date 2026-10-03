@@ -4,7 +4,7 @@ import { bindings } from './bindings-fixture.mjs';
 import { sendNextOutbox } from './outbox.mjs';
 import { handleInbound } from './relay-worker.mjs';
 
-function queuedTurn({ env, sqlite }, { number, from, to, cc = [], references = [], accountId = 'account-1', threadId = 'thread-1' }) {
+function queuedTurn({ env, sqlite }, { number, from, to, cc = [], references = [], accountId = 'account-1', threadId = 'thread-1', jobId = `job-${number}` }) {
   const id = `inbound-${number}`;
   const messageId = `<inbound-${number}@gmail.com>`;
   const raw = [
@@ -20,8 +20,8 @@ function queuedTurn({ env, sqlite }, { number, from, to, cc = [], references = [
     (id, account_id, thread_id, provider_email_id, message_id, direction, sender_email, object_key)
     VALUES (?, ?, ?, ?, ?, 'inbound', ?, ?)`).run(id, accountId, threadId, `provider-${number}`, messageId, from, `inbound/${number}.eml`);
   sqlite.prepare(`INSERT INTO jobs (id, thread_id, message_id, state, result_key)
-    VALUES (?, ?, ?, 'completed', ?)`).run(`job-${number}`, threadId, id, `results/${number}.json`);
-  sqlite.prepare('INSERT INTO outbox (job_id) VALUES (?)').run(`job-${number}`);
+    VALUES (?, ?, ?, 'completed', ?)`).run(jobId, threadId, id, `results/${number}.json`);
+  sqlite.prepare('INSERT INTO outbox (job_id) VALUES (?)').run(jobId);
   return Promise.all([
     env.MAIL.put(`inbound/${number}.eml`, raw),
     env.MAIL.put(`results/${number}.json`, JSON.stringify({ state: 'completed', summary: `Turn ${number} finished.` })),
@@ -143,4 +143,23 @@ test('one outbox sends from each account address', async () => {
   assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
   assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
   assert.deepEqual(senders, ['agent@wonder.test', 'u-second@tagmails.test']);
+});
+
+test('owner-addressed results link to the private receipt but a guest-only reply does not', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  env.PUBLIC_ORIGIN = 'https://relay.tagmails.test';
+  const receiptJobId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'], jobId: receiptJobId });
+  const payloads = [];
+  const provider = {
+    sendEmail: async (payload) => { payloads.push(payload); return { data: { id: `sent-${payloads.length}` } }; },
+    getSentEmail: async (id) => ({ data: { message_id: `<${id}@tagmails.test>` } }),
+  };
+  assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
+  assert.ok(payloads[0].html.includes(`https://relay.tagmails.test/runs/${receiptJobId}`));
+  sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)').run('thread-1', 'reviewer@gmail.com');
+  await queuedTurn(fixture, { number: 2, from: 'reviewer@gmail.com', to: ['agent@wonder.test'] });
+  assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
+  assert.doesNotMatch(payloads[1].html, /\/runs\/job-2/);
 });
