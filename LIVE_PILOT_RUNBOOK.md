@@ -4,7 +4,7 @@ Internal working runbook. The test is limited to the owner's Gmail, the dedicate
 
 ## Readiness snapshot — October 3, 2026
 
-- The owner's Gmail message reached the Resend-provided receiving inbox. The dashboard shows no API keys, webhooks, or custom domains, and no sent mail.
+- The owner's Gmail message reached the Resend-provided receiving inbox. A fresh dashboard check at 11:52 UTC showed no API keys or webhooks and no sent mail. Its Raw tab displays a JSON email record whose `authentication-results` header reports SPF, DKIM, and DMARC pass for this Gmail message. That dashboard view omits the API's `authentication` and `raw.download_url` fields, so it does not yet prove the relay can fetch and verify the original MIME. [Resend's received-email API](https://resend.com/docs/api-reference/emails/retrieve-received-email) documents those fields.
 - The development Worker is deployed at `https://tagmails-relay-dev.saimun-shahee.workers.dev`. Its existing `RESEND_API_KEY` and `RESEND_WEBHOOK_SECRET` bindings contain placeholders; a binding name alone does not establish a connected provider.
 - A read-only remote D1 audit returned one active account and two completed fixture jobs, with **zero outbox rows and zero queued jobs**. Repeat this audit immediately before connecting a real key; the queue may change.
 - Resend offers Full access and Sending access keys. The relay retrieves received mail, reads sent-message IDs, and sends replies, so it needs **Full access** in the dedicated development account. Sending access alone cannot retrieve inbound mail. [Resend key permissions](https://resend.com/changelog/new-api-key-permissions)
