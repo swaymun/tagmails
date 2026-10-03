@@ -70,7 +70,20 @@ TAGMAILS_JOB_ID=job-123 \
 cargo run -p tagmails-daemon -- --once
 ```
 
-This route pins Claude Sonnet 5.5 Medium, limits the CLI to Read/Glob/Grep in restricted mode, denies MCP tools, disables local customizations, and asks the CLI to stop at a $0.25 list-equivalent budget per turn. That CLI budget is a gate between model requests, not a guaranteed billing ceiling. The adapter omits inherited API keys, saves per-thread session IDs and completed results outside the selected workspace in `~/.tagmails/claude-sessions.json`, and renews its claim. Older sessions saved in `.local/claude-sessions.json` do not carry over automatically. Attachments are staged inside the selected workspace and removed after each turn, without granting another directory. In synthetic probes, the installed Claude CLI read a workspace marker, denied a Read request for an outside marker, and denied a workspace symlink pointing outside. A real Sonnet turn read a staged text attachment, and its resumed turn recalled the value after the attachment was removed. [Claude CLI restricted mode](https://code.claude.com/docs/en/cli-reference) documents the working-directory boundary. No real email was sent. Write approvals, production isolation, and measured subscription/API billing remain to be built.
+This route pins Claude Sonnet 5.5 Medium, limits the CLI to Read/Glob/Grep in restricted mode, denies MCP tools, disables local customizations, and asks the CLI to stop at a $0.25 list-equivalent budget per turn. That CLI budget is a gate between model requests, not a guaranteed billing ceiling. The adapter omits inherited API keys, saves per-thread session IDs and completed results outside the selected workspace in `~/.tagmails/claude-sessions.json`, and renews its claim. Older sessions saved in `.local/claude-sessions.json` do not carry over automatically. Attachments are staged inside the selected workspace and removed after each turn, without granting another directory. In synthetic probes, the installed Claude CLI read a workspace marker, denied a Read request for an outside marker, and denied a workspace symlink pointing outside. A real Sonnet turn read a staged text attachment, and its resumed turn recalled the value after the attachment was removed. [Claude CLI restricted mode](https://code.claude.com/docs/en/cli-reference) documents the working-directory boundary. No real email was sent. Production isolation and measured subscription/API billing remain to be built.
+
+### Opt-in local Claude workspace-write run
+
+Select a **disposable** workspace and one queued lab `job-...` ID. This mode can change files in that workspace:
+
+```sh
+TAGMAILS_RUNTIME=claude-write \
+TAGMAILS_WORKSPACE=/absolute/path/to/disposable-workspace \
+TAGMAILS_JOB_ID=job-123 \
+cargo run -p tagmails-daemon -- --once
+```
+
+This route uses the installed Claude Code subscription, restricted mode, and only Read/Glob/Grep/Edit/Write tools. It does not offer Bash, web, or MCP tools. It runs with `acceptEdits` so file edits in the selected workspace can complete without an interactive prompt; requests outside that boundary are denied by restricted mode. When the CLI reports that boundary denial, TagMails marks the turn as needing local access review; the lab's mock approval button cannot approve it. That classifier matches the installed CLI's error text and needs rechecking when Claude Code is upgraded. The read-only and write modes have separate session stores (`claude-sessions.json` and `claude-write-sessions.json`) outside the workspace. A failed turn may have left partial edits, so inspect the workspace before retrying. In a real Sonnet scratch test, two turns created and extended one file, and a separate synthetic email ran through the Rust worker, created a second file, and rendered a threaded result in the Gmail-style lab. Direct CLI probes denied a Write outside the workspace and a Read through a workspace symlink to an outside file. This remains local synthetic testing; the remote relay still chooses the read-only Claude adapter and no real email was sent. [Claude CLI reference](https://code.claude.com/docs/en/cli-reference) · [Claude permissions](https://code.claude.com/docs/en/permissions)
 
 ### Local relay proof
 

@@ -2,6 +2,7 @@ const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 const icon = (name) => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const runtimeLabel = (runtime) => runtime === 'claude-cli-readonly' ? 'local Claude read-only'
+  : runtime === 'claude-cli-write' ? 'local Claude workspace write'
   : runtime === 'codex-app-server-write' ? 'local Codex workspace write' : 'local Codex read-only';
 
 let data;

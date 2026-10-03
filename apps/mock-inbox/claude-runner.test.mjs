@@ -32,10 +32,13 @@ process.stdin.on('end', () => {
   fs.appendFileSync(path.join(process.cwd(), 'calls.jsonl'), JSON.stringify({ args, prompt, attachment, attachmentText, hadApiKey: Boolean(process.env.ANTHROPIC_API_KEY) }) + '\\n');
   const resumed = args.includes('--resume');
   const budgetFail = prompt.includes('[budget-fail]');
+  const outsideDenied = prompt.includes('[outside-denied]');
   process.stdout.write(JSON.stringify({ type: 'assistant', message: { content: [
     { type: 'thinking', thinking: 'SECRET_REASONING' },
     { type: 'tool_use', name: 'Read', input: { file_path: 'secret.txt' } },
     { type: 'text', text: 'Checking the workspace.' } ] } }) + '\\n');
+  if (outsideDenied) process.stdout.write(JSON.stringify({ type: 'user', message: { content: [
+    { type: 'tool_result', is_error: true, content: '/outside is outside /workspace; --restricted confines the file tools to the working directory.' } ] } }) + '\\n');
   process.stdout.write(JSON.stringify({ type: 'result', subtype: budgetFail ? 'error_max_budget_usd' : 'success', is_error: budgetFail,
     session_id: '33333333-3333-4333-8333-333333333333', result: resumed ? 'Second turn.' : 'First turn.',
     modelUsage: { 'claude-sonnet-5-5': { inputTokens: 2, cacheReadInputTokens: 100,
@@ -45,13 +48,14 @@ process.stdin.on('end', () => {
   process.stdout.write('\\n');
 });
 `, { mode: 0o755 });
-  const keys = ['TAGMAILS_WORKSPACE', 'TAGMAILS_CLAUDE_SESSION_FILE', 'TAGMAILS_CLAUDE_BIN', 'ANTHROPIC_API_KEY'];
+  const keys = ['TAGMAILS_WORKSPACE', 'TAGMAILS_CLAUDE_SESSION_FILE', 'TAGMAILS_CLAUDE_BIN', 'ANTHROPIC_API_KEY', 'TAGMAILS_RUNTIME'];
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   Object.assign(process.env, {
     TAGMAILS_WORKSPACE: workspace,
     TAGMAILS_CLAUDE_SESSION_FILE: path.join(root, 'sessions.json'),
     TAGMAILS_CLAUDE_BIN: fakeBin,
     ANTHROPIC_API_KEY: 'FAKE_TEST_KEY',
+    TAGMAILS_RUNTIME: 'claude-readonly',
   });
   t.after(() => {
     for (const [key, value] of Object.entries(previous)) {
@@ -103,6 +107,33 @@ process.stdin.on('end', () => {
 
   assert.equal((await runClaim({ ...claim('job-4'), model: { id: 'claude-opus-5-5', effort: 'medium' } })).state, 'failed');
   assert.equal(fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').length, 3);
+
+  process.env.TAGMAILS_RUNTIME = 'claude-write';
+  process.env.TAGMAILS_CLAUDE_SESSION_FILE = path.join(root, 'write-sessions.json');
+  const written = await runClaim(claim('job-1', 'Create a note in this scratch workspace.'));
+  assert.equal(written.runtime, 'claude-cli-write');
+  assert.match(written.checks[0], /review its reported edits/);
+  const writeCalls = fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(writeCalls.length, 4);
+  assert.ok(writeCalls[3].args.includes('Read,Glob,Grep,Edit,Write'));
+  assert.ok(writeCalls[3].args.includes('acceptEdits'));
+  assert.ok(writeCalls[3].args.includes('--restricted'));
+  assert.ok(writeCalls[3].args.includes('--safe-mode'));
+  assert.ok(!writeCalls[3].args.includes('--resume'));
+  assert.equal(writeCalls[3].hadApiKey, false);
+  assert.match(writeCalls[3].prompt, /read and edit files in the selected workspace/);
+  assert.doesNotMatch(writeCalls[3].args.join(' '), /Bash|WebFetch|WebSearch/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'write-sessions.json'))).threads['thread-1'].workspace, fs.realpathSync(workspace));
+  assert.equal((await runClaim(claim('job-2', 'Continue.'))).runtime, 'claude-cli-write');
+  const resumedWrite = fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).at(-1);
+  assert.ok(resumedWrite.args.includes('33333333-3333-4333-8333-333333333333'));
+  const writeFailure = await runClaim({ ...claim('job-3'), model: { id: 'claude-opus-5-5', effort: 'medium' } });
+  assert.match(writeFailure.checks[0], /partial changes/);
+  const denied = await runClaim(claim('job-4', '[outside-denied]'));
+  assert.equal(denied.state, 'needs_approval');
+  assert.match(denied.summary, /outside the selected workspace/);
+  assert.match(denied.checks[0], /partial changes/);
+  assert.match(JSON.stringify(denied.transcript), /File access outside the selected workspace was denied/);
 });
 
 test('Claude adapter keeps its session store outside the selected workspace', async (t) => {

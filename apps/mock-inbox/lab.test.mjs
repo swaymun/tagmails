@@ -335,6 +335,17 @@ test('an opt-in Codex write result is labeled with its workspace access', (t) =>
   assert.match(lab.state.threads[0].messages.at(-1).text, /Codex completed locally with selected-workspace write access/);
 });
 
+test('an opt-in Claude write result is labeled with its workspace access', (t) => {
+  const { lab } = freshLab(t);
+  lab.send({ from: 'owner@gmail.com', subject: 'Local Claude edit', body: 'Model: Claude\nEdit the selected file.' });
+  const claim = lab.claimNext();
+  assert.equal(lab.completeClaim(claim.jobId, claim.claimId, {
+    runtime: 'claude-cli-write', state: 'completed', summary: 'Claude edited the selected file.',
+  }).state, 'completed');
+  assert.equal(lab.state.jobs[0].runtime, 'claude-cli-write');
+  assert.match(lab.state.threads[0].messages.at(-1).text, /Claude completed locally with selected-workspace write access/);
+});
+
 test('the mock approval button cannot requeue a real agent permission request', (t) => {
   const { lab } = freshLab(t);
   lab.send({ from: 'owner@gmail.com', subject: 'Needs local access', body: 'Check a file outside this workspace.' });

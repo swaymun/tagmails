@@ -109,7 +109,7 @@ fn mock_result(claim: &Value, attachment_evidence: Vec<String>) -> Value {
 fn agent_result(claim: &Value, base: &str, runtime: &str) -> Result<Value, Box<dyn Error>> {
     let file = match runtime {
         "codex-readonly" | "codex-write" => "codex-runner.mjs",
-        "claude-readonly" => "claude-runner.mjs",
+        "claude-readonly" | "claude-write" => "claude-runner.mjs",
         _ => return Err("Unsupported local agent runtime".into()),
     };
     let runner = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -140,6 +140,7 @@ fn runtime_label(runtime: &str) -> &'static str {
     match runtime {
         "codex-write" => "codex-app-server-write",
         "codex-readonly" => "codex-app-server-readonly",
+        "claude-write" => "claude-cli-write",
         _ => "claude-cli-readonly",
     }
 }
@@ -489,9 +490,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         && runtime != "codex-readonly"
         && runtime != "codex-write"
         && runtime != "claude-readonly"
+        && runtime != "claude-write"
     {
         return Err(
-            "TAGMAILS_RUNTIME must be mock, codex-readonly, codex-write, or claude-readonly".into(),
+            "TAGMAILS_RUNTIME must be mock, codex-readonly, codex-write, claude-readonly, or claude-write".into(),
         );
     }
     let selected_job = if runtime != "mock" {
