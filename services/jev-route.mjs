@@ -18,10 +18,10 @@ function currentText(body) {
 
 export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, priorModel, subject } = {}) {
   const direct = chooseModel(body, defaultModel);
-  if (direct.source === 'explicit' || direct.error) return direct;
+  if (direct.source === 'explicit') return direct;
   const knownPrior = priorModel && Object.values(ROUTES).some(({ id, effort }) =>
     priorModel.id === id && priorModel.effort === effort);
-  const fallback = knownPrior
+  const fallback = direct.error ? direct : knownPrior
     ? { id: priorModel.id, effort: priorModel.effort, source: 'thread' } : direct;
   const text = currentText(body);
   // A reply's subject may repeat an old model request. Only its new text can

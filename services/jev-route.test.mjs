@@ -30,6 +30,19 @@ test('explicit directives do not call Jev', async () => {
   }), { id: 'gpt-6-luna', effort: 'low', source: 'explicit' });
 });
 
+test('a malformed leading Model line gets one classifier chance before clarification', async () => {
+  assert.deepEqual(await routeModel('Model: Luna please review this.', 'gpt-6.1-sol', {
+    apiKey: 'test-key', fetcher: jev('luna', 0.94),
+  }), { id: 'gpt-6-luna', effort: 'low', source: 'classified' });
+  const uncertain = await routeModel('Model: Luna please review this.', 'gpt-6.1-sol', {
+    apiKey: 'test-key', fetcher: jev('luna', 0.42),
+  });
+  assert.match(uncertain.error, /could not read the Model line/i);
+  assert.deepEqual(await routeModel('Model: Claude Opus please review this.', 'gpt-6.1-sol', {
+    apiKey: 'test-key', fetcher: jev('unsupported', 0.95),
+  }), { error: 'That model is not available. Use Codex, Claude, or Luna.' });
+});
+
 test('natural requests can change a reply model; ordinary replies inherit it', async () => {
   const priorModel = { id: 'claude-sonnet-5-5', effort: 'medium', source: 'classified' };
   assert.deepEqual(await routeModel('Please use Seoul for this next step.', 'gpt-6.1-sol', {

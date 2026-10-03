@@ -26,7 +26,9 @@ const cases = [
   { id: 'unsupported-gemini', body: 'Use Gemini to review the figures.', expected: 'error' },
   { id: 'unsupported-opus', body: 'Please run this with Claude Opus instead of Sonnet.', expected: 'error' },
   { id: 'explicit-directive', body: 'Model: Claude\nReview the copy.', expected: claude, calls: 0 },
-  { id: 'explicit-unsupported', body: 'Model: Gemini\nReview the copy.', expected: 'error', calls: 0 },
+  { id: 'explicit-unsupported', body: 'Model: Gemini\nReview the copy.', expected: 'error' },
+  { id: 'collapsed-model-line', body: 'Model: Luna please review the copy.', expected: luna },
+  { id: 'collapsed-unsupported', body: 'Model: Claude Opus please review the copy.', expected: 'error' },
   { id: 'reply-inherits', body: 'Continue the review.\n\n> Use Luna for the first pass.',
     priorModel: { id: claude, effort: 'medium' }, expected: claude },
   { id: 'reply-natural-switch', body: 'Please use Seoul for this next step.',
@@ -42,7 +44,7 @@ const cases = [
 ];
 const classifiedCases = new Set(['natural-claude', 'natural-sonnet', 'natural-codex',
   'natural-sol', 'natural-seoul', 'natural-luna', 'natural-gpt-luna', 'subject-claude',
-  'reply-natural-switch', 'reply-old-subject']);
+  'reply-natural-switch', 'reply-old-subject', 'collapsed-model-line']);
 const explicitCases = new Set(['explicit-directive', 'reply-override']);
 
 if (process.argv.includes('--list')) {
