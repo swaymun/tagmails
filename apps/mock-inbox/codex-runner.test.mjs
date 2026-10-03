@@ -51,7 +51,8 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     send({ id: message.id, result: { data: [{ id: mode === 'history-wrong-turn' ? 'older-turn' : 'turn-1',
       status: 'completed', items: [
         { type: 'userMessage', content: [{ type: 'text', text: 'SECRET_PROMPT' }] },
-        { type: 'agentMessage', phase: 'final_answer', text: 'Recovered answer.' },
+        { type: 'agentMessage', phase: mode === 'legacy-phase' ? undefined : 'final_answer',
+          text: mode === 'legacy-phase' ? 'First turn.' : 'Recovered answer.' },
       ] }] } });
   }
   if (message.method === 'thread/start' || message.method === 'thread/resume') {
@@ -82,8 +83,9 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       send({ method: 'item/completed', params: { item: { type: 'reasoning', summary: 'SECRET_REASONING' } } });
       send({ method: 'item/completed', params: { item: { type: 'commandExecution', command: 'cat secret.txt',
         aggregatedOutput: 'SECRET_FILE', status: 'completed', exitCode: 0 } } });
-      send({ method: 'item/completed', params: { item: { type: 'agentMessage', phase: 'commentary', text: 'Checking the workspace.' } } });
-      if (!['missing-final-event', 'history-wrong-turn'].includes(mode)) send({ method: 'item/completed', params: { item: { type: 'agentMessage',
+      send({ method: 'item/completed', params: { item: { type: 'agentMessage',
+        ...(mode === 'unphased-progress' ? {} : { phase: 'commentary' }), text: 'Checking the workspace.' } } });
+      if (!['missing-final-event', 'history-wrong-turn', 'unphased-progress'].includes(mode)) send({ method: 'item/completed', params: { item: { type: 'agentMessage',
         ...(mode === 'legacy-phase' ? {} : { phase: 'final_answer' }),
         text: resumed ? 'First turn plus second turn.' : 'First turn.' } } });
       send({ method: 'turn/completed', params: { turn: { status: mode === 'turn-failed' ? 'failed' : 'completed' } } });
@@ -184,6 +186,16 @@ test('Codex adapter recovers a missed final event from the completed turn summar
     kind: 'assistant', phase: 'final_answer', text: 'Recovered answer.',
   });
   assert.doesNotMatch(JSON.stringify(result), /SECRET_PROMPT/);
+});
+
+test('an unphased progress message does not replace a saved final answer', async (t) => {
+  setup(t, 'unphased-progress');
+  const result = await runClaim(claim('job-unphased', 'thread-unphased'));
+  assert.equal(result.state, 'completed');
+  assert.equal(result.summary, 'Recovered answer.');
+  assert.deepEqual(result.transcript.events.at(-1), {
+    kind: 'assistant', phase: 'final_answer', text: 'Recovered answer.',
+  });
 });
 
 test('Codex adapter does not use a different turn as its final answer', async (t) => {

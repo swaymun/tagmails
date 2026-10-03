@@ -257,7 +257,7 @@ async function runCodex(claim, workspace, home, sessionId, staged, write) {
       } catch { /* A usage read cannot fail a completed task. */ }
       finally { clearTimeout(allowanceTimeout); }
     }
-    let finalAnswer = answer || unphasedAnswer;
+    let finalAnswer = answer;
     if (!finalAnswer && typeof startedTurn?.turn?.id === 'string') {
       let historyTimeout;
       try {
@@ -269,6 +269,7 @@ async function runCodex(claim, workspace, home, sessionId, staged, write) {
       } catch { /* Live events remain the fallback if history is unavailable. */ }
       finally { clearTimeout(historyTimeout); }
     }
+    finalAnswer ||= unphasedAnswer;
     return { result: { ...resultFromAnswer(finalAnswer, claim.model.id, approvals, usage, write),
       ...(codexAllowance ? { codexAllowance } : {}),
       transcript: finishRunTranscript(transcript, finalAnswer) }, threadId };
