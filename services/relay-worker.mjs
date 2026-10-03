@@ -92,10 +92,12 @@ export async function completeOneModelClarification(env) {
 async function resolveAgentAddress(db, candidates) {
   if (!candidates.length) return null;
   const placeholders = candidates.map(() => '?').join(', ');
-  const rows = await db.prepare(`SELECT agent_email FROM accounts
-    WHERE active = 1 AND agent_email IN (${placeholders})`).bind(...candidates).all();
-  const accounts = rows.results ?? rows;
-  return accounts.length === 1 ? accounts[0].agent_email : null;
+  const rows = await db.prepare(`SELECT aa.email, aa.account_id, a.agent_email
+    FROM account_agent_addresses aa JOIN accounts a ON a.id = aa.account_id
+    WHERE a.active = 1 AND aa.email IN (${placeholders})`).bind(...candidates).all();
+  const matches = rows.results ?? rows;
+  if (new Set(matches.map((row) => row.account_id)).size !== 1) return null;
+  return matches.find((row) => row.email === row.agent_email)?.email ?? matches[0]?.email ?? null;
 }
 
 async function recordReaction(env, account, message) {
@@ -153,7 +155,8 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
   if (message.sent) return Response.json(await reconcileSentEvent(env, message.sent));
   if (message.deliveryOutcome) return Response.json(await recordDeliveryOutcome(env, message.deliveryOutcome));
   const agent = (message.agentAddress ?? '').trim().toLowerCase();
-  const account = await env.DB.prepare('SELECT id, owner_email, default_model FROM accounts WHERE agent_email = ? AND active = 1')
+  const account = await env.DB.prepare(`SELECT a.id, a.owner_email, a.default_model FROM account_agent_addresses aa
+    JOIN accounts a ON a.id = aa.account_id WHERE aa.email = ? AND a.active = 1`)
     .bind(agent).first();
   if (!account) return Response.json({ accepted: false });
   const duplicate = await env.DB.prepare('SELECT id FROM messages WHERE account_id = ? AND (provider_email_id = ? OR message_id = ?) LIMIT 1')

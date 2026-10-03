@@ -43,6 +43,35 @@ test('one Jev call routes the initial email and replies retain that route', asyn
   ]);
 });
 
+test('old and new agent addresses keep one email thread after a domain move', async () => {
+  const { env, sqlite } = bindings();
+  sqlite.prepare('UPDATE accounts SET agent_email = ? WHERE id = ?')
+    .run('agent@tagmails.com', 'account-1');
+  assert.deepEqual(sqlite.prepare('SELECT email FROM account_agent_addresses ORDER BY email').all()
+    .map((row) => row.email), ['agent@tagmails.com', 'agent@wonder.test']);
+  const deliverTo = async (message) => deliver(env, message, {
+    inspect: async ({ resolveAgentAddress }) => {
+      const selected = await resolveAgentAddress(message.to);
+      return selected ? { ...message, agentAddress: selected } : { ignored: true };
+    },
+  });
+  const first = mail('old-alias-first', 'owner@gmail.com');
+  assert.deepEqual(await deliverTo(first), { accepted: true, duplicate: false });
+  const second = mail('old-alias-reply', 'owner@gmail.com', { parentIds: [first.messageId] });
+  assert.deepEqual(await deliverTo(second), { accepted: true, duplicate: false });
+  const third = mail('new-alias-reply', 'owner@gmail.com', {
+    agentAddress: 'agent@tagmails.com', to: ['agent@tagmails.com'], parentIds: [second.messageId],
+  });
+  assert.deepEqual(await deliverTo(third), { accepted: true, duplicate: false });
+  assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM threads').get().n, 1);
+  assert.deepEqual(sqlite.prepare('SELECT agent_email FROM messages ORDER BY rowid').all()
+    .map((row) => row.agent_email), ['agent@wonder.test', 'agent@wonder.test', 'agent@tagmails.com']);
+  sqlite.prepare('INSERT INTO accounts (id, google_sub, owner_email, agent_email) VALUES (?, ?, ?, ?)')
+    .run('account-2', 'google-sub-2', 'other@gmail.com', 'other@tagmails.com');
+  assert.throws(() => sqlite.prepare('UPDATE accounts SET agent_email = ? WHERE id = ?')
+    .run('agent@wonder.test', 'account-2'), /UNIQUE constraint failed/);
+});
+
 test('a malformed model request gets a relay clarification without a paired Mac', async () => {
   const { env, sqlite } = bindings();
   env.RESEND_TEST_FROM = 'onboarding@resend.dev';
@@ -128,6 +157,8 @@ test('two account addresses route independently and cannot borrow each other\'s 
   const { env, sqlite } = bindings();
   sqlite.prepare('INSERT INTO accounts (id, google_sub, owner_email, agent_email) VALUES (?, ?, ?, ?)')
     .run('account-2', 'google-2', 'second@gmail.com', 'u-second@tagmails.test');
+  sqlite.prepare('UPDATE accounts SET agent_email = ? WHERE id = ?')
+    .run('u-second@tagmails.com', 'account-2');
   const first = mail('email-1', 'owner@gmail.com', { agentAddress: 'agent@wonder.test' });
   const second = mail('email-2', 'second@gmail.com', {
     agentAddress: 'u-second@tagmails.test', to: ['u-second@tagmails.test'],
@@ -175,6 +206,7 @@ test('a signed Resend delivery selects the matching account address', async () =
   assert.deepEqual(await (await handleInbound(webhook(data.to), env, provider)).json(),
     { accepted: true, duplicate: false });
   assert.equal(sqlite.prepare('SELECT account_id FROM messages').get().account_id, 'account-2');
+  assert.equal(sqlite.prepare('SELECT agent_email FROM messages').get().agent_email, 'u-second@tagmails.test');
   assert.deepEqual(await (await handleInbound(webhook(['agent@wonder.test', 'u-second@tagmails.test']), env, {
     ...provider, getReceivedEmail: async () => { throw new Error('Ambiguous mail must not be fetched'); },
   })).json(), { accepted: false });
