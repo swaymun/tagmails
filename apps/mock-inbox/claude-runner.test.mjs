@@ -26,8 +26,13 @@ process.stdin.on('data', chunk => { prompt += chunk; });
 process.stdin.on('end', () => {
   fs.appendFileSync(path.join(process.cwd(), 'calls.jsonl'), JSON.stringify({ args, prompt, hadApiKey: Boolean(process.env.ANTHROPIC_API_KEY) }) + '\\n');
   const resumed = args.includes('--resume');
-  process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false,
-    session_id: '33333333-3333-4333-8333-333333333333', result: resumed ? 'Second turn.' : 'First turn.' }));
+  const budgetFail = prompt.includes('[budget-fail]');
+  process.stdout.write(JSON.stringify({ type: 'result', subtype: budgetFail ? 'error_max_budget_usd' : 'success', is_error: budgetFail,
+    session_id: '33333333-3333-4333-8333-333333333333', result: resumed ? 'Second turn.' : 'First turn.',
+    modelUsage: { 'claude-sonnet-5-5': { inputTokens: 2, cacheReadInputTokens: 100,
+      cacheCreationInputTokens: 200, outputTokens: 30, thinkingTokens: 4, costUSD: 0.010528, costBasis: 'list' },
+      'claude-haiku-helper': { inputTokens: 3, cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0, outputTokens: 2, costUSD: 0.000012, costBasis: 'list' } } }));
 });
 `, { mode: 0o755 });
   const keys = ['TAGMAILS_WORKSPACE', 'TAGMAILS_CLAUDE_SESSION_FILE', 'TAGMAILS_CLAUDE_BIN', 'ANTHROPIC_API_KEY'];
@@ -47,6 +52,9 @@ process.stdin.on('end', () => {
 
   const first = await runClaim(claim('job-1'));
   assert.equal(first.state, 'completed');
+  assert.deepEqual(first.usage, { inputTokens: 305, cachedInputTokens: 100,
+    cacheCreationInputTokens: 200, outputTokens: 32, reasoningOutputTokens: 4 });
+  assert.ok(Math.abs(first.reportedListCostUsd - 0.01054) < 1e-10);
   assert.deepEqual(await runClaim(claim('job-1')), first);
   const second = await runClaim(claim('job-2', 'Continue the summary.'));
   assert.equal(second.state, 'completed');
@@ -62,6 +70,12 @@ process.stdin.on('end', () => {
   assert.equal(calls[0].hadApiKey, false);
   assert.equal(JSON.parse(fs.readFileSync(path.join(workspace, 'sessions.json'))).threads['thread-1'].workspace, workspace);
 
-  assert.equal((await runClaim({ ...claim('job-3'), model: { id: 'claude-opus-5-5', effort: 'medium' } })).state, 'failed');
-  assert.equal(fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').length, 2);
+  const budgetFailure = await runClaim(claim('job-3', '[budget-fail]'));
+  assert.equal(budgetFailure.state, 'failed');
+  assert.ok(budgetFailure.usage.inputTokens > 0);
+  assert.deepEqual(await runClaim(claim('job-3', '[budget-fail]')), budgetFailure);
+  assert.equal(fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').length, 3);
+
+  assert.equal((await runClaim({ ...claim('job-4'), model: { id: 'claude-opus-5-5', effort: 'medium' } })).state, 'failed');
+  assert.equal(fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').length, 3);
 });

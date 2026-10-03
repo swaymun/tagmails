@@ -31,7 +31,8 @@ process.stdin.on('end', () => {
   fs.appendFileSync(path.join(process.cwd(), 'calls.jsonl'), JSON.stringify({ args, prompt, hadApiKey: Boolean(process.env.OPENAI_API_KEY) }) + '\\n');
   fs.writeFileSync(output, resumed ? 'First turn plus second turn.' : 'First turn.');
   process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: id }) + '\\n');
-  process.stdout.write(JSON.stringify({ type: 'turn.completed' }) + '\\n');
+  process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1200,
+    cached_input_tokens: 300, cache_write_input_tokens: 0, output_tokens: 40, reasoning_output_tokens: 12 } }) + '\\n');
 });
 `;
   fs.writeFileSync(fakeBin, fakeSource, { mode: 0o755 });
@@ -50,6 +51,8 @@ process.stdin.on('end', () => {
   const first = await runClaim(claim('job-1', 'thread-1'));
   assert.equal(first.state, 'completed');
   assert.match(first.summary, /First turn/);
+  assert.deepEqual(first.usage, { inputTokens: 1200, cachedInputTokens: 300,
+    cacheCreationInputTokens: 0, outputTokens: 40, reasoningOutputTokens: 12 });
   assert.deepEqual(await runClaim(claim('job-1', 'thread-1')), first);
   const second = await runClaim(claim('job-2', 'thread-1', 'Continue the summary.'));
   assert.equal(second.state, 'completed');

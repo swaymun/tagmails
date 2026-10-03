@@ -71,6 +71,19 @@ function resultFromAnswer(answer, model) {
   };
 }
 
+function reportedUsage(value) {
+  if (!value || typeof value !== 'object') return null;
+  const fields = ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'output_tokens', 'reasoning_output_tokens'];
+  if (!fields.every((field) => Number.isSafeInteger(value[field]) && value[field] >= 0)) return null;
+  return {
+    inputTokens: value.input_tokens,
+    cachedInputTokens: value.cached_input_tokens,
+    cacheCreationInputTokens: value.cache_write_input_tokens,
+    outputTokens: value.output_tokens,
+    reasoningOutputTokens: value.reasoning_output_tokens,
+  };
+}
+
 function codexEnvironment() {
   const allowed = ['HOME', 'USER', 'PATH', 'TMPDIR', 'LANG', 'LC_ALL', 'CODEX_HOME', 'SSL_CERT_FILE'];
   return Object.fromEntries(allowed.filter((key) => process.env[key]).map((key) => [key, process.env[key]]));
@@ -124,15 +137,16 @@ async function runCodex(claim, workspace, sessionId) {
     if (code !== 0) return { result: fail(`Codex stopped without a completed turn (exit ${code}).`) };
     let threadId;
     let completed = false;
+    let usage = null;
     for (const line of output.split('\n')) {
       if (!line.trim()) continue;
       const event = JSON.parse(line);
       if (event.type === 'thread.started') threadId = event.thread_id;
-      if (event.type === 'turn.completed') completed = true;
+      if (event.type === 'turn.completed') { completed = true; usage = reportedUsage(event.usage); }
     }
     if (!completed || !/^[0-9a-f-]{36}$/i.test(threadId || '')) return { result: fail('Codex did not report a completed turn and session ID.') };
     const answer = await fs.readFile(answerFile, 'utf8');
-    return { result: resultFromAnswer(answer, model), threadId };
+    return { result: { ...resultFromAnswer(answer, model), ...(usage ? { usage } : {}) }, threadId };
   } finally {
     clearInterval(renew);
     clearTimeout(timeout);

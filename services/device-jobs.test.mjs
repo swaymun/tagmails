@@ -61,7 +61,11 @@ test('a paired device receives a signed, account-scoped claim and completes it o
 
   const lease = { jobId: signedJob.jobId, leaseId: signedJob.leaseId };
   assert.equal((await call(env, paired.token, 'renew', lease)).body.renewed, true);
-  const result = { state: 'completed', summary: 'The local agent read the status.' };
+  const result = { state: 'completed', summary: 'The local agent read the status.',
+    usage: { inputTokens: 1200, cachedInputTokens: 300, cacheCreationInputTokens: 0,
+      outputTokens: 40, reasoningOutputTokens: 12 } };
+  assert.equal((await call(env, paired.token, 'complete', { ...lease,
+    result: { ...result, usage: { ...result.usage, inputTokens: -1 } } })).status, 400);
   assert.deepEqual(await call(env, paired.token, 'complete', { ...lease, result }), {
     status: 200, body: { completed: true, duplicate: false },
   });

@@ -100,13 +100,18 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   sqlite.prepare(`INSERT INTO jobs (id, thread_id, message_id, state, result_key)
     VALUES (?, ?, ?, 'completed', ?)`).run(runId, 'receipt-thread', 'receipt-message', 'results/receipt.json');
   await env.MAIL.put('results/receipt.json', JSON.stringify({ state: 'completed', summary: 'Checked <safely>',
-    details: ['Found one item.'], checks: ['No external action.'] }));
+    details: ['Found one item.'], checks: ['No external action.'],
+    usage: { inputTokens: 302, cachedInputTokens: 100, cacheCreationInputTokens: 200,
+      outputTokens: 30, reasoningOutputTokens: 4 }, reportedListCostUsd: 0.010528 }));
   const receipt = await handleAccountRequest(request(`/runs/${runId}`, 'GET', undefined, cookie), env, options);
   assert.equal(receipt.status, 200);
   const html = await receipt.text();
   assert.match(html, /Checked &lt;safely&gt;/);
   assert.doesNotMatch(html, /<safely>/);
   assert.match(html, /Private &lt;review&gt;/);
+  assert.match(html, /302 input tokens/);
+  assert.match(html, /\$0\.010528/);
+  assert.match(html, /not a TagMails charge/);
   assert.equal(receipt.headers.get('cache-control'), 'no-store');
   const redirect = await handleAccountRequest(request(`/runs/${runId}`), env, options);
   assert.equal(redirect.status, 302);

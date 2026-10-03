@@ -73,6 +73,28 @@ function resultFromAnswer(answer) {
   };
 }
 
+function reportedUsage(event) {
+  const values = Object.values(event?.modelUsage ?? {});
+  if (!values.length || values.length > 8) return {};
+  const fields = ['inputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens', 'outputTokens'];
+  if (!values.every((value) => value && fields.every((field) => Number.isSafeInteger(value[field]) && value[field] >= 0))) return {};
+  const usage = { inputTokens: 0, cachedInputTokens: 0, cacheCreationInputTokens: 0,
+    outputTokens: 0, reasoningOutputTokens: 0 };
+  for (const value of values) {
+    usage.inputTokens += value.inputTokens + value.cacheReadInputTokens + value.cacheCreationInputTokens;
+    usage.cachedInputTokens += value.cacheReadInputTokens;
+    usage.cacheCreationInputTokens += value.cacheCreationInputTokens;
+    usage.outputTokens += value.outputTokens;
+    usage.reasoningOutputTokens += Number.isSafeInteger(value.thinkingTokens) && value.thinkingTokens >= 0 ? value.thinkingTokens : 0;
+  }
+  if (Object.values(usage).some((count) => !Number.isSafeInteger(count) || count > 1_000_000_000)) return {};
+  const listCost = values.every((value) => value.costBasis === 'list' && typeof value.costUSD === 'number' &&
+    Number.isFinite(value.costUSD) && value.costUSD >= 0 && value.costUSD <= 1000)
+    ? values.reduce((total, value) => total + value.costUSD, 0) : null;
+  const cost = listCost !== null && listCost <= 1000 ? { reportedListCostUsd: listCost } : {};
+  return { usage, ...cost };
+}
+
 async function runClaude(claim, workspace, sessionId) {
   const args = [
     '--print', '--output-format', 'json', '--safe-mode', '--restricted',
@@ -119,9 +141,9 @@ async function runClaude(claim, workspace, sessionId) {
     if (code !== 0) return { result: fail(`Claude stopped without a completed turn (exit ${code}).`) };
     const event = JSON.parse(output);
     if (event.type !== 'result' || event.subtype !== 'success' || event.is_error || !SESSION_ID.test(event.session_id || '')) {
-      return { result: fail('Claude did not report a completed turn and session ID.') };
+      return { result: { ...fail('Claude did not report a completed turn and session ID.'), ...reportedUsage(event) } };
     }
-    return { result: resultFromAnswer(event.result || ''), sessionId: event.session_id };
+    return { result: { ...resultFromAnswer(event.result || ''), ...reportedUsage(event) }, sessionId: event.session_id };
   } finally {
     clearInterval(renew);
     clearTimeout(timeout);
@@ -143,6 +165,11 @@ export async function runClaim(claim) {
   const { result, sessionId } = await runClaude(claim, workspace, existing?.sessionId);
   if (result.state === 'completed') {
     store.threads[claim.threadId] = { sessionId, workspace };
+    store.jobs[claim.jobId] = result;
+    await saveStore(storeFile, store);
+  } else if (result.usage) {
+    // A failed turn can still consume model tokens. Reuse that terminal result
+    // if relay completion is retried, rather than paying for the same job twice.
     store.jobs[claim.jobId] = result;
     await saveStore(storeFile, store);
   }

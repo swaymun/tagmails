@@ -254,6 +254,10 @@ export function runReceiptPage(run) {
   const title = ({ queued: 'Queued', running: 'Running', completed: 'Completed', failed: 'Failed' })[run.state] ?? 'Run';
   const details = Array.isArray(run.result?.details) ? run.result.details : [];
   const checks = Array.isArray(run.result?.checks) ? run.result.checks : [];
+  const usage = run.result?.usage;
+  const hasUsage = usage && ['inputTokens', 'cachedInputTokens', 'cacheCreationInputTokens', 'outputTokens', 'reasoningOutputTokens']
+    .every((key) => Number.isSafeInteger(usage[key]) && usage[key] >= 0);
+  const listCost = run.result?.reportedListCostUsd;
   const list = (items) => `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escapeHtml(run.subject)} · TagMails run</title><style nonce="${nonce}">
@@ -267,6 +271,8 @@ h1{font-size:clamp(2rem,6vw,3.25rem);line-height:1.1;margin:.35em 0}h2{font-size
 <section class="card"><h2>Outcome</h2><p>${escapeHtml(run.result?.summary ?? 'The agent has not submitted a result yet.')}</p>
 ${details.length ? `<h2>What happened</h2>${list(details)}` : ''}
 ${checks.length ? `<h2>Checks and limits</h2>${list(checks)}` : ''}
+${hasUsage ? `<h2>Model usage reported by the local CLI</h2><p>${escapeHtml(usage.inputTokens)} input tokens (${escapeHtml(usage.cachedInputTokens)} cached, ${escapeHtml(usage.cacheCreationInputTokens)} cache creation); ${escapeHtml(usage.outputTokens)} output tokens (${escapeHtml(usage.reasoningOutputTokens)} reasoning).</p>` : ''}
+${typeof listCost === 'number' && Number.isFinite(listCost) && listCost >= 0 ? `<p>List-equivalent model cost reported by the CLI: $${escapeHtml(listCost.toFixed(6))}. This is not a TagMails charge.</p>` : ''}
 <div class="meta"><span><strong>Sender</strong>${escapeHtml(run.sender_email)}</span><span><strong>Received</strong>${escapeHtml(run.created_at)} UTC</span>
 <span><strong>Attempts</strong>${escapeHtml(run.attempts)}</span><span><strong>Email delivery</strong>${escapeHtml(run.delivery_state ?? 'Not queued')}</span></div></section>
 <p class="muted">This receipt shows the recorded outcome and delivery state. A step-by-step agent trace is not stored yet.</p>
