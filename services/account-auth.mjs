@@ -168,10 +168,66 @@ async function accountDevices(env, accountId) {
   return { devices: rows.results ?? rows };
 }
 
+async function accountThreads(env, accountId) {
+  const rows = await env.DB.prepare(`SELECT t.id, t.subject, t.created_at,
+    (SELECT j.id FROM jobs j WHERE j.thread_id = t.id
+      ORDER BY j.created_at DESC, j.id DESC LIMIT 1) AS latest_run_id,
+    p.email AS participant_email, p.revoked_at
+    FROM threads t LEFT JOIN participants p ON p.thread_id = t.id
+    WHERE t.account_id = ? ORDER BY t.created_at DESC, t.id DESC, p.email LIMIT 200`)
+    .bind(accountId).all();
+  const threads = [];
+  for (const row of rows.results ?? rows) {
+    let thread = threads.at(-1);
+    if (thread?.id !== row.id) {
+      thread = { id: row.id, subject: row.subject, createdAt: row.created_at,
+        latestRunId: row.latest_run_id, participants: [] };
+      threads.push(thread);
+    }
+    if (row.participant_email) thread.participants.push({ email: row.participant_email, revokedAt: row.revoked_at });
+  }
+  return { threads };
+}
+
 async function revokeAccountDevice(env, accountId, deviceId) {
   const result = await env.DB.prepare('UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE id = ? AND account_id = ? AND revoked_at IS NULL')
     .bind(deviceId, accountId).run();
   return (result.meta?.changes ?? result.changes) ? { revoked: true } : null;
+}
+
+async function changeParticipant(request, env, account, threadId, action, headers = {}) {
+  let email;
+  try { email = String((await bodyJson(request)).email ?? '').trim().toLowerCase(); }
+  catch { return json({ error: 'Invalid request' }, 400, headers); }
+  if (email.length > 254 || email.includes('..') || !PARTICIPANT_EMAIL.test(email) ||
+      email === account.owner_email || email === account.agent_email) {
+    return json({ error: 'Invalid participant email' }, 400, headers);
+  }
+  const thread = await env.DB.prepare('SELECT id FROM threads WHERE id = ? AND account_id = ?')
+    .bind(threadId, account.id).first();
+  if (!thread) return json({ error: 'Thread not found' }, 404, headers);
+  if (action.toLowerCase() === 'invite') {
+    await env.DB.prepare(`INSERT INTO participants (thread_id, email) VALUES (?, ?)
+      ON CONFLICT(thread_id, email) DO UPDATE SET revoked_at = NULL`).bind(threadId, email).run();
+    return json({ invited: true }, 200, headers);
+  }
+  const [changed] = await env.DB.batch([
+    env.DB.prepare(`UPDATE participants SET revoked_at = CURRENT_TIMESTAMP
+      WHERE thread_id = ? AND email = ? AND revoked_at IS NULL`).bind(threadId, email),
+    env.DB.prepare(`UPDATE jobs SET state = 'failed', lease_until = NULL
+      WHERE thread_id = ? AND state IN ('queued', 'running') AND message_id IN (
+        SELECT id FROM messages WHERE thread_id = ? AND sender_email = ?)`)
+      .bind(threadId, threadId, email),
+    env.DB.prepare(`UPDATE test_email_charges SET state = 'released', updated_at = CURRENT_TIMESTAMP
+      WHERE state = 'reserved' AND job_id IN (
+        SELECT j.id FROM jobs j JOIN messages m ON m.id = j.message_id
+        WHERE j.thread_id = ? AND j.state = 'failed' AND m.sender_email = ?
+          AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.job_id = j.id
+            AND o.state NOT IN ('blocked', 'queued')))`)
+      .bind(threadId, email),
+  ]);
+  if (!(changed.meta?.changes ?? changed.changes)) return json({ error: 'Active participant not found' }, 404, headers);
+  return json({ revoked: true }, 200, headers);
 }
 
 async function siteAccountRequest(request, env, pathname, verifyIdentity) {
@@ -189,6 +245,13 @@ async function siteAccountRequest(request, env, pathname, verifyIdentity) {
   }
   if (pathname === '/api/site/devices' && request.method === 'GET') {
     return json(await accountDevices(env, account.id), 200, headers);
+  }
+  if (pathname === '/api/site/threads' && request.method === 'GET') {
+    return json(await accountThreads(env, account.id), 200, headers);
+  }
+  const participantAction = pathname.match(/^\/api\/site\/threads\/([0-9a-f-]{36})\/(invite|revoke)$/i);
+  if (participantAction && request.method === 'POST') {
+    return changeParticipant(request, env, account, participantAction[1], participantAction[2], headers);
   }
   if (pathname === '/api/site/pairing-code' && request.method === 'POST') {
     return json(await createPairingCode(env, account.id), 200, headers);
@@ -293,21 +356,7 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
   }
   if (pathname === '/api/account/threads' && request.method === 'GET') {
     if (!account) return json({ error: 'Sign in required' }, 401);
-    const rows = await env.DB.prepare(`SELECT t.id, t.subject, t.created_at,
-      p.email AS participant_email, p.revoked_at
-      FROM threads t LEFT JOIN participants p ON p.thread_id = t.id
-      WHERE t.account_id = ? ORDER BY t.created_at DESC, t.id DESC, p.email LIMIT 200`)
-      .bind(account.id).all();
-    const threads = [];
-    for (const row of rows.results ?? rows) {
-      let thread = threads.at(-1);
-      if (thread?.id !== row.id) {
-        thread = { id: row.id, subject: row.subject, createdAt: row.created_at, participants: [] };
-        threads.push(thread);
-      }
-      if (row.participant_email) thread.participants.push({ email: row.participant_email, revokedAt: row.revoked_at });
-    }
-    return json({ threads });
+    return json(await accountThreads(env, account.id));
   }
   if (request.method !== 'POST') return new Response('Not found', { status: 404 });
   if (!sameOrigin(request)) return json({ error: 'Invalid origin' }, 403);
@@ -320,37 +369,7 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
   if (!account) return json({ error: 'Sign in required' }, 401);
   const participantAction = pathname.match(/^\/api\/account\/threads\/([0-9a-f-]{36})\/(invite|revoke)$/i);
   if (participantAction) {
-    const [, threadId, action] = participantAction;
-    let email;
-    try { email = String((await bodyJson(request)).email ?? '').trim().toLowerCase(); }
-    catch { return json({ error: 'Invalid request' }, 400); }
-    if (email.length > 254 || email.includes('..') || !PARTICIPANT_EMAIL.test(email) ||
-        email === account.owner_email || email === account.agent_email) return json({ error: 'Invalid participant email' }, 400);
-    const thread = await env.DB.prepare('SELECT id FROM threads WHERE id = ? AND account_id = ?')
-      .bind(threadId, account.id).first();
-    if (!thread) return json({ error: 'Thread not found' }, 404);
-    if (action.toLowerCase() === 'invite') {
-      await env.DB.prepare(`INSERT INTO participants (thread_id, email) VALUES (?, ?)
-        ON CONFLICT(thread_id, email) DO UPDATE SET revoked_at = NULL`).bind(threadId, email).run();
-      return json({ invited: true });
-    }
-    const [changed] = await env.DB.batch([
-      env.DB.prepare(`UPDATE participants SET revoked_at = CURRENT_TIMESTAMP
-        WHERE thread_id = ? AND email = ? AND revoked_at IS NULL`).bind(threadId, email),
-      env.DB.prepare(`UPDATE jobs SET state = 'failed', lease_until = NULL
-        WHERE thread_id = ? AND state IN ('queued', 'running') AND message_id IN (
-          SELECT id FROM messages WHERE thread_id = ? AND sender_email = ?)`)
-        .bind(threadId, threadId, email),
-      env.DB.prepare(`UPDATE test_email_charges SET state = 'released', updated_at = CURRENT_TIMESTAMP
-        WHERE state = 'reserved' AND job_id IN (
-          SELECT j.id FROM jobs j JOIN messages m ON m.id = j.message_id
-          WHERE j.thread_id = ? AND j.state = 'failed' AND m.sender_email = ?
-            AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.job_id = j.id
-              AND o.state NOT IN ('blocked', 'queued')))`)
-        .bind(threadId, email),
-    ]);
-    if (!(changed.meta?.changes ?? changed.changes)) return json({ error: 'Active participant not found' }, 404);
-    return json({ revoked: true });
+    return changeParticipant(request, env, account, participantAction[1], participantAction[2]);
   }
   if (pathname === '/api/account/pairing-code') {
     return json(await createPairingCode(env, account.id));

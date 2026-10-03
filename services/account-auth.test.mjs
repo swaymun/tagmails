@@ -222,6 +222,50 @@ test('the private Site can show the owner account and manage only its paired dev
   }), env)).status, 401);
 });
 
+test('the private Site lets only the Gmail owner manage reply access on an existing thread', async () => {
+  const { env, sqlite } = bindings();
+  env.GOOGLE_CLIENT_ID = clientId;
+  env.SITE_ORIGIN = 'https://tagmails.chatgpt.site';
+  const threadId = '11111111-1111-4111-8111-111111111111';
+  sqlite.prepare('INSERT INTO threads (id, account_id, subject) VALUES (?, ?, ?)')
+    .run(threadId, 'account-1', 'Shared <review>');
+  const site = (path, method = 'GET', body, origin = env.SITE_ORIGIN, credential = 'owner-token') =>
+    new Request(`https://relay.test${path}`, { method,
+      headers: { Origin: origin, Authorization: `Bearer ${credential}`,
+        ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}) });
+  const owner = { verifyIdentity: async (credential) => {
+    if (credential !== 'owner-token') throw new Error('Invalid credential');
+    return { sub: 'google-sub-1', email: 'owner@gmail.com' };
+  } };
+  const route = (req, options = owner) => handleAccountRequest(req, env, options);
+  assert.equal((await route(site('/api/site/threads', 'OPTIONS'))).status, 204);
+  assert.equal((await route(site('/api/site/threads', 'GET', null, 'https://other.test'))).status, 403);
+  assert.equal((await route(site('/api/site/threads', 'GET', null, env.SITE_ORIGIN, 'bad'))).status, 401);
+  const listed = await route(site('/api/site/threads'));
+  assert.equal(listed.headers.get('access-control-allow-origin'), env.SITE_ORIGIN);
+  assert.deepEqual((await listed.json()).threads, [{ id: threadId, subject: 'Shared <review>',
+    createdAt: sqlite.prepare('SELECT created_at FROM threads WHERE id = ?').get(threadId).created_at,
+    latestRunId: null, participants: [] }]);
+  const invitePath = `/api/site/threads/${threadId}/invite`;
+  assert.equal((await route(site(invitePath, 'POST', { email: 'guest@gmail.com' }), {
+    verifyIdentity: async () => ({ sub: 'another-sub', email: 'other@gmail.com' }),
+  })).status, 404);
+  assert.equal((await route(site(invitePath, 'POST', { email: 'bad address' }))).status, 400);
+  const invited = await route(site(invitePath, 'POST', { email: 'Guest@gmail.com' }));
+  assert.equal(invited.headers.get('access-control-allow-origin'), env.SITE_ORIGIN);
+  assert.deepEqual(await invited.json(), { invited: true });
+  assert.deepEqual((await (await route(site('/api/site/threads'))).json()).threads[0].participants,
+    [{ email: 'guest@gmail.com', revokedAt: null }]);
+  assert.equal((await route(site(`/api/site/threads/${threadId}/revoke`, 'POST',
+    { email: 'guest@gmail.com' }, 'https://other.test'))).status, 403);
+  const revoked = await route(site(`/api/site/threads/${threadId}/revoke`, 'POST',
+    { email: 'guest@gmail.com' }));
+  assert.deepEqual(await revoked.json(), { revoked: true });
+  assert.ok(sqlite.prepare('SELECT revoked_at FROM participants WHERE thread_id = ? AND email = ?')
+    .get(threadId, 'guest@gmail.com').revoked_at);
+});
+
 test('only the signed-in owner grants and revokes a hidden participant on an existing thread', async () => {
   const { env, sqlite } = bindings();
   env.GOOGLE_CLIENT_ID = clientId;
