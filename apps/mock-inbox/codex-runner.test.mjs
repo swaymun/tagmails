@@ -71,7 +71,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       send({ method: 'item/completed', params: { item: { type: 'agentMessage', phase: 'commentary', text: 'Checking the workspace.' } } });
       send({ method: 'item/completed', params: { item: { type: 'agentMessage', phase: 'final_answer',
         text: resumed ? 'First turn plus second turn.' : 'First turn.' } } });
-      send({ method: 'turn/completed', params: { turn: { status: 'completed' } } });
+      send({ method: 'turn/completed', params: { turn: { status: mode === 'turn-failed' ? 'failed' : 'completed' } } });
     }, mode === 'slow' ? 160 : mode === 'approval-request' ? 20 : 0);
   }
 });
@@ -207,6 +207,18 @@ test('Codex write mode declines access expansion and reports a waiting result', 
   assert.match(result.checks.join(' '), /Local edits may already have occurred/);
   const events = fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(events.find((item) => item.method === 'approval-response')?.decision, 'decline');
+});
+
+test('a failed Codex turn retains only the visible partial run transcript', async (t) => {
+  setup(t, 'turn-failed');
+  const result = await runClaim(claim('job-failed', 'thread-failed'));
+  assert.equal(result.state, 'failed');
+  assert.deepEqual(result.transcript.events, [
+    { kind: 'request', text: 'Summarize this workspace.' },
+    { kind: 'tool', text: 'Local command completed (exit 0).' },
+    { kind: 'assistant', text: 'Checking the workspace.' },
+  ]);
+  assert.doesNotMatch(JSON.stringify(result.transcript), /SECRET_REASONING|SECRET_FILE|secret\.txt/);
 });
 
 test('an interrupted Codex write is not executed a second time for the same email', async (t) => {

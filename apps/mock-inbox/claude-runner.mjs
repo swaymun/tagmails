@@ -133,6 +133,7 @@ async function runClaude(claim, workspace, sessionId, staged, write) {
   child.stdin.end(promptFor(claim, staged.prompt, write));
 
   const transcript = runTranscript(claim.request);
+  const failed = (summary) => ({ result: { ...fail(summary, write), transcript } });
   let resultEvent;
   let outputBytes = 0;
   let outputExceeded = false;
@@ -172,14 +173,15 @@ async function runClaude(claim, workspace, sessionId, staged, write) {
       child.once('error', reject);
       child.once('close', resolve);
     });
-    if (leaseLost) return { result: fail('The local claim lease was lost while Claude was running.', write) };
-    if (timedOut) return { result: fail('Claude did not finish within the three-minute prototype limit.', write) };
-    if (outputExceeded) return { result: fail('Claude produced too much output for this prototype.', write) };
-    if (invalidOutput) return { result: fail('Claude returned an unreadable event stream.', write) };
-    if (code !== 0) return { result: fail(`Claude stopped without a completed turn (exit ${code}).`, write) };
+    if (leaseLost) return failed('The local claim lease was lost while Claude was running.');
+    if (timedOut) return failed('Claude did not finish within the three-minute prototype limit.');
+    if (outputExceeded) return failed('Claude produced too much output for this prototype.');
+    if (invalidOutput) return failed('Claude returned an unreadable event stream.');
+    if (code !== 0) return failed(`Claude stopped without a completed turn (exit ${code}).`);
     const event = resultEvent;
     if (event?.type !== 'result' || event.subtype !== 'success' || event.is_error || !SESSION_ID.test(event.session_id || '')) {
-      return { result: { ...fail('Claude did not report a completed turn and session ID.', write), ...reportedUsage(event) } };
+      return { result: { ...fail('Claude did not report a completed turn and session ID.', write),
+        ...reportedUsage(event), transcript } };
     }
     if (boundaryDenied) return { result: {
       ...fail('Claude requested file access outside the selected workspace. Choose an appropriate workspace and rerun this task locally.', write),

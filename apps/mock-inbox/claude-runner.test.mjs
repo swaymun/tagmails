@@ -106,6 +106,12 @@ process.stdin.on('end', () => {
   const budgetFailure = await runClaim(claim('job-3', '[budget-fail]'));
   assert.equal(budgetFailure.state, 'failed');
   assert.ok(budgetFailure.usage.inputTokens > 0);
+  assert.deepEqual(budgetFailure.transcript.events, [
+    { kind: 'request', text: '[budget-fail]' },
+    { kind: 'tool', text: 'Read requested.' },
+    { kind: 'assistant', text: 'Checking the workspace.' },
+  ]);
+  assert.doesNotMatch(JSON.stringify(budgetFailure.transcript), /SECRET_REASONING|secret\.txt/);
   assert.deepEqual(await runClaim(claim('job-3', '[budget-fail]')), budgetFailure);
   assert.equal(fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').length, 3);
 

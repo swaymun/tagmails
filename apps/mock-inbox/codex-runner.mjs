@@ -214,8 +214,8 @@ async function runCodex(claim, workspace, home, sessionId, staged, write) {
     await request('turn/start', { threadId, cwd: workspace, model: claim.model.id, effort: claim.model.effort,
       approvalPolicy: 'on-request', input: [{ type: 'text', text: promptFor(claim, staged.prompt, write) }] });
     const status = await turnDone;
-    if (leaseLost) return { result: fail('The local claim lease was lost while Codex was running.', write) };
-    if (status !== 'completed') return { result: fail('Codex did not complete this turn.', write) };
+    if (leaseLost) return { result: { ...fail('The local claim lease was lost while Codex was running.', write), transcript } };
+    if (status !== 'completed') return { result: { ...fail('Codex did not complete this turn.', write), transcript } };
     return { result: { ...resultFromAnswer(answer, claim.model.id, approvals, usage, write),
       transcript: finishRunTranscript(transcript, answer) }, threadId };
   } finally {
