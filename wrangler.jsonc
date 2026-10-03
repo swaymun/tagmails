@@ -6,5 +6,14 @@
   "d1_databases": [{ "binding": "DB", "database_name": "tagmails-relay", "migrations_dir": "services/migrations" }],
   "r2_buckets": [{ "binding": "MAIL", "bucket_name": "tagmails-relay-mail" }],
   "triggers": { "crons": ["* * * * *"] },
-  "secrets": { "required": ["RESEND_API_KEY", "RESEND_WEBHOOK_SECRET", "GOOGLE_CLIENT_ID", "AGENT_DOMAIN", "PUBLIC_ORIGIN"] }
+  "secrets": { "required": ["RESEND_API_KEY", "RESEND_WEBHOOK_SECRET", "GOOGLE_CLIENT_ID", "AGENT_DOMAIN", "PUBLIC_ORIGIN"] },
+  "env": {
+    "dev": {
+      "name": "tagmails-relay-dev",
+      "d1_databases": [{ "binding": "DB", "database_name": "tagmails-relay-dev", "database_id": "792cbd68-83f3-4b64-b050-b62aebcb6801", "migrations_dir": "services/migrations" }],
+      "r2_buckets": [{ "binding": "MAIL", "bucket_name": "tagmails-relay-mail-dev" }],
+      "secrets": { "required": ["RESEND_API_KEY", "RESEND_WEBHOOK_SECRET", "GOOGLE_CLIENT_ID", "AGENT_DOMAIN", "PUBLIC_ORIGIN"] },
+      "triggers": { "crons": ["* * * * *"] }
+    }
+  }
 }
