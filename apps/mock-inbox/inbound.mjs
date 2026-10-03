@@ -19,7 +19,7 @@ function previewable(mimeType, bytes) {
   return false;
 }
 
-export async function parseInbound(raw, agentAddress = 'agent@wonder.test') {
+export async function parseInbound(raw, agentAddress = 'agent@wonder.test', { verifiedDeliveryToAgent = false } = {}) {
   const source = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
   if (!source.length || source.length > MAX_RAW_BYTES) throw new Error('The .eml file must be between 1 byte and 5 MB');
   const email = await PostalMime.parse(source, {
@@ -32,7 +32,7 @@ export async function parseInbound(raw, agentAddress = 'agent@wonder.test') {
   const to = addresses(email.to);
   const cc = addresses(email.cc);
   const bcc = addresses(email.bcc);
-  if (![...to, ...cc, ...bcc].includes(agentAddress)) throw new Error(`The email must include ${agentAddress} as a recipient`);
+  if (!verifiedDeliveryToAgent && ![...to, ...cc, ...bcc].includes(agentAddress)) throw new Error(`The email must include ${agentAddress} as a recipient`);
   if (!email.messageId || !/^<[^<>\s]+@[^<>\s]+>$/.test(email.messageId)) throw new Error('The email needs a valid Message-ID');
   const autoSubmitted = email.headers.find((header) => header.key === 'auto-submitted')?.value?.toLowerCase();
   if (autoSubmitted && autoSubmitted !== 'no') throw new Error('Automatic response email was ignored');
