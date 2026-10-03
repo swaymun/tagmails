@@ -104,15 +104,20 @@ function renderThread(thread) {
     return `<article class="thread-message"><div class="message-header"><span class="sender-avatar${outgoing ? ' agent' : ''}">${esc(label.slice(0, 1).toUpperCase())}</span><div class="sender-meta"><strong>${esc(label)}</strong><small>to ${esc(message.to)}${message.cc.length ? `, cc ${esc(message.cc.join(', '))}` : ''}${message.from === data.owner && message.bcc?.length ? `, bcc ${esc(message.bcc.join(', '))}` : ''}</small></div><time class="message-date" datetime="${esc(message.at)}">${esc(new Date(message.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}</time></div><div class="message-body">${preview}</div>${attachments ? `<div class="attachment-list">${attachments}</div>` : ''}${reactions ? `<div class="reaction-list">${reactions}</div>` : ''}${reactionButtons}${outgoing ? `<div class="message-actions"><a href="/api/mime?messageId=${encodeURIComponent(message.id)}" target="_blank" rel="noopener">View raw MIME</a><span>HTML + plain text</span></div>` : ''}</article>`;
   }).join('')}<p class="thread-status">${lastJob ? `Latest task: <strong>${esc(lastJob.state.replaceAll('_', ' '))}</strong> · ${esc(lastJob.model.id ?? 'model unclear')}${lastJob.runtime ? ' · local Codex read-only' : ' · synthetic'}` : ''}</p><button class="reply-trigger" id="replyButton">${icon('reply')} Reply</button>`;
   $('#threadView').querySelectorAll('iframe').forEach((frame) => {
-    const fit = () => {
-      const doc = frame.contentDocument;
-      if (!doc) return;
-      frame.style.height = `${Math.min(1800, Math.max(180, doc.documentElement.scrollHeight, doc.body?.scrollHeight ?? 0) + 8)}px`;
-    };
-    frame.addEventListener('load', fit);
-    if (frame.contentDocument?.readyState === 'complete') fit();
+    frame.addEventListener('load', () => fitPreview(frame));
+    if (frame.contentDocument?.readyState === 'complete') fitPreview(frame);
   });
 }
+
+function fitPreview(frame) {
+  const doc = frame.contentDocument;
+  if (!doc) return;
+  frame.style.height = `${Math.max(180, doc.documentElement.scrollHeight, doc.body?.scrollHeight ?? 0) + 8}px`;
+}
+
+window.addEventListener('resize', () => {
+  $('#threadView').querySelectorAll('iframe').forEach(fitPreview);
+});
 
 function renderLab() {
   const queued = data.jobs.filter((job) => job.state === 'queued').length;
