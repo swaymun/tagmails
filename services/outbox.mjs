@@ -329,9 +329,10 @@ export async function sendNextOutbox(env, {
     JOIN accounts a ON a.id = t.account_id
     WHERE o.state = 'queued' AND a.active = 1
       AND NOT EXISTS (SELECT 1 FROM jobs earlier
-        JOIN outbox prior ON prior.job_id = earlier.id
+        LEFT JOIN outbox prior ON prior.job_id = earlier.id
         WHERE earlier.thread_id = j.thread_id AND earlier.rowid < j.rowid
-          AND prior.state IN ('queued', 'sending', 'uncertain', 'accepted'))
+          AND (earlier.state IN ('queued', 'running') OR
+            prior.state IN ('queued', 'sending', 'uncertain', 'accepted')))
     ORDER BY j.created_at, j.rowid LIMIT 1`).bind().first();
   if (!row) return { state: 'idle' };
   let payload;

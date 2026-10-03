@@ -111,6 +111,28 @@ test('a queued message received at the old alias replies from the new account ad
   assert.equal(sent.headers['In-Reply-To'], '<inbound-1@gmail.com>');
 });
 
+test('a ready clarification waits for an earlier unfinished turn in the same thread', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  sqlite.prepare("UPDATE jobs SET state = 'queued', result_key = NULL WHERE id = 'job-1'").run();
+  sqlite.prepare("DELETE FROM outbox WHERE job_id = 'job-1'").run();
+  await queuedTurn(fixture, { number: 2, from: 'owner@gmail.com', to: ['agent@wonder.test'],
+    inReplyTo: '<inbound-1@gmail.com>' });
+  let sent = 0;
+  const provider = {
+    sendEmail: async () => ({ data: { id: `ordered-${++sent}` } }),
+    getSentEmail: async (id) => ({ data: { message_id: `<${id}@tagmails.test>` } }),
+  };
+  assert.deepEqual(await sendNextOutbox(env, provider), { state: 'idle' });
+  assert.equal(sent, 0);
+  sqlite.prepare("UPDATE jobs SET state = 'completed', result_key = 'results/1.json' WHERE id = 'job-1'").run();
+  sqlite.prepare("INSERT INTO outbox (job_id) VALUES ('job-1')").run();
+  assert.equal((await sendNextOutbox(env, provider)).jobId, 'job-1');
+  assert.equal((await sendNextOutbox(env, provider)).jobId, 'job-2');
+  assert.equal(sent, 2);
+});
+
 test('development sender replies to the account owner through the inbound alias', async () => {
   const fixture = bindings();
   const { env, sqlite } = fixture;
