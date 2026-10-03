@@ -164,6 +164,14 @@ function validResult(value) {
       new Set(artifactIds).size === artifactIds.length)) &&
     (value.usage === undefined || (value.usage && typeof value.usage === 'object' &&
       tokens.every((key) => Number.isSafeInteger(value.usage[key]) && value.usage[key] >= 0 && value.usage[key] <= 1_000_000_000))) &&
+    (value.codexAllowance === undefined || (value.codexAllowance &&
+      Number.isSafeInteger(value.codexAllowance.observedAt) &&
+      value.codexAllowance.observedAt > 0 && Array.isArray(value.codexAllowance.windows) &&
+      value.codexAllowance.windows.length >= 1 && value.codexAllowance.windows.length <= 2 &&
+      value.codexAllowance.windows.every((window) => Number.isSafeInteger(window.durationMins) &&
+        window.durationMins > 0 && window.durationMins <= 10_080 &&
+        Number.isInteger(window.remainingPercent) && window.remainingPercent >= 0 && window.remainingPercent <= 100 &&
+        Number.isSafeInteger(window.resetsAt) && window.resetsAt > 0))) &&
     (value.reportedListCostUsd === undefined || (typeof value.reportedListCostUsd === 'number' &&
       Number.isFinite(value.reportedListCostUsd) && value.reportedListCostUsd >= 0 && value.reportedListCostUsd <= 1000));
 }

@@ -40,6 +40,13 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     config: { web_search: 'disabled', sandbox_mode: null, mcp_servers: mode === 'external-tool' ? { rogue: {} } : {} },
     layers: [{ name: { type: 'project' }, disabledReason: mode === 'trusted-project' ? null : 'untrusted' }],
   } });
+  if (message.method === 'account/read') send({ id: message.id, result: {
+    account: { type: 'chatgpt', email: mode === 'account-mismatch' ? 'another@gmail.com' : 'owner@gmail.com', planType: 'pro' },
+  } });
+  if (message.method === 'account/rateLimits/read') send({ id: message.id, result: {
+    rateLimits: { primary: { usedPercent: 34, windowDurationMins: 10080,
+      resetsAt: Math.floor(Date.now() / 1000) + 86400 } },
+  } });
   if (message.method === 'thread/start' || message.method === 'thread/resume') {
     resumed = message.method === 'thread/resume';
     fs.appendFileSync(log, JSON.stringify({ method: message.method, params: message.params,
@@ -100,6 +107,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
 test('Codex app-server resumes the restricted thread, reads an attachment, and caches results', async (t) => {
   const { root, workspace, home, auth, calls } = setup(t);
   const attached = claim('job-1', 'thread-1');
+  attached.request.fromOwner = true;
   attached.request.attachments = [{ name: 'note.txt', mimeType: 'text/plain', size: 16,
     data: Buffer.from('Agent test note.').toString('base64') }];
   const first = await runClaim(attached);
@@ -107,6 +115,7 @@ test('Codex app-server resumes the restricted thread, reads an attachment, and c
   assert.match(first.summary, /First turn/);
   assert.deepEqual(first.usage, { inputTokens: 1200, cachedInputTokens: 300,
     cacheCreationInputTokens: 0, outputTokens: 40, reasoningOutputTokens: 12 });
+  assert.equal(first.codexAllowance.windows[0].remainingPercent, 66);
   assert.deepEqual(first.transcript.events, [
     { kind: 'request', text: 'Summarize this workspace.' },
     { kind: 'tool', text: 'Local command completed (exit 0).' },
@@ -137,6 +146,15 @@ test('Codex app-server resumes the restricted thread, reads an attachment, and c
   const store = JSON.parse(fs.readFileSync(path.join(root, 'sessions.json'), 'utf8'));
   assert.equal(store.threads['thread-1'].sessionId, '11111111-1111-4111-8111-111111111111');
   assert.equal(Object.keys(store.jobs).length, 2);
+});
+
+test('a different Codex account does not disclose its allowance to the Gmail owner', async (t) => {
+  setup(t, 'account-mismatch');
+  const ownerClaim = claim('job-account-mismatch', 'thread-account-mismatch');
+  ownerClaim.request.fromOwner = true;
+  const result = await runClaim(ownerClaim);
+  assert.equal(result.state, 'completed');
+  assert.equal(result.codexAllowance, undefined);
 });
 
 test('Codex adapter refuses to run a turn when the restricted profile is not active', async (t) => {

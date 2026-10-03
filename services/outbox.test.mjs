@@ -641,6 +641,10 @@ test('owner-only replies show remaining test credits without exposing them to gu
   sqlite.prepare(`INSERT INTO credit_ledger (id, account_id, checkout_id, amount_cents, kind, source_id)
     VALUES ('credit-1', 'account-1', 'checkout-1', 1000, 'test_top_up', 'session-1')`).run();
   await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  const allowance = { observedAt: Date.now(), windows: [{ durationMins: 10080,
+    remainingPercent: 66, resetsAt: Math.floor(Date.now() / 1000) + 86400 }] };
+  await env.MAIL.put('results/1.json', JSON.stringify({ state: 'completed', summary: 'Turn 1 finished.',
+    runtime: 'codex-app-server-readonly', codexAllowance: allowance }));
   sqlite.prepare(`INSERT INTO test_email_charges (job_id, account_id, amount_cents, state)
     VALUES ('job-1', 'account-1', 5, 'reserved')`).run();
   const payloads = [];
@@ -651,14 +655,18 @@ test('owner-only replies show remaining test credits without exposing them to gu
   assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
   assert.match(payloads[0].text, /TagMails test credits remaining: \$9\.95\./);
   assert.match(payloads[0].html, /TagMails test credits remaining: \$9\.95\./);
+  assert.match(payloads[0].text, /Connected Codex plan: 66% remaining/);
 
   sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)').run('thread-1', 'reviewer@gmail.com');
   await queuedTurn(fixture, { number: 2, from: 'reviewer@gmail.com',
     to: ['agent@wonder.test', 'owner@gmail.com'] });
+  await env.MAIL.put('results/2.json', JSON.stringify({ state: 'completed', summary: 'Turn 2 finished.',
+    runtime: 'codex-app-server-readonly', codexAllowance: allowance }));
   assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
   assert.deepEqual(payloads[1].cc, ['owner@gmail.com']);
   assert.doesNotMatch(payloads[1].text, /credits remaining/);
   assert.doesNotMatch(payloads[1].html, /credits remaining/);
+  assert.doesNotMatch(payloads[1].text, /Codex plan/);
 });
 
 test('without a separate Site, an owner reply links to the Worker receipt', async () => {

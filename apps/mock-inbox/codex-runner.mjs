@@ -104,6 +104,19 @@ function reportedUsage(value) {
   };
 }
 
+function reportedAllowance(value) {
+  const limits = value?.rateLimitsByLimitId?.codex ?? value?.rateLimits;
+  const now = Date.now();
+  const windows = [limits?.primary, limits?.secondary].flatMap((window) => {
+    if (!window || !Number.isInteger(window.usedPercent) || window.usedPercent < 0 || window.usedPercent > 100 ||
+        !Number.isSafeInteger(window.windowDurationMins) || window.windowDurationMins <= 0 ||
+        !Number.isSafeInteger(window.resetsAt) || window.resetsAt * 1000 <= now) return [];
+    return [{ durationMins: window.windowDurationMins, remainingPercent: 100 - window.usedPercent,
+      resetsAt: window.resetsAt }];
+  });
+  return windows.length ? { observedAt: now, windows } : null;
+}
+
 function codexEnvironment(home) {
   const allowed = ['HOME', 'USER', 'PATH', 'TMPDIR', 'LANG', 'LC_ALL', 'SSL_CERT_FILE'];
   return { ...Object.fromEntries(allowed.filter((key) => process.env[key]).map((key) => [key, process.env[key]])),
@@ -216,7 +229,23 @@ async function runCodex(claim, workspace, home, sessionId, staged, write) {
     const status = await turnDone;
     if (leaseLost) return { result: { ...fail('The local claim lease was lost while Codex was running.', write), transcript } };
     if (status !== 'completed') return { result: { ...fail('Codex did not complete this turn.', write), transcript } };
+    let codexAllowance = null;
+    if (claim.request.fromOwner === true) {
+      let allowanceTimeout;
+      try {
+        codexAllowance = await Promise.race([
+          (async () => {
+            const account = await request('account/read', { refreshToken: false });
+            if (account.account?.type !== 'chatgpt' || account.account.email?.toLowerCase() !== claim.request.from.toLowerCase()) return null;
+            return reportedAllowance(await request('account/rateLimits/read', { excludeResetCreditDetails: true }));
+          })(),
+          new Promise((_, reject) => { allowanceTimeout = setTimeout(() => reject(new Error('Codex allowance timed out')), 2000); }),
+        ]);
+      } catch { /* A usage read cannot fail a completed task. */ }
+      finally { clearTimeout(allowanceTimeout); }
+    }
     return { result: { ...resultFromAnswer(answer, claim.model.id, approvals, usage, write),
+      ...(codexAllowance ? { codexAllowance } : {}),
       transcript: finishRunTranscript(transcript, answer) }, threadId };
   } finally {
     clearInterval(renew);

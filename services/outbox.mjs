@@ -234,11 +234,25 @@ async function prepare(env, row) {
     ? await testWalletSnapshot(env, row.account_id) : null;
   const creditDetail = balance
     ? `TagMails test credits remaining: $${(balance.balanceCents / 100).toFixed(2)}.` : null;
+  const allowance = ownerOnly && result.codexAllowance;
+  const allowanceFresh = allowance && Number.isSafeInteger(allowance.observedAt) &&
+    Date.now() >= allowance.observedAt && Date.now() - allowance.observedAt <= 15 * 60_000;
+  const allowanceDetail = allowanceFresh && Array.isArray(allowance.windows)
+    ? allowance.windows.filter((window) => Number.isInteger(window.remainingPercent) &&
+      window.remainingPercent >= 0 && window.remainingPercent <= 100 &&
+      Number.isSafeInteger(window.durationMins) && window.durationMins > 0 &&
+      Number.isSafeInteger(window.resetsAt) && window.resetsAt * 1000 > Date.now())
+      .map((window) => {
+        const duration = window.durationMins % 1440 === 0
+          ? `${window.durationMins / 1440}-day` : window.durationMins % 60 === 0
+            ? `${window.durationMins / 60}-hour` : `${window.durationMins}-minute`;
+        return `Connected Codex plan: ${window.remainingPercent}% remaining in the ${duration} window (resets ${new Date(window.resetsAt * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC).`;
+      }) : [];
   const writeRun = ['codex-app-server-write', 'claude-cli-write'].includes(result.runtime);
   const rendered = renderResult({
     state: result.state, summary: result.summary,
     details: [...(selectedModel ? [selectedModel] : []), ...(result.details ?? []), ...fileNote,
-      ...(creditDetail ? [creditDetail] : [])], checks: result.checks,
+      ...(creditDetail ? [creditDetail] : []), ...allowanceDetail], checks: result.checks,
     links: transcriptUrl && (ownerCanOpen || participantTranscriptReady)
       ? [{ label: sharedWithParticipant && !participantTranscriptReady ? `${runLinkLabel} (owner only)` : runLinkLabel,
         url: transcriptUrl }] : [],
