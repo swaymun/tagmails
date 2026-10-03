@@ -39,7 +39,7 @@ The first beta uses Google sign-in with a verified Gmail address. Customers inst
 
 ## Brand Commitments
 
-The landing site should use the TagMails name, be text-forward, and include a copyable setup prompt, inspired by the interaction pattern at Call4Me without copying its design. `tagmails.com` is the preferred domain, pending registrar and trademark checks; other ideas are tracked in PLAN.md.
+The landing site should use the TagMails name, be text-forward, and include a copyable setup prompt, inspired by the interaction pattern at Call4Me without copying its design. `tagmails.com` is the preferred domain. A live registrar search listed it for sale and a narrow USPTO wordmark search found no exact match; authenticated checkout, acquisition, and broader mark review remain. Details are in PLAN.md.
 
 Claude Tag is a reference for the use cases and collaborative feel: delegate from an existing conversation, get a concrete result in-thread, continue later, and keep memory and access scoped. The internal test site should look and behave like Gmail based on the user's supplied screenshot; it remains an internal testing surface rather than public product branding.
 
