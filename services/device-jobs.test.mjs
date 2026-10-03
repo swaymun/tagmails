@@ -134,8 +134,19 @@ test('device status confirms an active token without claiming queued mail', asyn
   assert.deepEqual(await active.json(), { paired: true });
   assert.equal(active.headers.get('cache-control'), 'no-store');
   assert.equal(sqlite.prepare('SELECT state FROM jobs').get().state, 'queued');
+  assert.equal(sqlite.prepare('SELECT last_seen_at FROM devices WHERE id = ?').get(paired.id).last_seen_at, null);
   sqlite.prepare('UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE id = ?').run(paired.id);
   assert.equal((await request(paired.token)).status, 401);
+});
+
+test('an idle daemon poll records when the paired Mac last contacted the relay', async () => {
+  const { env, sqlite } = bindings();
+  const paired = device(sqlite);
+  assert.deepEqual((await call(env, paired.token, 'claim')).body, { claimed: false });
+  const seen = sqlite.prepare('SELECT last_seen_at FROM devices WHERE id = ?').get(paired.id).last_seen_at;
+  assert.match(seen, /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/);
+  assert.deepEqual((await call(env, paired.token, 'claim')).body, { claimed: false });
+  assert.equal(sqlite.prepare('SELECT last_seen_at FROM devices WHERE id = ?').get(paired.id).last_seen_at, seen);
 });
 
 test('a signed guest claim cannot request the owner-only answer export', async () => {

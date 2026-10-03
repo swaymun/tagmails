@@ -165,7 +165,7 @@ async function createPairingCode(env, accountId) {
 }
 
 async function accountDevices(env, accountId) {
-  const rows = await env.DB.prepare(`SELECT id, name, created_at, revoked_at FROM devices
+  const rows = await env.DB.prepare(`SELECT id, name, created_at, revoked_at, last_seen_at FROM devices
     WHERE account_id = ? ORDER BY created_at DESC`).bind(accountId).all();
   return { devices: rows.results ?? rows };
 }

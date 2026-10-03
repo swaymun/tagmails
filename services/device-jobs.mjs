@@ -41,6 +41,11 @@ async function boundedJson(request) {
 }
 
 async function claim(env, device) {
+  // A claim request is the daemon's regular poll, including when the queue is empty.
+  // Throttle writes so an idle Mac does not write to D1 every 30 seconds.
+  await env.DB.prepare(`UPDATE devices SET last_seen_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < datetime('now', '-2 minutes'))`)
+    .bind(device.id).run();
   const leaseId = randomUUID();
   const funded = testBillingEnabled(env)
     ? `AND (json_extract(j.model_json, '$.error') IS NOT NULL OR EXISTS

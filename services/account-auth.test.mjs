@@ -277,6 +277,12 @@ test('the private Site can show the owner account and manage only its paired dev
   const { deviceId } = await paired.json();
   const listed = await (await handleAccountRequest(site('/api/site/devices'), env, options)).json();
   assert.equal(listed.devices[0].id, deviceId);
+  assert.equal(listed.devices[0].last_seen_at, null);
+  assert.equal((await handleDeviceRequest(new Request('https://relay.test/api/device/claim', {
+    method: 'POST', headers: { Authorization: `Bearer ${token}` },
+  }), env)).status, 200);
+  const afterPoll = await (await handleAccountRequest(site('/api/site/devices'), env, options)).json();
+  assert.match(afterPoll.devices[0].last_seen_at, /^\d{4}-\d\d-\d\d /);
   assert.equal(sqlite.prepare('SELECT revoked_at FROM devices WHERE id = ?').get(deviceId).revoked_at, null);
   assert.equal((await handleAccountRequest(site(`/api/site/devices/${deviceId}/revoke`, 'POST'), env, {
     verifyIdentity: async () => ({ sub: 'another-sub', email: 'other@gmail.com' }),
