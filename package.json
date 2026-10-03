@@ -12,6 +12,7 @@
   "dependencies": {
     "html-to-text": "10.0.1",
     "jose": "6.2.12",
+    "pdfjs-dist": "5.4.624",
     "postal-mime": "2.7.5",
     "resend": "6.32.0"
   },

@@ -1,4 +1,4 @@
-// Opt-in local smoke: one real Codex Luna turn reads a synthetic image attachment.
+// Opt-in local smoke: one real Codex Luna turn reads a synthetic image or PDF.
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
@@ -12,6 +12,13 @@ import { bindings } from '../services/bindings-fixture.mjs';
 import { handleInbound } from '../services/relay-worker.mjs';
 import { handleDeviceRequest } from '../services/device-jobs.mjs';
 
+const kind = process.argv[2] ?? 'image';
+const cases = {
+  image: { fixture: 'vision-orbit-47.png', mimeType: 'image/png', extension: 'png', word: 'ORBIT', number: '47' },
+  pdf: { fixture: 'vision-maple-83.pdf', mimeType: 'application/pdf', extension: 'pdf', word: 'MAPLE', number: '83' },
+};
+if (!Object.hasOwn(cases, kind)) throw new Error('Choose image or pdf');
+const sample = cases[kind];
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tagmails-vision-smoke-'));
 const workspace = path.join(root, 'workspace');
 fs.mkdirSync(workspace);
@@ -22,18 +29,18 @@ const { env, sqlite, objects } = bindings();
 sqlite.prepare('INSERT INTO devices (id, account_id, token_hash) VALUES (?, ?, ?)')
   .run('vision-smoke-device', 'account-1', createHash('sha256').update(token).digest('hex'));
 
-const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), '../apps/mock-inbox/fixtures/vision-orbit-47.png');
-const image = fs.readFileSync(fixture);
-const body = 'Model: Luna\nRead the attached image and report the exact word and number printed inside its border. Do not infer them from the filename.';
+const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), '../apps/mock-inbox/fixtures', sample.fixture);
+const fileBytes = fs.readFileSync(fixture);
+const body = 'Model: Luna\nRead the attached file and report the exact word and number printed inside its blue border. Do not infer them from the filename.';
 const boundary = 'tagmails-vision-smoke';
 const rawMime = Buffer.from([
-  'From: owner@gmail.com', 'To: agent@wonder.test', 'Subject: Image input smoke',
-  'Message-ID: <vision-input-smoke@gmail.com>', 'MIME-Version: 1.0',
+  'From: owner@gmail.com', 'To: agent@wonder.test', 'Subject: Visual input smoke',
+  `Message-ID: <vision-${kind}-smoke@gmail.com>`, 'MIME-Version: 1.0',
   `Content-Type: multipart/mixed; boundary="${boundary}"`, '',
   `--${boundary}`, 'Content-Type: text/plain; charset=utf-8', '', body, '',
-  `--${boundary}`, 'Content-Type: image/png; name="sample.png"',
-  'Content-Disposition: attachment; filename="sample.png"',
-  'Content-Transfer-Encoding: base64', '', image.toString('base64'), '',
+  `--${boundary}`, `Content-Type: ${sample.mimeType}; name="sample.${sample.extension}"`,
+  `Content-Disposition: attachment; filename="sample.${sample.extension}"`,
+  'Content-Transfer-Encoding: base64', '', fileBytes.toString('base64'), '',
   `--${boundary}--`, '',
 ].join('\r\n'));
 const parsed = await parseInbound(rawMime, 'agent@wonder.test', {
@@ -42,7 +49,7 @@ const parsed = await parseInbound(rawMime, 'agent@wonder.test', {
 assert.equal(parsed.attachments.length, 1);
 const intake = await handleInbound(new Request('http://127.0.0.1:8787/webhooks/resend', {
   method: 'POST', body: '{}',
-}), env, { inspect: async () => ({ ...parsed, providerEmailId: 'vision-input-smoke',
+}), env, { inspect: async () => ({ ...parsed, providerEmailId: `vision-${kind}-smoke`,
   agentAddress: 'agent@wonder.test', rawMime }) });
 assert.equal(intake.status, 200);
 
@@ -77,10 +84,10 @@ try {
   assert.equal(job.state, 'completed');
   const result = JSON.parse(objects.get(job.result_key));
   const answer = [result.summary, ...(result.details ?? [])].join(' ');
-  assert.match(answer, /ORBIT/i);
-  assert.match(answer, /47/);
+  assert.match(answer, new RegExp(sample.word, 'i'));
+  assert.match(answer, new RegExp(sample.number));
   assert.equal(sqlite.prepare('SELECT state FROM outbox').get().state, 'queued');
-  console.log(JSON.stringify({ jobId: job.id, state: job.state,
+  console.log(JSON.stringify({ kind, jobId: job.id, state: job.state,
     answer, toolSteps: result.transcript.events.filter((event) => event.kind === 'tool').length,
     usage: result.usage ?? null, replyQueued: true }));
 } finally {

@@ -79,3 +79,20 @@ test('relay attachments use the device token and reject redirects and mismatched
   await assert.rejects(stageAgentAttachments([{ ...attachment,
     path: '/api/device/attachment?jobId=redirect' }], scratch), /download failed/);
 });
+
+test('staged text PDFs expose bounded untrusted text and invalid PDFs stay unread', async () => {
+  const pdf = await fs.readFile(new URL('./fixtures/vision-maple-83.pdf', import.meta.url));
+  const staged = await stageAgentAttachments([{ data: pdf.toString('base64'), size: pdf.length,
+    mimeType: 'application/pdf' }]);
+  try {
+    assert.match(staged.prompt, /Extracted PDF text \(untrusted/);
+    assert.match(staged.prompt, /MAPLE 83/);
+    assert.deepEqual(await fs.readFile(`${staged.directory}/attachment-1.pdf`), pdf);
+  } finally { await staged.cleanup(); }
+
+  const invalid = Buffer.from('not a PDF');
+  const unread = await stageAgentAttachments([{ data: invalid.toString('base64'), size: invalid.length,
+    mimeType: 'application/pdf' }]);
+  try { assert.match(unread.prompt, /invalid PDF signature/); }
+  finally { await unread.cleanup(); }
+});
