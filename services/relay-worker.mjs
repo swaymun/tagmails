@@ -12,6 +12,7 @@ import { fundPendingTestEmails, reconcileTestEmailCharges, reservePendingTestEma
   testBillingEnabled } from './email-charges.mjs';
 import { deleteExpiredRunArtifacts } from './run-artifacts.mjs';
 import { deleteSettledInboundMime } from './inbound-retention.mjs';
+import { sendNextStatusReaction } from './status-reactions.mjs';
 
 const MAX_WEBHOOK_BYTES = 128_000;
 
@@ -223,6 +224,10 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
   });
   statements.push(env.DB.prepare('INSERT INTO jobs (id, thread_id, message_id, state, model_json, result_key) VALUES (?, ?, ?, ?, ?, ?)')
     .bind(jobId, newThreadId, id, threadUnavailable ? 'failed' : 'queued', model && JSON.stringify(model), resultKey));
+  if (!threadUnavailable && !model?.error && env.STATUS_REACTIONS_ENABLED === 'true' &&
+      !env.RESEND_TEST_FROM && message.from.endsWith('@gmail.com')) {
+    statements.push(env.DB.prepare("INSERT INTO status_reactions (job_id, status) VALUES (?, 'received')").bind(jobId));
+  }
   if (threadUnavailable) statements.push(env.DB.prepare('INSERT INTO outbox (job_id) VALUES (?)').bind(jobId));
   try {
     await env.DB.batch(statements);
@@ -245,7 +250,7 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === 'GET' && new URL(request.url).pathname === '/account') return accountPage();
     try {
       const billing = await handleTestWalletRequest(request, env);
@@ -259,7 +264,13 @@ export default {
       try { return await handleDeviceRequest(request, env); }
       catch { return new Response('Device job request failed', { status: 500 }); }
     }
-    try { return await handleInbound(request, env); }
+    try {
+      const response = await handleInbound(request, env);
+      if (ctx && response.ok && env.STATUS_REACTIONS_ENABLED === 'true') {
+        ctx.waitUntil(sendNextStatusReaction(env).catch(() => console.error('Status reaction is delayed')));
+      }
+      return response;
+    }
     catch (error) {
       console.error('Inbound mail intake failed:', error instanceof Error ? error.message : 'Unknown error');
       return new Response('Inbound mail could not be accepted', { status: 500 });
@@ -281,6 +292,12 @@ export default {
     catch { console.error('Test email credit reconciliation is delayed'); }
     try { await reconcileOneUnknownOutbox(env); }
     catch { console.error('Uncertain outbound reconciliation is delayed'); }
+    try {
+      for (let index = 0; index < 10; index += 1) {
+        const reaction = await sendNextStatusReaction(env);
+        if (['idle', 'disabled', 'contended', 'uncertain'].includes(reaction.state)) break;
+      }
+    } catch { console.error('Status reaction send is delayed'); }
     for (let index = 0; index < 10; index += 1) {
       const result = await sendNextOutbox(env);
       if (['idle', 'contended'].includes(result.state)) break;

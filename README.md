@@ -156,6 +156,8 @@ Migration `0006_test_email_charges.sql` adds **test-only** task spending at a pr
 
 The test wallet accepts no live Stripe key or live event. The existing Stripe sandbox is selected for TagMails; a restricted test key and five-event webhook are prepared there but await the browser's action-time confirmation. The development Worker has `BILLING_TEST_MODE=true`, while its Checkout remains disabled until both Stripe secrets are installed. No Checkout session, dispute reconciliation, or real payment is connected. Keep billing in test mode until those paths and the final price are approved and verified.
 
+Outbound Gmail status reactions are implemented behind `STATUS_REACTIONS_ENABLED=true`. After authorized intake, local agent start, and terminal completion, a D1 queue records 👀, 📝, and ✅ or ⚠️ once per job. The sender builds Gmail reaction MIME with `In-Reply-To` on the inbound `Message-ID` and plain-text/HTML fallbacks, then sends through Resend SMTP over TLS. Unknown send outcomes are held rather than retried. The flag is off in development until `tagmails.com` sending DNS is verified and the owner can inspect actual Gmail behavior. Local MIME, SMTP, queue-order, revocation, and duplicate tests pass; no outbound status reaction has been sent to Gmail. [Gmail reaction format](https://developers.google.com/workspace/gmail/reactions/format) · [Resend SMTP](https://resend.com/docs/send-with-smtp)
+
 ```sh
 npm test
 npm run eval:email

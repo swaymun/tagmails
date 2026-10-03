@@ -504,7 +504,18 @@ fn relay_iteration(
         Err(message) => {
             json!({"runtime":"tagmails-router","state":"needs_clarification","summary":message})
         }
-        Ok(_) => relay_result(&claim, base, access)?,
+        Ok(_) => {
+            if let Err(error) = relay_post(
+                client,
+                base,
+                "/api/device/started",
+                token,
+                json!({"jobId":job_id,"leaseId":lease_id}),
+            ) {
+                eprintln!("Status reaction could not be queued: {error}");
+            }
+            relay_result(&claim, base, access)?
+        }
     };
     if result["state"] == "completed" && wants_answer_file(&claim) {
         upload_file(

@@ -7,6 +7,7 @@ import { bindings } from './bindings-fixture.mjs';
 import { handleAccountRequest } from './account-auth.mjs';
 import { deleteExpiredRunArtifacts } from './run-artifacts.mjs';
 import { sendNextOutbox } from './outbox.mjs';
+import { sendNextStatusReaction } from './status-reactions.mjs';
 
 function device(sqlite, accountId = 'account-1') {
   const token = `tm_dev_${randomBytes(32).toString('base64url')}`;
@@ -133,6 +134,31 @@ test('a paired device receives a signed, account-scoped claim and completes it o
   assert.equal(sqlite.prepare('SELECT state FROM outbox').get().state, 'queued');
   assert.equal(JSON.parse(objects.get(job.result_key).toString()).summary, result.summary);
   assert.deepEqual(JSON.parse(objects.get(job.result_key).toString()).transcript, result.transcript);
+});
+
+test('a Gmail owner receives one ordered status reaction per durable task stage', async () => {
+  const { env, sqlite } = bindings();
+  env.STATUS_REACTIONS_ENABLED = 'true';
+  const paired = device(sqlite);
+  await inbound(env, 'status-turn');
+  const signedJob = envelope((await call(env, paired.token, 'claim')).body);
+  const lease = { jobId: signedJob.jobId, leaseId: signedJob.leaseId };
+  assert.equal((await call(env, paired.token, 'started', { ...lease, leaseId: 'wrong' })).status, 409);
+  assert.deepEqual((await call(env, paired.token, 'started', lease)).body, { started: true });
+  assert.deepEqual((await call(env, paired.token, 'started', lease)).body, { started: true });
+  assert.equal((await call(env, paired.token, 'complete', { ...lease,
+    result: { runtime: 'codex-app-server-readonly', state: 'completed', summary: 'Done.' } })).status, 200);
+  const sent = [];
+  const send = async (message) => { sent.push(message.raw); return { accepted: true }; };
+  for (const status of ['received', 'working', 'completed']) {
+    assert.deepEqual(await sendNextStatusReaction(env, { send }),
+      { state: 'accepted', jobId: signedJob.jobId, status });
+  }
+  assert.equal((await sendNextStatusReaction(env, { send })).state, 'idle');
+  assert.deepEqual(sqlite.prepare('SELECT status, state FROM status_reactions ORDER BY rowid').all().map((row) => ({ ...row })),
+    ['received', 'working', 'completed'].map((status) => ({ status, state: 'accepted' })));
+  assert.ok(sent[0].includes(`In-Reply-To: <status-turn@gmail.com>`));
+  assert.equal(sent.length, 3);
 });
 
 test('same-thread turns wait and stay with the Mac that owns their local session', async () => {

@@ -146,6 +146,22 @@ async function renew(env, device, body) {
   return row ? json({ renewed: true, leaseUntil: row.lease_until }) : json({ error: 'Lease expired or replaced' }, 409);
 }
 
+async function started(env, device, body) {
+  if (typeof body.jobId !== 'string' || typeof body.leaseId !== 'string') return json({ error: 'Invalid lease' }, 400);
+  const row = await env.DB.prepare(`SELECT m.sender_email FROM jobs j
+    JOIN threads t ON t.id = j.thread_id JOIN messages m ON m.id = j.message_id
+    WHERE j.id = ? AND j.device_id = ? AND j.lease_id = ? AND j.state = 'running'
+      AND j.lease_until > CURRENT_TIMESTAMP AND t.account_id = ? LIMIT 1`)
+    .bind(body.jobId, device.id, body.leaseId, device.account_id).first();
+  if (!row) return json({ error: 'Lease expired or replaced' }, 409);
+  if (env.STATUS_REACTIONS_ENABLED === 'true' && !env.RESEND_TEST_FROM &&
+      row.sender_email.toLowerCase().endsWith('@gmail.com')) {
+    await env.DB.prepare("INSERT OR IGNORE INTO status_reactions (job_id, status) VALUES (?, 'working')")
+      .bind(body.jobId).run();
+  }
+  return json({ started: true });
+}
+
 function validResult(value) {
   if (!value || !['completed', 'failed', 'needs_approval', 'needs_clarification'].includes(value.state) ||
       typeof value.summary !== 'string' || !value.summary.trim() || value.summary.length > 500) return false;
@@ -203,16 +219,26 @@ async function complete(env, device, body) {
   const key = `results/${device.account_id}/${body.jobId}/${body.leaseId}.json`;
   await env.MAIL.put(key, serialized, { httpMetadata: { contentType: 'application/json' } });
   const state = body.result.state === 'failed' ? 'failed' : 'completed';
+  const reactionStatus = body.result.state === 'completed' ? 'completed'
+    : body.result.state === 'failed' ? 'failed' : null;
   // Completion and its one outbound reply commit together. A replaced lease
   // cannot enqueue mail even if it uploaded a result object first.
-  const updated = await env.DB.batch([
+  const statements = [
     env.DB.prepare(`UPDATE jobs SET state = ?, result_key = ?, result_hash = ?, lease_until = NULL
       WHERE id = ? AND device_id = ? AND lease_id = ? AND state = 'running'
         AND lease_until > CURRENT_TIMESTAMP`).bind(state, key, resultHash, body.jobId, device.id, body.leaseId),
     env.DB.prepare(`INSERT INTO outbox (job_id) SELECT id FROM jobs
       WHERE id = ? AND device_id = ? AND lease_id = ? AND result_hash = ? AND state = ?`)
       .bind(body.jobId, device.id, body.leaseId, resultHash, state),
-  ]);
+  ];
+  if (reactionStatus && env.STATUS_REACTIONS_ENABLED === 'true' && !env.RESEND_TEST_FROM) {
+    statements.push(env.DB.prepare(`INSERT OR IGNORE INTO status_reactions (job_id, status)
+      SELECT j.id, ? FROM jobs j JOIN messages m ON m.id = j.message_id
+      WHERE j.id = ? AND j.device_id = ? AND j.lease_id = ? AND j.result_hash = ?
+        AND j.state = ? AND m.sender_email LIKE '%@gmail.com'`)
+      .bind(reactionStatus, body.jobId, device.id, body.leaseId, resultHash, state));
+  }
+  const updated = await env.DB.batch(statements);
   return (updated[1].meta?.changes ?? updated[1].changes) === 1
     ? json({ completed: true, duplicate: false }) : json({ error: 'Lease expired or replaced' }, 409);
 }
@@ -220,7 +246,7 @@ async function complete(env, device, body) {
 export async function handleDeviceRequest(request, env) {
   const url = new URL(request.url);
   if (!((request.method === 'GET' && ['/api/device/attachment', '/api/device/status'].includes(url.pathname)) ||
-    (request.method === 'POST' && ['/api/device/claim', '/api/device/renew', '/api/device/complete', '/api/device/artifacts'].includes(url.pathname)))) {
+    (request.method === 'POST' && ['/api/device/claim', '/api/device/renew', '/api/device/started', '/api/device/complete', '/api/device/artifacts'].includes(url.pathname)))) {
     return new Response('Not found', { status: 404 });
   }
   if (url.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(url.hostname)) return json({ error: 'HTTPS required' }, 403);
@@ -236,5 +262,6 @@ export async function handleDeviceRequest(request, env) {
   let body;
   try { body = await boundedJson(request); }
   catch { return json({ error: 'Invalid or oversized JSON body' }, 400); }
-  return url.pathname === '/api/device/renew' ? renew(env, device, body) : complete(env, device, body);
+  if (url.pathname === '/api/device/renew') return renew(env, device, body);
+  return url.pathname === '/api/device/started' ? started(env, device, body) : complete(env, device, body);
 }
