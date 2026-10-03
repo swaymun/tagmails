@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Resend } from 'resend';
 import { routeModel } from './jev-route.mjs';
 import { inspectResendInbound } from './resend-inbound.mjs';
+import { knownAgentAddresses } from './agent-addresses.mjs';
 import { handleDeviceRequest } from './device-jobs.mjs';
 import { reconcileOneUnknownOutbox, reconcileSentEvent, recordDeliveryOutcome, sendNextOutbox } from './outbox.mjs';
 import { handleAccountRequest } from './account-auth.mjs';
@@ -52,9 +53,9 @@ async function parentThread(db, accountId, parentIds) {
   return null;
 }
 
-function visibleGuests(message, owner, agent) {
+function visibleGuests(message, owner, agentAddresses) {
   const guests = [...new Set([...(message.to ?? []), ...(message.cc ?? [])])]
-    .filter((email) => email !== owner && email !== agent);
+    .filter((email) => email !== owner && !agentAddresses.has(email));
   if (guests.length > 20 || guests.some((email) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
     throw new Error('Owner email has too many or invalid visible participants');
   }
@@ -185,7 +186,9 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
   const threadUnavailable = Boolean(priorDevice?.revoked_at);
   const id = randomUUID();
   const newThreadId = threadId ?? randomUUID();
-  const guests = owner ? visibleGuests(message, ownerEmail, agent) : [];
+  const recipients = [...(message.to ?? []), ...(message.cc ?? [])];
+  const agentAddresses = owner ? await knownAgentAddresses(env.DB, recipients) : null;
+  const guests = owner ? visibleGuests(message, ownerEmail, agentAddresses) : [];
   const objectKey = `inbound/${account.id}/${message.providerEmailId}.eml`;
   await env.MAIL.put(objectKey, message.rawMime, { httpMetadata: { contentType: 'message/rfc822' } });
   const statements = [];

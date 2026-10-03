@@ -95,9 +95,11 @@ test('two sent turns preserve threading and only visible recipients may react', 
 test('a queued message received at the old alias replies from the new account address', async () => {
   const fixture = bindings();
   const { env, sqlite } = fixture;
-  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com',
-    to: ['agent@wonder.test'], receivedAgent: 'agent@wonder.test' });
   sqlite.prepare('UPDATE accounts SET agent_email = ? WHERE id = ?').run('agent@tagmails.test', 'account-1');
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com',
+    to: ['agent@wonder.test', 'agent@tagmails.test'], receivedAgent: 'agent@wonder.test' });
+  sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)')
+    .run('thread-1', 'agent@tagmails.test');
   let sent;
   assert.equal((await sendNextOutbox(env, {
     sendEmail: async (payload) => { sent = payload; return { data: { id: 'migrated-sent' } }; },

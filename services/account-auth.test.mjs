@@ -331,6 +331,11 @@ test('the private Site lets only the Gmail owner manage reply access on an exist
     createdAt: sqlite.prepare('SELECT created_at FROM threads WHERE id = ?').get(threadId).created_at,
     latestRunId: null, device: null, participants: [] }]);
   const invitePath = `/api/site/threads/${threadId}/invite`;
+  sqlite.prepare('UPDATE accounts SET agent_email = ? WHERE id = ?').run('agent@tagmails.test', 'account-1');
+  assert.equal((await route(site(invitePath, 'POST', { email: 'agent@wonder.test' }))).status, 400);
+  sqlite.prepare('INSERT INTO accounts (id, google_sub, owner_email, agent_email) VALUES (?, ?, ?, ?)')
+    .run('account-2', 'another-sub', 'other@gmail.com', 'other-agent@tagmails.test');
+  assert.equal((await route(site(invitePath, 'POST', { email: 'other-agent@tagmails.test' }))).status, 400);
   assert.equal((await route(site(invitePath, 'POST', { email: 'guest@gmail.com' }), {
     verifyIdentity: async () => ({ sub: 'another-sub', email: 'other@gmail.com' }),
   })).status, 404);

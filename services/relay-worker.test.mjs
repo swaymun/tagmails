@@ -63,9 +63,17 @@ test('old and new agent addresses keep one email thread after a domain move', as
     agentAddress: 'agent@tagmails.com', to: ['agent@tagmails.com'], parentIds: [second.messageId],
   });
   assert.deepEqual(await deliverTo(third), { accepted: true, duplicate: false });
+  const fourth = mail('both-aliases', 'owner@gmail.com', {
+    to: ['agent@wonder.test', 'agent@tagmails.com'], cc: ['reviewer@gmail.com'],
+    parentIds: [third.messageId],
+  });
+  assert.deepEqual(await deliverTo(fourth), { accepted: true, duplicate: false });
   assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM threads').get().n, 1);
   assert.deepEqual(sqlite.prepare('SELECT agent_email FROM messages ORDER BY rowid').all()
-    .map((row) => row.agent_email), ['agent@wonder.test', 'agent@wonder.test', 'agent@tagmails.com']);
+    .map((row) => row.agent_email),
+  ['agent@wonder.test', 'agent@wonder.test', 'agent@tagmails.com', 'agent@tagmails.com']);
+  assert.deepEqual(sqlite.prepare('SELECT email FROM participants').all().map((row) => row.email),
+    ['reviewer@gmail.com']);
   sqlite.prepare('INSERT INTO accounts (id, google_sub, owner_email, agent_email) VALUES (?, ?, ?, ?)')
     .run('account-2', 'google-sub-2', 'other@gmail.com', 'other@tagmails.com');
   assert.throws(() => sqlite.prepare('UPDATE accounts SET agent_email = ? WHERE id = ?')

@@ -4,6 +4,7 @@ import { ACCOUNT_DEFAULT_MODELS } from '../apps/mock-inbox/model.mjs';
 import { runReceiptPage } from './account-page.mjs';
 import { selectedModelDetail } from './model-route.mjs';
 import { artifactForDownload, selectedRunArtifacts } from './run-artifacts.mjs';
+import { knownAgentAddresses } from './agent-addresses.mjs';
 
 const googleKeys = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
 const DEVICE_TOKEN = /^tm_dev_[A-Za-z0-9_-]{43}$/;
@@ -229,6 +230,9 @@ async function changeParticipant(request, env, account, threadId, action, header
   if (email.length > 254 || email.includes('..') || !PARTICIPANT_EMAIL.test(email) ||
       email === account.owner_email || email === account.agent_email) {
     return json({ error: 'Invalid participant email' }, 400, headers);
+  }
+  if ((await knownAgentAddresses(env.DB, [email])).has(email)) {
+    return json({ error: 'An agent address cannot join as a participant' }, 400, headers);
   }
   const thread = await env.DB.prepare('SELECT id FROM threads WHERE id = ? AND account_id = ?')
     .bind(threadId, account.id).first();

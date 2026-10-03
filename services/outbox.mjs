@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Resend } from 'resend';
 import { addressParser } from 'postal-mime';
 import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.mjs';
+import { knownAgentAddresses } from './agent-addresses.mjs';
 import { renderResult } from '../apps/mock-inbox/mail.mjs';
 import { releaseFailedPrimaryTestEmail, releaseTestEmail, settleTestEmail } from './email-charges.mjs';
 import { selectedModelDetail } from './model-route.mjs';
@@ -193,8 +194,9 @@ async function prepare(env, row) {
     if (!sender) return null;
   }
   const receivedAgent = inbound.received_agent_email.toLowerCase();
+  const agentAddresses = await knownAgentAddresses(env.DB, [...request.to, ...request.cc]);
   const recipients = [...new Set([...request.to, ...request.cc])].filter((email) =>
-    email !== agent && email !== receivedAgent && email !== request.from);
+    !agentAddresses.has(email) && email !== agent && email !== receivedAgent && email !== request.from);
   const visible = [];
   for (const email of recipients) {
     if (email === owner) { visible.push(email); continue; }
