@@ -69,9 +69,9 @@ Cloudflare references: [Email Worker receive API](https://developers.cloudflare.
   plaintext and the off-device Jev request remain separate privacy gaps.
 - The current Cloudflare account has no Email Routing zone for TagMails. The
   domain remains partially verified at Resend despite a publicly resolving
-  `rsend` CNAME. A Resend verification restart was requested; it returned to
-  Pending and may take hours. Do not assume either provider is ready from DNS
-  lookup alone.
+  `rsend` CNAME. A Resend verification restart briefly returned to Pending,
+  then to Partially Verified with that record still pending. Do not assume
+  either provider is ready from DNS lookup alone.
 
 Before switching the live MX, verify the Email Worker with test mail on a
 Cloudflare-managed domain, including envelope/header sender alignment,
