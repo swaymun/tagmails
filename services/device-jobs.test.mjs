@@ -6,6 +6,7 @@ import { handleInbound } from './relay-worker.mjs';
 import { bindings } from './bindings-fixture.mjs';
 import { handleAccountRequest } from './account-auth.mjs';
 import { deleteExpiredRunArtifacts } from './run-artifacts.mjs';
+import { sendNextOutbox } from './outbox.mjs';
 
 function device(sqlite, accountId = 'account-1') {
   const token = `tm_dev_${randomBytes(32).toString('base64url')}`;
@@ -104,6 +105,53 @@ test('expired leases are reclaimed and a stale or different device cannot comple
   assert.equal((await call(env, secondDevice.token, 'complete', { jobId: second.jobId, leaseId: second.leaseId, result })).status, 200);
   assert.equal(sqlite.prepare('SELECT attempts FROM jobs').get().attempts, 2);
   assert.equal(sqlite.prepare('SELECT count(*) n FROM outbox').get().n, 1);
+});
+
+test('a 24 MB MIME attachment stays out of the claim and requires its active device lease', async () => {
+  const { env, sqlite } = bindings();
+  const paired = device(sqlite);
+  const stranger = device(sqlite);
+  const contents = Buffer.alloc(24_000_000, 0x61);
+  const rawMime = Buffer.from([
+    'From: owner@gmail.com', 'To: agent@wonder.test', 'Subject: Large input',
+    'Message-ID: <large-input@gmail.com>', 'MIME-Version: 1.0',
+    'Content-Type: multipart/mixed; boundary="large"', '',
+    '--large', 'Content-Type: text/plain', '', 'Inspect the attached file.',
+    '--large', 'Content-Type: application/octet-stream',
+    'Content-Disposition: attachment; filename="input.bin"',
+    'Content-Transfer-Encoding: base64', '', contents.toString('base64'), '--large--', '',
+  ].join('\r\n'));
+  const response = await handleInbound(new Request('https://relay.test/webhooks/resend', { method: 'POST', body: '{}' }), env, {
+    inspect: async () => ({ providerEmailId: 'large-input', messageId: '<large-input@gmail.com>',
+      from: 'owner@gmail.com', agentAddress: 'agent@wonder.test', to: ['agent@wonder.test'],
+      cc: [], bcc: [], subject: 'Large input', body: 'Inspect the attached file.', parentIds: [], rawMime }),
+  });
+  assert.equal(response.status, 200);
+  const lease = envelope((await call(env, paired.token, 'claim')).body);
+  assert.ok(JSON.stringify(lease).length < 2_000);
+  assert.equal(lease.request.attachments[0].size, contents.length);
+  assert.equal(lease.request.attachments[0].data, undefined);
+  const url = `https://relay.test${lease.request.attachments[0].path}`;
+  const get = (token) => handleDeviceRequest(new Request(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  }), env);
+  assert.equal((await get(stranger.token)).status, 409);
+  assert.equal((await get('wrong-token')).status, 401);
+  const file = await get(paired.token);
+  assert.equal(file.status, 200);
+  assert.deepEqual(Buffer.from(await file.arrayBuffer()), contents);
+  assert.equal((await call(env, paired.token, 'complete', { jobId: lease.jobId, leaseId: lease.leaseId,
+    result: { state: 'completed', summary: 'I read the attached input.' } })).status, 200);
+  const sent = await sendNextOutbox(env, {
+    sendEmail: async (payload) => {
+      assert.equal(payload.to[0], 'owner@gmail.com');
+      assert.match(payload.text, /I read the attached input/);
+      return { data: { id: randomUUID() } };
+    },
+    getSentEmail: async () => ({ data: { message_id: '<large-reply@resend.dev>' } }),
+  });
+  assert.equal(sent.state, 'sent');
+  assert.equal((await get(paired.token)).status, 409);
 });
 
 test('a run file is uploaded under its lease, privately downloaded, and deleted after seven days', async () => {

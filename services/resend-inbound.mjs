@@ -1,8 +1,7 @@
 import { addressParser } from 'postal-mime';
 import { Resend } from 'resend';
-import { parseInbound } from '../apps/mock-inbox/inbound.mjs';
+import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.mjs';
 
-const MAX_RAW_BYTES = 5 * 1024 * 1024;
 const MESSAGE_ID = /^<[^<>\s]+@[^<>\s]+>$/;
 const EMAIL_ID = /^[0-9a-f-]{36}$/i;
 
@@ -34,7 +33,7 @@ async function boundedRaw(response) {
   let bytes = 0;
   for await (const chunk of response.body) {
     bytes += chunk.length;
-    if (bytes > MAX_RAW_BYTES) throw new Error('Resend raw email exceeds 5 MB');
+    if (bytes > RELAY_INBOUND_LIMITS.maxRawBytes) throw new Error('Resend raw email exceeds 38 MB');
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
@@ -77,7 +76,9 @@ export async function inspectResendInbound({ rawPayload, headers, webhookSecret,
     throw new Error('Resend raw email URL is outside the provider domain');
   }
   const rawMime = await boundedRaw(await fetchRaw(rawUrl.href));
-  const parsed = await parseInbound(rawMime, agent, { verifiedDeliveryToAgent: true });
+  const parsed = await parseInbound(rawMime, agent, {
+    verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false,
+  });
   if (parsed.messageId !== metadata.message_id || parsed.from !== mailbox(metadata.from)) {
     throw new Error('Raw email does not match the verified Resend metadata');
   }

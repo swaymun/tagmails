@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Resend } from 'resend';
-import { parseInbound } from '../apps/mock-inbox/inbound.mjs';
+import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.mjs';
 import { renderResult } from '../apps/mock-inbox/mail.mjs';
 import { releaseTestEmail, settleTestEmail } from './email-charges.mjs';
 
@@ -27,7 +27,9 @@ async function prepare(env, row) {
   const raw = await env.MAIL.get(inbound.object_key);
   const saved = await env.MAIL.get(row.result_key);
   if (!raw || !saved) throw new Error('Outbox source is missing from mail storage');
-  const request = await parseInbound(await raw.arrayBuffer(), inbound.agent_email, { verifiedDeliveryToAgent: true });
+  const request = await parseInbound(await raw.arrayBuffer(), inbound.agent_email, {
+    verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false,
+  });
   if (request.messageId !== inbound.message_id || request.from !== inbound.sender_email) {
     throw new Error('Outbox source no longer matches the verified inbound message');
   }

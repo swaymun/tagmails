@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
-import { parseInbound } from '../apps/mock-inbox/inbound.mjs';
+import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.mjs';
 import { chooseModel } from '../apps/mock-inbox/model.mjs';
 import { testBillingEnabled } from './email-charges.mjs';
 import { ARTIFACT_ID, selectedRunArtifacts, uploadRunArtifact } from './run-artifacts.mjs';
@@ -67,17 +67,55 @@ async function claim(env, device) {
   const object = await env.MAIL.get(message.object_key);
   if (!object) throw new Error('Claimed job has no stored MIME');
   const account = await env.DB.prepare('SELECT agent_email FROM accounts WHERE id = ?').bind(device.account_id).first();
-  const parsed = await parseInbound(await object.arrayBuffer(), account.agent_email, { verifiedDeliveryToAgent: true });
+  const parsed = await parseInbound(await object.arrayBuffer(), account.agent_email, {
+    verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false,
+  });
   if (parsed.messageId !== message.message_id) throw new Error('Stored MIME no longer matches the claimed job');
   const envelope = {
     jobId: row.id, threadId: row.thread_id, leaseId, leaseUntil: row.lease_until,
     model: chooseModel(parsed.body),
-    request: { from: parsed.from, subject: parsed.subject, body: parsed.body, attachments: parsed.attachments },
+    request: { from: parsed.from, subject: parsed.subject, body: parsed.body,
+      attachments: parsed.attachments.map((attachment, index) => ({
+        ...attachment, path: `/api/device/attachment?jobId=${row.id}&leaseId=${leaseId}&index=${index}`,
+      })) },
   };
   const bytes = Buffer.from(JSON.stringify(envelope));
   const payload = bytes.toString('base64url');
   const signature = createHmac('sha256', device.token).update(bytes).digest('base64url');
   return json({ claimed: true, payload, signature });
+}
+
+async function attachment(request, env, device, url) {
+  const jobId = url.searchParams.get('jobId');
+  const leaseId = url.searchParams.get('leaseId');
+  const index = url.searchParams.get('index');
+  if (url.searchParams.size !== 3 || !/^[0-9a-f-]{36}$/i.test(jobId ?? '') ||
+      !/^[0-9a-f-]{36}$/i.test(leaseId ?? '') || !/^[0-4]$/.test(index ?? '')) {
+    return json({ error: 'Invalid attachment request' }, 400);
+  }
+  const message = await env.DB.prepare(`SELECT m.object_key, m.message_id, a.agent_email
+    FROM jobs j JOIN threads t ON t.id = j.thread_id
+    JOIN messages m ON m.id = j.message_id
+    JOIN accounts a ON a.id = t.account_id
+    WHERE j.id = ? AND j.device_id = ? AND j.lease_id = ?
+      AND j.state = 'running' AND j.lease_until > CURRENT_TIMESTAMP
+      AND t.account_id = ? LIMIT 1`)
+    .bind(jobId, device.id, leaseId, device.account_id).first();
+  if (!message) return json({ error: 'Lease expired or replaced' }, 409);
+  const object = await env.MAIL.get(message.object_key);
+  if (!object) throw new Error('Claimed job has no stored MIME');
+  const parsed = await parseInbound(await object.arrayBuffer(), message.agent_email, {
+    verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS,
+    includeAttachmentData: false, attachmentBytesAt: Number(index),
+  });
+  if (parsed.messageId !== message.message_id) throw new Error('Stored MIME no longer matches the claimed job');
+  const file = parsed.attachments[Number(index)];
+  if (!file) return json({ error: 'Attachment not found' }, 404);
+  return new Response(file.bytes, { headers: {
+    'Content-Type': 'application/octet-stream', 'Content-Length': String(file.size),
+    'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "default-src 'none'",
+  } });
 }
 
 async function renew(env, device, body) {
@@ -153,13 +191,15 @@ async function complete(env, device, body) {
 
 export async function handleDeviceRequest(request, env) {
   const url = new URL(request.url);
-  if (request.method !== 'POST' || !['/api/device/claim', '/api/device/renew', '/api/device/complete', '/api/device/artifacts'].includes(url.pathname)) {
+  if (!((request.method === 'GET' && url.pathname === '/api/device/attachment') ||
+    (request.method === 'POST' && ['/api/device/claim', '/api/device/renew', '/api/device/complete', '/api/device/artifacts'].includes(url.pathname)))) {
     return new Response('Not found', { status: 404 });
   }
   if (url.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(url.hostname)) return json({ error: 'HTTPS required' }, 403);
   if (!env.DB || !env.MAIL) throw new Error('Device job bindings are incomplete');
   const device = await deviceFor(request, env);
   if (!device) return json({ error: 'Unauthorized device' }, 401);
+  if (url.pathname === '/api/device/attachment') return attachment(request, env, device, url);
   if (url.pathname === '/api/device/claim') return claim(env, device);
   if (url.pathname === '/api/device/artifacts') return uploadRunArtifact(request, env, device);
   let body;

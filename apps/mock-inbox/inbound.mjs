@@ -5,6 +5,11 @@ const MAX_RAW_BYTES = 5 * 1024 * 1024;
 const MAX_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_BYTES = 2 * 1024 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = 3 * 1024 * 1024;
+export const RELAY_INBOUND_LIMITS = Object.freeze({
+  maxRawBytes: 38_000_000,
+  maxAttachmentBytes: 24_000_000,
+  maxTotalAttachmentBytes: 25_000_000,
+});
 const MESSAGE_IDS = /<[^<>\s]+@[^<>\s]+>/g;
 
 function addresses(items) {
@@ -19,9 +24,16 @@ function previewable(mimeType, bytes) {
   return false;
 }
 
-export async function parseInbound(raw, agentAddress = 'agent@wonder.test', { verifiedDeliveryToAgent = false } = {}) {
+export async function parseInbound(raw, agentAddress = 'agent@wonder.test', {
+  verifiedDeliveryToAgent = false,
+  maxRawBytes = MAX_RAW_BYTES,
+  maxAttachmentBytes = MAX_ATTACHMENT_BYTES,
+  maxTotalAttachmentBytes = MAX_TOTAL_ATTACHMENT_BYTES,
+  includeAttachmentData = true,
+  attachmentBytesAt = -1,
+} = {}) {
   const source = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
-  if (!source.length || source.length > MAX_RAW_BYTES) throw new Error('The .eml file must be between 1 byte and 5 MB');
+  if (!source.length || source.length > maxRawBytes) throw new Error(`The .eml file must be between 1 byte and ${maxRawBytes === MAX_RAW_BYTES ? '5 MB' : `${maxRawBytes} bytes`}`);
   const email = await PostalMime.parse(source, {
     maxNestingDepth: 30,
     maxHeadersSize: 64 * 1024,
@@ -57,10 +69,13 @@ export async function parseInbound(raw, agentAddress = 'agent@wonder.test', { ve
     if (attachment.rfc822DepthExceeded) throw new Error('Nested email attachments are not supported in this lab');
     const bytes = Buffer.from(attachment.content);
     total += bytes.length;
-    if (bytes.length > MAX_ATTACHMENT_BYTES || total > MAX_TOTAL_ATTACHMENT_BYTES) throw new Error('The email attachments exceed the local lab limit');
+    if (bytes.length > maxAttachmentBytes || total > maxTotalAttachmentBytes) throw new Error('The email attachments exceed the configured limit');
     const name = String(attachment.filename || `attachment-${index + 1}`).split(/[\\/]/).at(-1).replace(/[\x00-\x1f\x7f]/g, '').slice(0, 120) || `attachment-${index + 1}`;
     const mimeType = String(attachment.mimeType || 'application/octet-stream').toLowerCase();
-    return { name, mimeType, size: bytes.length, data: bytes.toString('base64'), previewable: previewable(mimeType, bytes) };
+    return { name, mimeType, size: bytes.length,
+      ...(includeAttachmentData ? { data: bytes.toString('base64') } : {}),
+      ...(index === attachmentBytesAt ? { bytes } : {}),
+      previewable: previewable(mimeType, bytes) };
   });
 
   return {
