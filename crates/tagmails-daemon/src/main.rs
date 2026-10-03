@@ -244,9 +244,68 @@ fn pair_relay(base: &str, code: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn run_relay_once(base: &str) -> Result<(), Box<dyn Error>> {
-    if !env::args().any(|arg| arg == "--once") {
-        return Err("Relay prototype requires --once".into());
+fn relay_result(claim: &Value, base: &str) -> Result<Value, Box<dyn Error>> {
+    if let Some(error) = claim["model"]["error"].as_str() {
+        return Ok(
+            json!({"runtime":"tagmails-router","state":"needs_clarification","summary":error}),
+        );
+    }
+    let model = claim["model"]["id"].as_str().unwrap_or("");
+    let runtime = if model.starts_with("gpt-") {
+        "codex-readonly"
+    } else if model.starts_with("claude-") {
+        "claude-readonly"
+    } else {
+        return Err("Relay claim has an unsupported model".into());
+    };
+    Ok(match agent_result(claim, base, runtime) {
+        Ok(result) => result,
+        Err(error) => {
+            eprintln!("Local agent adapter failed: {error}");
+            json!({"runtime":format!("{}-cli-readonly", runtime.split('-').next().unwrap_or("agent")),"state":"failed","summary":"The local agent adapter could not complete this turn."})
+        }
+    })
+}
+
+fn relay_iteration(client: &Client, base: &str, token: &str) -> Result<bool, Box<dyn Error>> {
+    let response = relay_post(client, base, "/api/device/claim", token, json!({}))?;
+    if response["claimed"] != true {
+        return Ok(false);
+    }
+    let mut claim = verified_claim(&response, token)?;
+    let job_id = claim["jobId"]
+        .as_str()
+        .ok_or("Claim has no job ID")?
+        .to_owned();
+    let lease_id = claim["leaseId"]
+        .as_str()
+        .ok_or("Claim has no lease ID")?
+        .to_owned();
+    claim["claimId"] = json!(lease_id);
+    claim["claimed"] = json!(true);
+    let result = relay_result(&claim, base)?;
+    let completion = relay_post(
+        client,
+        base,
+        "/api/device/complete",
+        token,
+        json!({"jobId":job_id,"leaseId":lease_id,"result":result}),
+    )?;
+    if completion["completed"] != true {
+        return Err("Relay did not acknowledge the completion".into());
+    }
+    println!(
+        "{job_id}: {} result stored in the relay",
+        result["state"].as_str().unwrap_or("unknown")
+    );
+    Ok(true)
+}
+
+fn run_relay(base: &str) -> Result<(), Box<dyn Error>> {
+    let once = env::args().any(|arg| arg == "--once");
+    let watch = env::args().any(|arg| arg == "--watch");
+    if once == watch {
+        return Err("Relay mode requires exactly one of --once or --watch".into());
     }
     validate_relay_base(base)?;
     let workspace = env::var("TAGMAILS_WORKSPACE")?;
@@ -268,52 +327,29 @@ fn run_relay_once(base: &str) -> Result<(), Box<dyn Error>> {
         return Err("Device token file is invalid".into());
     }
     let client = Client::builder().timeout(Duration::from_secs(10)).build()?;
-    let response = relay_post(&client, base, "/api/device/claim", token, json!({}))?;
-    if response["claimed"] != true {
-        println!("No queued relay mail.");
-        return Ok(());
+    if watch {
+        println!("TagMails relay watching {base}. Press Ctrl-C to stop.");
     }
-    let mut claim = verified_claim(&response, token)?;
-    let job_id = claim["jobId"]
-        .as_str()
-        .ok_or("Claim has no job ID")?
-        .to_owned();
-    let lease_id = claim["leaseId"]
-        .as_str()
-        .ok_or("Claim has no lease ID")?
-        .to_owned();
-    let model = claim["model"]["id"].as_str().unwrap_or("");
-    let runtime = if model.starts_with("gpt-") {
-        "codex-readonly"
-    } else if model.starts_with("claude-") {
-        "claude-readonly"
-    } else {
-        return Err("Relay claim has an unsupported model".into());
-    };
-    claim["claimId"] = json!(lease_id);
-    claim["claimed"] = json!(true);
-    let result = match agent_result(&claim, base, runtime) {
-        Ok(result) => result,
-        Err(error) => {
-            eprintln!("Local agent adapter failed: {error}");
-            json!({"runtime":format!("{}-cli-readonly", runtime.split('-').next().unwrap_or("agent")),"state":"failed","summary":"The local agent adapter could not complete this turn."})
+    loop {
+        let claimed = match relay_iteration(&client, base, token) {
+            Ok(false) if once => {
+                println!("No queued relay mail.");
+                false
+            }
+            Ok(claimed) => claimed,
+            Err(error) if once => return Err(error),
+            Err(error) => {
+                eprintln!("Relay unavailable: {error}");
+                false
+            }
+        };
+        if once {
+            return Ok(());
         }
-    };
-    let completion = relay_post(
-        &client,
-        base,
-        "/api/device/complete",
-        token,
-        json!({"jobId":job_id,"leaseId":lease_id,"result":result}),
-    )?;
-    if completion["completed"] != true {
-        return Err("Relay did not acknowledge the completion".into());
+        if !claimed {
+            thread::sleep(Duration::from_secs(30));
+        }
     }
-    println!(
-        "{job_id}: {} result stored in the relay",
-        result["state"].as_str().unwrap_or("unknown")
-    );
-    Ok(())
 }
 
 #[cfg(test)]
@@ -333,6 +369,17 @@ mod tests {
         response["payload"] = json!(URL_SAFE_NO_PAD.encode(br#"{"jobId":"job-2"}"#));
         assert!(verified_claim(&response, token).is_err());
     }
+
+    #[test]
+    fn relay_unknown_model_requests_clarification_without_running_an_agent() {
+        let result = relay_result(
+            &json!({"model":{"error":"Use Codex, Claude, or Luna."}}),
+            "unused",
+        )
+        .unwrap();
+        assert_eq!(result["state"], "needs_clarification");
+        assert_eq!(result["summary"], "Use Codex, Claude, or Luna.");
+    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -344,7 +391,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .ok_or("Pass a pairing code after --pair")?;
             return pair_relay(&base, code);
         }
-        return run_relay_once(&base);
+        return run_relay(&base);
     }
     let base = env::var("TAGMAILS_LAB_URL").unwrap_or_else(|_| "http://127.0.0.1:4177".into());
     let url = reqwest::Url::parse(&base)?;

@@ -61,7 +61,16 @@ This route pins Claude Sonnet 5.5 Medium, limits the CLI to Read/Glob/Grep in re
 
 ### Local relay proof
 
-The Cloudflare Worker now accepts authenticated one-job claims from a paired device record, returns a signed task payload, renews leases, and stores one terminal result in R2. Completion atomically queues one outbound reply. A scheduled Worker can send that reply through Resend, retrieve its provider Message-ID, and save it for later threaded replies and Gmail reactions. A send with an uncertain provider outcome is held for reconciliation instead of automatically retried. These paths have local provider mocks only; no real email has been sent. The Rust daemon has an opt-in relay mode selected by `TAGMAILS_RELAY_URL`, with an absolute device token file and workspace. It verifies the payload signature before running the Codex or Claude adapter, and accepts HTTPS endpoints or an explicit localhost HTTP port. It still requires `--once` while account signup and safe background pairing are incomplete.
+The Cloudflare Worker now accepts authenticated one-job claims from a paired device record, returns a signed task payload, renews leases, and stores one terminal result in R2. Completion atomically queues one outbound reply. A scheduled Worker can send that reply through Resend, retrieve its provider Message-ID, and save it for later threaded replies and Gmail reactions. A send with an uncertain provider outcome is held for reconciliation instead of automatically retried. These paths have local provider mocks only; no real email has been sent. The Rust daemon has an opt-in relay mode selected by `TAGMAILS_RELAY_URL`, with an absolute device token file and workspace. It verifies the payload signature before running the Codex or Claude adapter, and accepts HTTPS endpoints or an explicit localhost HTTP port. Use `--once` for one claim or `--watch` to poll every 30 seconds while idle and immediately after completed work. The adapters renew the 90-second claim while a turn runs.
+
+```sh
+TAGMAILS_RELAY_URL=https://your-relay.example \
+TAGMAILS_DEVICE_TOKEN_FILE="$HOME/.config/tagmails/device-token" \
+TAGMAILS_WORKSPACE=/absolute/path/to/selected-workspace \
+cargo run -p tagmails-daemon -- --watch
+```
+
+The continuous loop was exercised against a local no-job relay. Launch at login, workspace selection in account setup, and a live queued agent turn through this mode are still pending.
 
 An isolated local Wrangler run exercised D1 and R2 through the Worker, then Rust claimed a second job and submitted a result through a fake Codex executable. The first fake script failed because Node treated it as an ES module; the Worker recorded that failed result, and Rust's status output was corrected. After fixing the fixture and retrying locally, D1 showed a completed job on attempt two and R2 contained the fake Codex result. This verifies the relay protocol and retry path, not a real model or email delivery.
 
