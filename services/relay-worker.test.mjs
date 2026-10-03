@@ -21,25 +21,34 @@ async function deliver(env, message, options = {}) {
   return response.json();
 }
 
-test('one Jev call routes the initial email and replies retain that route', async () => {
+test('Jev routes natural model requests in a thread and ordinary replies inherit the route', async () => {
   const { env, sqlite } = bindings();
   env.TYPESAFE_API_KEY = 'test-key';
   let calls = 0;
   const fetchModel = async () => {
     calls += 1;
-    return Response.json({ answers: { route: { type: 'choice', choice: 'claude',
-      probabilities: { claude: 0.96 } } } });
+    const choice = ['claude', 'none', 'codex'][calls - 1];
+    return Response.json({ answers: { route: { type: 'choice', choice,
+      probabilities: { [choice]: 0.96 } } } });
   };
-  const first = mail('email-1', 'owner@gmail.com', { body: 'Use Claude to review this.' });
+  const first = mail('email-1', 'owner@gmail.com', {
+    subject: 'Use Claude for the review', body: 'Use Claude to review this.',
+  });
   await deliver(env, first, { fetchModel });
-  await deliver(env, mail('email-2', 'owner@gmail.com', {
-    parentIds: [first.messageId], body: 'Continue the review.',
+  const second = mail('email-2', 'owner@gmail.com', {
+    subject: first.subject, parentIds: [first.messageId], body: 'Continue the review.',
+  });
+  await deliver(env, second, { fetchModel });
+  await deliver(env, mail('email-3', 'owner@gmail.com', {
+    subject: first.subject, parentIds: [second.messageId],
+    body: 'Please use Seoul for this next step.',
   }), { fetchModel });
-  assert.equal(calls, 1);
+  assert.equal(calls, 3);
   assert.deepEqual(sqlite.prepare('SELECT model_json FROM jobs ORDER BY rowid').all()
     .map((row) => JSON.parse(row.model_json)), [
     { id: 'claude-sonnet-5-5', effort: 'medium', source: 'classified' },
     { id: 'claude-sonnet-5-5', effort: 'medium', source: 'thread' },
+    { id: 'gpt-6.1-sol', effort: 'medium', source: 'classified' },
   ]);
 });
 

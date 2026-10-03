@@ -23,14 +23,27 @@ test('Jev routes a clear new-thread model request and defaults when uncertain', 
   }), { error: 'That model is not available. Use Codex, Claude, or Luna.' });
 });
 
-test('explicit directives and replies do not call Jev', async () => {
+test('explicit directives do not call Jev', async () => {
   const noCall = () => { throw new Error('Jev must not be called'); };
   assert.deepEqual(await routeModel('Model: Luna\nDo this.', 'gpt-6.1-sol', {
     apiKey: 'test-key', fetcher: noCall,
   }), { id: 'gpt-6-luna', effort: 'low', source: 'explicit' });
-  assert.deepEqual(await routeModel('Continue this.', 'gpt-6.1-sol', {
-    apiKey: 'test-key', fetcher: noCall,
-    priorModel: { id: 'claude-sonnet-5-5', effort: 'medium', source: 'classified' },
+});
+
+test('natural requests can change a reply model; ordinary replies inherit it', async () => {
+  const priorModel = { id: 'claude-sonnet-5-5', effort: 'medium', source: 'classified' };
+  assert.deepEqual(await routeModel('Please use Seoul for this next step.', 'gpt-6.1-sol', {
+    subject: 'Use Claude for the review', priorModel, apiKey: 'test-key',
+    fetcher: async (_url, request) => {
+      assert.equal(JSON.parse(request.body).state, 'Please use Seoul for this next step.');
+      return jev('codex', 0.94)(_url, request);
+    },
+  }), { id: 'gpt-6.1-sol', effort: 'medium', source: 'classified' });
+  assert.deepEqual(await routeModel('Continue the review.\n\n> Use Luna for the first pass.',
+    'gpt-6.1-sol', { priorModel, apiKey: 'test-key', fetcher: jev('none', 0.96) }),
+  { id: 'claude-sonnet-5-5', effort: 'medium', source: 'thread' });
+  assert.deepEqual(await routeModel('Continue the review.', 'gpt-6.1-sol', {
+    priorModel, apiKey: 'test-key', fetcher: jev('codex', 0.52),
   }), { id: 'claude-sonnet-5-5', effort: 'medium', source: 'thread' });
 });
 
@@ -41,6 +54,10 @@ test('Jev failure falls back to the saved default', async () => {
     assert.deepEqual(await routeModel('Please review this.', 'claude-sonnet-5-5', {
       apiKey: 'test-key', fetcher: async () => { throw new Error('offline'); },
     }), { id: 'claude-sonnet-5-5', effort: 'medium', source: 'default' });
+    assert.deepEqual(await routeModel('Continue this.', 'gpt-6.1-sol', {
+      priorModel: { id: 'claude-sonnet-5-5', effort: 'medium' },
+      apiKey: 'test-key', fetcher: async () => { throw new Error('offline'); },
+    }), { id: 'claude-sonnet-5-5', effort: 'medium', source: 'thread' });
   } finally { console.error = originalError; }
 });
 

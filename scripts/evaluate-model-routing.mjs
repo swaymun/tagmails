@@ -28,13 +28,21 @@ const cases = [
   { id: 'explicit-directive', body: 'Model: Claude\nReview the copy.', expected: claude, calls: 0 },
   { id: 'explicit-unsupported', body: 'Model: Gemini\nReview the copy.', expected: 'error', calls: 0 },
   { id: 'reply-inherits', body: 'Continue the review.\n\n> Use Luna for the first pass.',
-    priorModel: { id: claude, effort: 'medium' }, expected: claude, calls: 0 },
+    priorModel: { id: claude, effort: 'medium' }, expected: claude },
+  { id: 'reply-natural-switch', body: 'Please use Seoul for this next step.',
+    priorModel: { id: claude, effort: 'medium' }, expected: codex },
+  { id: 'reply-seoul-location', body: 'Find a coworking space in Seoul for the team.',
+    priorModel: { id: claude, effort: 'medium' }, expected: claude },
+  { id: 'reply-old-subject', subject: 'Use Claude for the review',
+    body: 'Please use Luna for this next step.',
+    priorModel: { id: claude, effort: 'medium' }, expected: luna },
   { id: 'reply-override', body: 'Model: Luna\nContinue the review.',
     priorModel: { id: claude, effort: 'medium' }, expected: luna, calls: 0 },
   { id: 'empty-body', body: '', expected: codex, calls: 0 },
 ];
 const classifiedCases = new Set(['natural-claude', 'natural-sonnet', 'natural-codex',
-  'natural-sol', 'natural-seoul', 'natural-luna', 'natural-gpt-luna', 'subject-claude']);
+  'natural-sol', 'natural-seoul', 'natural-luna', 'natural-gpt-luna', 'subject-claude',
+  'reply-natural-switch', 'reply-old-subject']);
 const explicitCases = new Set(['explicit-directive', 'reply-override']);
 
 if (process.argv.includes('--list')) {
@@ -70,7 +78,7 @@ for (const item of cases) {
   const actual = route.error ? 'error' : route.id;
   const expectedSource = item.expected === 'error' ? undefined : classifiedCases.has(item.id)
     ? 'classified' : explicitCases.has(item.id) ? 'explicit'
-      : item.id === 'reply-inherits' ? 'thread' : 'default';
+      : item.priorModel ? 'thread' : 'default';
   results.push({ id: item.id, expected: item.expected, actual,
     expectedSource, source: route.source, calls, provider,
     passed: actual === item.expected && route.source === expectedSource && calls === (item.calls ?? 1) &&

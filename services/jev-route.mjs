@@ -19,14 +19,16 @@ function currentText(body) {
 export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, priorModel, subject } = {}) {
   const direct = chooseModel(body, defaultModel);
   if (direct.source === 'explicit' || direct.error) return direct;
-  if (priorModel && Object.values(ROUTES).some(({ id, effort }) =>
-    priorModel.id === id && priorModel.effort === effort)) {
-    return { id: priorModel.id, effort: priorModel.effort, source: 'thread' };
-  }
+  const knownPrior = priorModel && Object.values(ROUTES).some(({ id, effort }) =>
+    priorModel.id === id && priorModel.effort === effort);
+  const fallback = knownPrior
+    ? { id: priorModel.id, effort: priorModel.effort, source: 'thread' } : direct;
   const text = currentText(body);
-  const subjectText = String(subject ?? '').replace(/[\r\n]+/g, ' ').slice(0, 300).trim();
+  // A reply's subject may repeat an old model request. Only its new text can
+  // change the thread's selected route.
+  const subjectText = knownPrior ? '' : String(subject ?? '').replace(/[\r\n]+/g, ' ').slice(0, 300).trim();
   const state = subjectText ? `Subject: ${subjectText}\nBody:\n${text}` : text;
-  if (!apiKey || !state.trim()) return direct;
+  if (!apiKey || !state.trim()) return fallback;
 
   try {
     const response = await fetcher('https://api.typesafe.ai/v1/systemone', {
@@ -38,7 +40,7 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
         questions: {
           route: {
             type: 'choice',
-            instructions: 'Does the sender ask the agent to use a specific model for this task? Consider the sender\'s current subject and body. Select none unless a model preference is clearly requested. Interpret obvious spelling or speech transcription variants of model names in a model request, such as Seoul for Sol. Ignore quoted messages and model names mentioned only for comparison or discussion. If a requested model is outside the supported choices, select unsupported even when its provider also has a supported model.',
+            instructions: 'Does the sender ask the agent to use a specific model for this task? Select none unless a model preference is clearly requested in the current text. A reply that merely continues the task should select none. Interpret obvious spelling or speech transcription variants of model names in a model request, such as Seoul for Sol. Ignore quoted messages and model names mentioned only for comparison or discussion. If a requested model is outside the supported choices, select unsupported even when its provider also has a supported model.',
             criteria: {
               none: 'No clear request to use one of the listed models for this task.',
               codex: 'The sender asks to use Codex or GPT-6.1 Sol.',
@@ -55,13 +57,13 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
     const answer = (await response.json()).answers?.route;
     const probability = answer?.probabilities?.[answer?.choice];
     const threshold = answer?.choice === 'unsupported' ? 0.75 : 0.6;
-    if (answer?.type !== 'choice' || !Number.isFinite(probability) || probability < threshold) return direct;
+    if (answer?.type !== 'choice' || !Number.isFinite(probability) || probability < threshold) return fallback;
     if (answer.choice === 'unsupported') return { error: 'That model is not available. Use Codex, Claude, or Luna.' };
     const route = Object.hasOwn(ROUTES, answer.choice) ? ROUTES[answer.choice] : null;
-    if (!route) return direct;
+    if (!route) return fallback;
     return { ...route, source: 'classified' };
   } catch (error) {
-    console.error('Jev model routing fell back to the account default', error);
-    return direct;
+    console.error('Jev model routing fell back to the saved route', error);
+    return fallback;
   }
 }
