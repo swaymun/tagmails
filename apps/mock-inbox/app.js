@@ -58,6 +58,14 @@ function timeLabel(iso) {
     : date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
+function visibleReplyPeers(message, thread) {
+  return [...new Set([message.from, message.to, ...(message.cc ?? [])].join(',').split(',')
+    .map((email) => email.trim()).filter((email) => {
+      const grant = thread.guests[email];
+      return grant && (grant.authorized ?? (grant.verified && grant.approved));
+    }))];
+}
+
 function matchingThreads() {
   const search = $('#search').value.trim().toLowerCase();
   return data.threads.filter((thread) => {
@@ -88,6 +96,8 @@ function renderInbox() {
 function renderThread(thread) {
   const jobs = data.jobs.filter((job) => job.threadId === thread.id);
   const lastJob = jobs.at(-1);
+  const lastMessage = thread.messages.at(-1);
+  const replyAllRecipients = visibleReplyPeers(lastMessage, thread);
   $('#mailRange').textContent = '';
   $('#threadView').innerHTML = `<div class="thread-title"><h1 tabindex="-1">${esc(thread.subject)}</h1><span class="inbox-tag">Inbox</span></div>${thread.messages.map((message) => {
     const outgoing = message.direction === 'outbound';
@@ -105,7 +115,7 @@ function renderThread(thread) {
     const canReact = outgoing && visibleRecipients.includes(data.owner) && recipientCount <= 20;
     const reactionButtons = canReact ? `<div class="reaction-picker" aria-label="Simulate Gmail emoji reaction"><span>React</span>${['👍', '❤️', '👀'].map((emoji) => `<button type="button" data-react="${emoji}" data-message="${encodeURIComponent(message.id)}" aria-label="React ${emoji} to this agent email">${emoji}</button>`).join('')}</div>` : '';
     return `<article class="thread-message"><div class="message-header"><span class="sender-avatar${outgoing ? ' agent' : ''}">${esc(label.slice(0, 1).toUpperCase())}</span><div class="sender-meta"><strong>${esc(label)}</strong><small>to ${esc(message.to)}${message.cc.length ? `, cc ${esc(message.cc.join(', '))}` : ''}${message.from === data.owner && message.bcc?.length ? `, bcc ${esc(message.bcc.join(', '))}` : ''}</small></div><time class="message-date" datetime="${esc(message.at)}">${esc(new Date(message.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}</time></div><div class="message-body">${preview}</div>${attachments ? `<div class="attachment-list">${attachments}</div>` : ''}${reactions ? `<div class="reaction-list">${reactions}</div>` : ''}${reactionButtons}${outgoing ? `<div class="message-actions"><a href="/api/mime?messageId=${encodeURIComponent(message.id)}" target="_blank" rel="noopener">View raw MIME</a><span>HTML + plain text</span></div>` : ''}</article>`;
-  }).join('')}<p class="thread-status">${lastJob ? `Latest task: <strong>${esc(lastJob.state.replaceAll('_', ' '))}</strong> · ${esc(lastJob.model.id ?? 'model unclear')}${lastJob.runtime ? ` · ${esc(runtimeLabel(lastJob.runtime))}` : ' · synthetic'}` : ''}</p><button class="reply-trigger" id="replyButton">${icon('reply')} Reply</button>`;
+  }).join('')}<p class="thread-status">${lastJob ? `Latest task: <strong>${esc(lastJob.state.replaceAll('_', ' '))}</strong> · ${esc(lastJob.model.id ?? 'model unclear')}${lastJob.runtime ? ` · ${esc(runtimeLabel(lastJob.runtime))}` : ' · synthetic'}` : ''}</p><div class="reply-actions"><button class="reply-trigger" id="replyButton">${icon('reply')} Reply</button>${replyAllRecipients.length ? `<button class="reply-trigger" id="replyAllButton">${icon('reply')} Reply all</button>` : ''}</div>`;
   $('#threadView').querySelectorAll('iframe').forEach((frame) => {
     frame.addEventListener('load', () => fitPreview(frame));
     if (frame.contentDocument?.readyState === 'complete') fitPreview(frame);
@@ -158,14 +168,15 @@ function render() {
   renderLab();
 }
 
-function openCompose({ reply = false, fixture = null } = {}) {
+function openCompose({ reply = false, replyAll = false, fixture = null } = {}) {
   composeOpener = document.activeElement;
   currentFixture = fixture;
   const thread = data?.threads.find((item) => item.id === currentThread);
-  $('#composeTitle').textContent = reply ? `Reply: ${thread?.subject ?? ''}` : 'New Message';
+  $('#composeTitle').textContent = replyAll ? `Reply all: ${thread?.subject ?? ''}` : reply ? `Reply: ${thread?.subject ?? ''}` : 'New Message';
   $('#fromField').value = data?.owner ?? 'owner@gmail.com';
   $('#toField').value = data?.agent ?? 'agent@wonder.test';
-  $('#ccField').value = '';
+  const lastMessage = reply ? thread.messages.at(-1) : null;
+  $('#ccField').value = replyAll ? visibleReplyPeers(lastMessage, thread).join(', ') : '';
   $('#bccField').value = '';
   $('#subjectField').value = reply ? `Re: ${thread.subject}` : '';
   $('#bodyField').value = '';
@@ -230,6 +241,7 @@ $('#threadList').addEventListener('keydown', (event) => {
 });
 $('#threadView').addEventListener('click', async (event) => {
   if (event.target.closest('#replyButton')) { openCompose({ reply: true }); return; }
+  if (event.target.closest('#replyAllButton')) { openCompose({ reply: true, replyAll: true }); return; }
   const button = event.target.closest('[data-react]');
   if (!button) return;
   try {
