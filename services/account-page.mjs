@@ -15,7 +15,7 @@ export function accountPage() {
   button{border:0;background:#183c35;color:white;border-radius:9px;padding:11px 15px;font:inherit;cursor:pointer}
   button:hover{background:#28574d}button:disabled{opacity:.55;cursor:wait}
   button.secondary{background:#edeae2;color:#20362f}button:focus-visible,a:focus-visible{outline:3px solid #b98432;outline-offset:3px}
-  input{box-sizing:border-box;width:100%;max-width:100%;padding:10px;margin:8px 0;border:1px solid #b5b0a5;border-radius:8px;font:inherit}input:focus-visible{outline:3px solid #b98432;outline-offset:2px}
+  input,select{box-sizing:border-box;width:100%;max-width:100%;padding:10px;margin:8px 0;border:1px solid #b5b0a5;border-radius:8px;font:inherit}input:focus-visible,select:focus-visible{outline:3px solid #b98432;outline-offset:2px}
   code,pre{background:#f0eee8;border-radius:6px;padding:3px 6px;overflow-wrap:anywhere}
   pre{white-space:pre-wrap;padding:12px}.device{border-top:1px solid #e7e2d8;padding:12px 0;display:flex;justify-content:space-between;gap:12px;align-items:center}
   .thread{border-top:1px solid #e7e2d8;padding:16px 0}.thread h3{font-size:1rem;margin:0 0 4px;overflow-wrap:anywhere}
@@ -159,12 +159,15 @@ function shellQuote(value) {
 }
 function installCommand() {
   const workspace = $('workspace').value.trim();
+  const access = $('workspaceAccess').value;
   if (!workspace.startsWith('/') || workspace.length > 1024 ||
       workspace.includes(String.fromCharCode(10)) || workspace.includes(String.fromCharCode(13))) {
     throw new Error('Enter an absolute workspace path on your Mac.');
   }
+  if (access !== 'read' && access !== 'write') throw new Error('Choose read-only or edit access.');
   return 'cargo build --release -p tagmails-daemon && node scripts/install-macos-launchagent.mjs' +
     ' --relay ' + shellQuote(location.origin) + ' --workspace ' + shellQuote(workspace) +
+    ' --workspace-access ' + access +
     ' --token-file "$HOME/.config/tagmails/device-token"';
 }
 document.addEventListener('DOMContentLoaded', () => {
@@ -184,10 +187,12 @@ document.addEventListener('DOMContentLoaded', () => {
     try { await navigator.clipboard.writeText(pairCommand()); status('Pairing command copied. Run it from your TagMails checkout.'); }
     catch { status('Copy failed. Select the command above to copy it.'); }
   });
-  $('workspace').addEventListener('input', () => {
+  const updateInstall = () => {
     try { $('installCommand').textContent = installCommand(); status(''); }
     catch { $('installCommand').textContent = 'Enter an absolute workspace path to prepare the command.'; }
-  });
+  };
+  $('workspace').addEventListener('input', updateInstall);
+  $('workspaceAccess').addEventListener('change', updateInstall);
   $('copyInstall').addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(installCommand()); status('Start command copied. Run it from your TagMails checkout after pairing.'); }
     catch (error) { status(error.message === 'Enter an absolute workspace path on your Mac.' ? error.message : 'Copy failed. Select the command above to copy it.'); }
@@ -226,8 +231,10 @@ document.addEventListener('DOMContentLoaded', () => {
     <button id="pair">Create pairing code</button><p><code id="pairCode"></code></p><pre id="pairCommand"></pre>
     <button id="copyPair" class="secondary" hidden>Copy pairing command</button>
     <p class="muted">The command saves a device token under your home directory. It will not overwrite an existing token. Pairing does not start the agent or send email.</p></section>
-  <section class="card"><h2>Start on your Mac</h2><p>After pairing, choose one folder the agent may read. This prototype runs Codex and Claude in read-only mode. Run the command from the same TagMails checkout to start the relay at login.</p>
+  <section class="card"><h2>Start on your Mac</h2><p>Choose one folder and its file access, then start the agent at login. Read-only is the default.</p>
     <label for="workspace">Absolute workspace path</label><br><input id="workspace" type="text" autocomplete="off" spellcheck="false" placeholder="/Users/you/Projects/example">
+    <label for="workspaceAccess">File access</label><select id="workspaceAccess"><option value="read">Read only</option><option value="write">Allow edits in this folder</option></select>
+    <p class="muted">If you allow edits, people you authorize on a thread can also request changes inside this folder.</p>
     <pre id="installCommand">Enter an absolute workspace path to prepare the command.</pre>
     <button id="copyInstall" class="secondary">Copy start command</button>
     <p class="muted">The installer checks the path and token, then registers a macOS LaunchAgent. It refuses to overwrite an existing TagMails agent. The checkout and local CLI tools must remain available on this Mac.</p></section>

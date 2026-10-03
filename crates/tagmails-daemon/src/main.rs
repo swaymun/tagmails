@@ -254,20 +254,29 @@ fn pair_relay(base: &str, code: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn relay_result(claim: &Value, base: &str) -> Result<Value, Box<dyn Error>> {
+fn relay_runtime(model: &str, access: &str) -> Result<&'static str, Box<dyn Error>> {
+    match (
+        model.starts_with("gpt-"),
+        model.starts_with("claude-"),
+        access,
+    ) {
+        (true, false, "read") => Ok("codex-readonly"),
+        (true, false, "write") => Ok("codex-write"),
+        (false, true, "read") => Ok("claude-readonly"),
+        (false, true, "write") => Ok("claude-write"),
+        (_, _, "read" | "write") => Err("Relay claim has an unsupported model".into()),
+        _ => Err("TAGMAILS_WORKSPACE_ACCESS must be read or write".into()),
+    }
+}
+
+fn relay_result(claim: &Value, base: &str, access: &str) -> Result<Value, Box<dyn Error>> {
     if let Some(error) = claim["model"]["error"].as_str() {
         return Ok(
             json!({"runtime":"tagmails-router","state":"needs_clarification","summary":error}),
         );
     }
     let model = claim["model"]["id"].as_str().unwrap_or("");
-    let runtime = if model.starts_with("gpt-") {
-        "codex-readonly"
-    } else if model.starts_with("claude-") {
-        "claude-readonly"
-    } else {
-        return Err("Relay claim has an unsupported model".into());
-    };
+    let runtime = relay_runtime(model, access)?;
     Ok(match agent_result(claim, base, runtime) {
         Ok(result) => result,
         Err(error) => {
@@ -332,7 +341,12 @@ fn upload_answer_file(
     Ok(())
 }
 
-fn relay_iteration(client: &Client, base: &str, token: &str) -> Result<bool, Box<dyn Error>> {
+fn relay_iteration(
+    client: &Client,
+    base: &str,
+    token: &str,
+    access: &str,
+) -> Result<bool, Box<dyn Error>> {
     let response = relay_post(client, base, "/api/device/claim", token, json!({}))?;
     if response["claimed"] != true {
         return Ok(false);
@@ -348,7 +362,7 @@ fn relay_iteration(client: &Client, base: &str, token: &str) -> Result<bool, Box
         .to_owned();
     claim["claimId"] = json!(lease_id);
     claim["claimed"] = json!(true);
-    let mut result = relay_result(&claim, base)?;
+    let mut result = relay_result(&claim, base, access)?;
     if result["state"] == "completed" && wants_answer_file(&claim) {
         upload_answer_file(client, base, token, &job_id, &lease_id, &result)?;
         result["artifactIds"] = json!([lease_id]);
@@ -377,6 +391,10 @@ fn run_relay(base: &str) -> Result<(), Box<dyn Error>> {
         return Err("Relay mode requires exactly one of --once or --watch".into());
     }
     validate_relay_base(base)?;
+    let access = env::var("TAGMAILS_WORKSPACE_ACCESS").unwrap_or_else(|_| "read".into());
+    if access != "read" && access != "write" {
+        return Err("TAGMAILS_WORKSPACE_ACCESS must be read or write".into());
+    }
     let workspace = env::var("TAGMAILS_WORKSPACE")?;
     if !Path::new(&workspace).is_absolute() || !Path::new(&workspace).is_dir() {
         return Err("TAGMAILS_WORKSPACE must be an existing absolute directory".into());
@@ -400,7 +418,7 @@ fn run_relay(base: &str) -> Result<(), Box<dyn Error>> {
         println!("TagMails relay watching {base}. Press Ctrl-C to stop.");
     }
     loop {
-        let claimed = match relay_iteration(&client, base, token) {
+        let claimed = match relay_iteration(&client, base, token, &access) {
             Ok(false) if once => {
                 println!("No queued relay mail.");
                 false
@@ -444,10 +462,33 @@ mod tests {
         let result = relay_result(
             &json!({"model":{"error":"Use Codex, Claude, or Luna."}}),
             "unused",
+            "read",
         )
         .unwrap();
         assert_eq!(result["state"], "needs_clarification");
         assert_eq!(result["summary"], "Use Codex, Claude, or Luna.");
+    }
+
+    #[test]
+    fn relay_write_access_is_explicit_and_model_specific() {
+        assert_eq!(
+            relay_runtime("gpt-6-luna", "read").unwrap(),
+            "codex-readonly"
+        );
+        assert_eq!(
+            relay_runtime("claude-sonnet-5-5", "read").unwrap(),
+            "claude-readonly"
+        );
+        assert_eq!(
+            relay_runtime("gpt-6.1-sol", "write").unwrap(),
+            "codex-write"
+        );
+        assert_eq!(
+            relay_runtime("claude-sonnet-5-5", "write").unwrap(),
+            "claude-write"
+        );
+        assert!(relay_runtime("unknown", "write").is_err());
+        assert!(relay_runtime("gpt-6-luna", "broad").is_err());
     }
 
     #[test]

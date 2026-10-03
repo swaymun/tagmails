@@ -67,6 +67,8 @@ function main() {
   if (process.platform !== 'darwin' && !preview) throw new Error('LaunchAgent installation requires macOS');
   const relay = relayUrl(option('--relay'));
   const workspace = existingAbsolute(option('--workspace'), 'Workspace', 'directory');
+  const access = process.argv.includes('--workspace-access') ? option('--workspace-access') : 'read';
+  if (!['read', 'write'].includes(access)) throw new Error('Workspace access must be read or write');
   const token = existingAbsolute(option('--token-file'), 'Device token', 'file');
   const binary = existingAbsolute(process.argv.includes('--bin') ? option('--bin') : DEFAULT_BIN, 'Daemon binary', 'file');
   if (token.stat.uid !== process.getuid()) throw new Error('Device token file must belong to the current user');
@@ -85,6 +87,7 @@ function main() {
       TAGMAILS_RELAY_URL: relay,
       TAGMAILS_DEVICE_TOKEN_FILE: token.path,
       TAGMAILS_WORKSPACE: workspace.path,
+      TAGMAILS_WORKSPACE_ACCESS: access,
     },
   };
   const xml = plist(config);
