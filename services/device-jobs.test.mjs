@@ -224,6 +224,31 @@ test('run file uploads accept the 24 MB boundary and enforce the combined limit'
   assert.equal(sqlite.prepare('SELECT SUM(byte_size) n FROM run_artifacts').get().n, 25_000_000);
 });
 
+test('a retried run file upload reuses its ID and rejects changed bytes or metadata', async () => {
+  const { env, sqlite, objects } = bindings();
+  const paired = device(sqlite);
+  await inbound(env);
+  const lease = envelope((await call(env, paired.token, 'claim')).body);
+  const uploadId = randomUUID();
+  const upload = (bytes = 'clip', name = 'clip.mp4', id = uploadId) => handleDeviceRequest(new Request(
+    `https://relay.test/api/device/artifacts?jobId=${lease.jobId}&leaseId=${lease.leaseId}`, {
+      method: 'POST', headers: { Authorization: `Bearer ${paired.token}`, 'Content-Type': 'video/mp4',
+        'Content-Length': String(Buffer.byteLength(bytes)), 'X-TagMails-Filename': encodeURIComponent(name),
+        'X-TagMails-Upload-Id': id }, body: Buffer.from(bytes),
+    }), env);
+  assert.equal((await upload('clip', 'clip.mp4', 'bad-id')).status, 400);
+  const [first, retried] = await Promise.all([upload(), upload()]);
+  assert.deepEqual([first.status, retried.status].sort(), [200, 201]);
+  assert.equal((await first.json()).id, uploadId);
+  assert.equal((await retried.json()).id, uploadId);
+  assert.equal((await upload()).status, 200);
+  assert.equal((await upload('evil')).status, 409);
+  assert.equal((await upload('clip', 'other.mp4')).status, 409);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM run_artifacts').get().n, 1);
+  assert.equal(objects.size, 2); // One inbound MIME and one winning file object.
+  assert.equal(sqlite.prepare('SELECT sha256 FROM run_artifacts WHERE id = ?').get(uploadId).sha256.length, 64);
+});
+
 test('a device cannot claim another account and revocation blocks access', async () => {
   const { env, sqlite } = bindings();
   sqlite.prepare('INSERT INTO accounts (id, google_sub, owner_email, agent_email) VALUES (?, ?, ?, ?)')

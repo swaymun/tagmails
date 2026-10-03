@@ -1,0 +1,1 @@
+ALTER TABLE run_artifacts ADD COLUMN sha256 TEXT;
