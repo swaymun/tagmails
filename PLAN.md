@@ -78,6 +78,8 @@ OpenAI Docs supports Codex app-server with a ChatGPT-plan OAuth token and local 
 
 Set `gpt-6.1-sol` with medium effort as the initial Codex default and `claude-sonnet-5-5` with **explicit** medium effort as the Claude default; Sonnet's documented API default is high. Let the sender override through a short, documented subject/body syntax, and echo the actual selected model in the result details. Offer a per-address default in account settings. Use GPT-6 Luna for low-cost live smoke tests when API testing is enabled. [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) · [Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/overview) · [OpenAI pricing](https://developers.openai.com/api/docs/pricing)
 
+The per-account Codex/Sonnet default is now available on both account pages. New relay jobs store the model selected at receipt, so changing the setting does not reroute queued work; an email `Model:` line still wins. The development Worker and private Site are deployed, and the owner's Google-signed save was checked in remote D1 before restoring Codex as the default. Live mail has not tested this routing yet.
+
 Start routing with explicit model requests and deterministic rules. Run an evaluation set before adding an inferred classifier. Compare Jev's hosted price and Laya's local compute, accuracy, calibration, and privacy on **our own email fixtures**. Neither model may grant permissions, spend credits, or choose unsafe side effects. Laya is the ConvAI Innovations decision model, not LLaMA. [Jev announcement and rate](https://typesafe.ai/blog/introducing-system-one-models-and-jev) · [Laya source and benchmark caveats](https://github.com/NandhaKishorM/laya)
 
 ## Email output and research loop

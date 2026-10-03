@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Resend } from 'resend';
+import { chooseModel } from '../apps/mock-inbox/model.mjs';
 import { inspectResendInbound } from './resend-inbound.mjs';
 import { handleDeviceRequest } from './device-jobs.mjs';
 import { sendNextOutbox } from './outbox.mjs';
@@ -122,7 +123,7 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
   });
   if (message.ignored) return Response.json({ accepted: false });
   const agent = (message.agentAddress ?? '').trim().toLowerCase();
-  const account = await env.DB.prepare('SELECT id, owner_email FROM accounts WHERE agent_email = ? AND active = 1')
+  const account = await env.DB.prepare('SELECT id, owner_email, default_model FROM accounts WHERE agent_email = ? AND active = 1')
     .bind(agent).first();
   if (!account) return Response.json({ accepted: false });
   const duplicate = await env.DB.prepare('SELECT id FROM messages WHERE account_id = ? AND (provider_email_id = ? OR message_id = ?) LIMIT 1')
@@ -161,8 +162,8 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
       ON CONFLICT(thread_id, email) DO UPDATE SET revoked_at = NULL`).bind(newThreadId, guest));
   }
   const jobId = randomUUID();
-  statements.push(env.DB.prepare("INSERT INTO jobs (id, thread_id, message_id, state) VALUES (?, ?, ?, 'queued')")
-    .bind(jobId, newThreadId, id));
+  statements.push(env.DB.prepare("INSERT INTO jobs (id, thread_id, message_id, state, model_json) VALUES (?, ?, ?, 'queued', ?)")
+    .bind(jobId, newThreadId, id, JSON.stringify(chooseModel(message.body, account.default_model))));
   try {
     await env.DB.batch(statements);
   } catch (error) {

@@ -18,17 +18,16 @@ function device(sqlite, accountId = 'account-1') {
 
 function envelope(body) { return JSON.parse(Buffer.from(body.payload, 'base64url').toString('utf8')); }
 
-async function inbound(env, id = 'email-1') {
+async function inbound(env, id = 'email-1', body = 'Model: Luna\nRead the status without changing files.') {
   const messageId = `<${id}@gmail.com>`;
   const rawMime = Buffer.from([
     'From: owner@gmail.com', 'To: agent@wonder.test', 'Subject: Check routing',
     `Message-ID: ${messageId}`, 'Content-Type: text/plain; charset=utf-8', '',
-    'Model: Luna\nRead the status without changing files.',
+    body,
   ].join('\r\n'));
   const message = {
     providerEmailId: id, messageId, from: 'owner@gmail.com', agentAddress: 'agent@wonder.test', to: ['agent@wonder.test'],
-    cc: [], bcc: [], subject: 'Check routing', body: 'Model: Luna\nRead the status without changing files.',
-    parentIds: [], rawMime,
+    cc: [], bcc: [], subject: 'Check routing', parentIds: [], rawMime, body,
   };
   const response = await handleInbound(new Request('https://relay.test/webhooks/resend', { method: 'POST', body: '{}' }), env, {
     inspect: async () => message,
@@ -46,6 +45,23 @@ async function call(env, token, path, body) {
   }), env);
   return { status: response.status, body: await response.json() };
 }
+
+test('queued mail keeps its selected default after the account preference changes', async () => {
+  const { env, sqlite } = bindings();
+  const paired = device(sqlite);
+  sqlite.prepare('UPDATE accounts SET default_model = ? WHERE id = ?').run('claude-sonnet-5-5', 'account-1');
+  await inbound(env, 'default-first', 'Review the note.');
+  assert.deepEqual(JSON.parse(sqlite.prepare('SELECT model_json FROM jobs').get().model_json),
+    { id: 'claude-sonnet-5-5', effort: 'medium', source: 'default' });
+  sqlite.prepare('UPDATE accounts SET default_model = ? WHERE id = ?').run('gpt-6.1-sol', 'account-1');
+  const first = await call(env, paired.token, 'claim');
+  assert.deepEqual(envelope(first.body).model,
+    { id: 'claude-sonnet-5-5', effort: 'medium', source: 'default' });
+  await inbound(env, 'explicit-second', 'Model: Luna\nReview the note.');
+  const second = await call(env, paired.token, 'claim');
+  assert.deepEqual(envelope(second.body).model,
+    { id: 'gpt-6-luna', effort: 'low', source: 'explicit' });
+});
 
 test('a paired device receives a signed, account-scoped claim and completes it once', async () => {
   const { env, sqlite, objects } = bindings();

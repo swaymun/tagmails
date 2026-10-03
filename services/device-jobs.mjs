@@ -57,7 +57,7 @@ async function claim(env, device) {
         AND (m.sender_email = a.owner_email OR EXISTS (
           SELECT 1 FROM participants p WHERE p.thread_id = t.id AND p.email = m.sender_email AND p.revoked_at IS NULL))
       ORDER BY j.created_at, j.id LIMIT 1
-    ) RETURNING id, thread_id, message_id, lease_until`)
+    ) RETURNING id, thread_id, message_id, lease_until, model_json`)
     .bind(device.id, leaseId, device.account_id).first();
   if (!row) return json({ claimed: false });
   const message = await env.DB.prepare(`SELECT m.object_key, m.message_id, t.subject
@@ -66,14 +66,14 @@ async function claim(env, device) {
   if (!message) throw new Error('Claimed job has no inbound message');
   const object = await env.MAIL.get(message.object_key);
   if (!object) throw new Error('Claimed job has no stored MIME');
-  const account = await env.DB.prepare('SELECT agent_email, owner_email FROM accounts WHERE id = ?').bind(device.account_id).first();
+  const account = await env.DB.prepare('SELECT agent_email, owner_email, default_model FROM accounts WHERE id = ?').bind(device.account_id).first();
   const parsed = await parseInbound(await object.arrayBuffer(), account.agent_email, {
     verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false,
   });
   if (parsed.messageId !== message.message_id) throw new Error('Stored MIME no longer matches the claimed job');
   const envelope = {
     jobId: row.id, threadId: row.thread_id, leaseId, leaseUntil: row.lease_until,
-    model: chooseModel(parsed.body),
+    model: row.model_json ? JSON.parse(row.model_json) : chooseModel(parsed.body, account.default_model),
     request: { from: parsed.from, fromOwner: parsed.from === account.owner_email,
       subject: parsed.subject, body: parsed.body,
       attachments: parsed.attachments.map((attachment, index) => ({

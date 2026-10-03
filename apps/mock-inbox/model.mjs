@@ -1,6 +1,9 @@
-export function chooseModel(body) {
+export const ACCOUNT_DEFAULT_MODELS = ['gpt-6.1-sol', 'claude-sonnet-5-5'];
+
+export function chooseModel(body, defaultModel = 'gpt-6.1-sol') {
   const requested = String(body ?? '').match(/^Model:\s*(.+)$/im)?.[1]?.trim().toLowerCase();
-  if (!requested) return { id: 'gpt-6.1-sol', effort: 'medium', source: 'default' };
+  if (!requested) return { id: ACCOUNT_DEFAULT_MODELS.includes(defaultModel) ? defaultModel : 'gpt-6.1-sol',
+    effort: 'medium', source: 'default' };
   const choices = {
     codex: ['gpt-6.1-sol', 'medium'],
     'gpt-6.1-sol': ['gpt-6.1-sol', 'medium'],

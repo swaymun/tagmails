@@ -101,6 +101,7 @@ async function billing() {
   $('topup').hidden = !data.checkoutEnabled;
 }
 let googleReady = false;
+let savedDefaultModel = 'gpt-6.1-sol';
 async function showGoogle() {
   if (googleReady) return;
   const config = await api('/api/auth/config');
@@ -133,6 +134,8 @@ async function refresh() {
   $('signedOut').hidden = true; $('signedIn').hidden = false;
   $('ownerEmail').textContent = account.ownerEmail;
   $('agentEmail').textContent = account.agentEmail;
+  savedDefaultModel = account.defaultModel;
+  $('defaultModel').value = savedDefaultModel;
   $('delivery').textContent = account.deliveryReady
     ? 'Mail delivery is configured for this address.'
     : 'Address reserved. Email delivery is not connected yet.';
@@ -212,6 +215,16 @@ document.addEventListener('DOMContentLoaded', () => {
     try { await threads(); status('Threads refreshed.'); }
     catch { status('Threads could not be loaded. Reload to try again.'); }
   });
+  $('saveDefaultModel').addEventListener('click', async () => {
+    $('saveDefaultModel').disabled = true;
+    try {
+      await api('/api/account/default-model', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: $('defaultModel').value }) });
+      savedDefaultModel = $('defaultModel').value;
+      status('Default model saved for new task emails.');
+    } catch (error) { $('defaultModel').value = savedDefaultModel; status(error.message); }
+    finally { $('saveDefaultModel').disabled = false; }
+  });
   $('signOut').addEventListener('click', async () => {
     try { await api('/api/auth/logout', { method: 'POST' }); await refresh(); }
     catch (error) { status(error.message); }
@@ -226,6 +239,11 @@ document.addEventListener('DOMContentLoaded', () => {
 <div id="signedIn" hidden>
   <section class="card"><h2>Account</h2><p>Verified sender<br><span id="ownerEmail" class="address"></span></p>
     <p>Agent address<br><span id="agentEmail" class="address"></span></p><p id="delivery" class="muted"></p>
+    <label for="defaultModel">Default model for new task emails</label>
+    <select id="defaultModel"><option value="gpt-6.1-sol">Codex · GPT-6.1 Sol · medium</option>
+      <option value="claude-sonnet-5-5">Claude Code · Sonnet 5.5 · medium</option></select>
+    <button id="saveDefaultModel" class="secondary">Save default model</button>
+    <p class="muted">Write <code>Model: Codex</code>, <code>Model: Claude</code>, or <code>Model: Luna</code> in an email to override it for that message.</p>
     <button id="signOut" class="secondary">Sign out</button></section>
   <section class="card"><h2>Pair a Mac</h2><p>Create a one-time code, then run the setup command in your TagMails checkout. The device token stays in a file on your Mac.</p>
     <button id="pair">Create pairing code</button><p><code id="pairCode"></code></p><pre id="pairCommand"></pre>

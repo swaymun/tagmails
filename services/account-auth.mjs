@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { ACCOUNT_DEFAULT_MODELS } from '../apps/mock-inbox/model.mjs';
 import { runReceiptPage } from './account-page.mjs';
 import { artifactForDownload, selectedRunArtifacts } from './run-artifacts.mjs';
 
@@ -62,7 +63,7 @@ export async function verifyGoogleCredential(credential, clientId, keys = google
 export async function accountFor(request, env) {
   const token = sessionToken(request);
   if (!token) return null;
-  return env.DB.prepare(`SELECT a.id, a.owner_email, a.agent_email FROM sessions s
+  return env.DB.prepare(`SELECT a.id, a.owner_email, a.agent_email, a.default_model FROM sessions s
     JOIN accounts a ON a.id = s.account_id
     WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > CURRENT_TIMESTAMP
       AND a.active = 1 LIMIT 1`).bind(hash(token)).first();
@@ -98,7 +99,7 @@ async function signIn(request, env, verifyIdentity) {
       if (!raced) return json({ error: 'Gmail address is already assigned' }, 409, headers);
     }
   }
-  const account = await env.DB.prepare('SELECT id, owner_email, agent_email FROM accounts WHERE google_sub = ? AND active = 1')
+  const account = await env.DB.prepare('SELECT id, owner_email, agent_email, default_model FROM accounts WHERE google_sub = ? AND active = 1')
     .bind(identity.sub).first();
   if (!account || account.owner_email !== identity.email) return json({ error: 'Account could not be created' }, 409, headers);
   if (fromSite) return json({ ownerEmail: account.owner_email, agentEmail: account.agent_email }, 200, headers);
@@ -149,7 +150,7 @@ export async function siteOwnerFor(request, env, verifyIdentity = verifyGoogleCr
   let identity;
   try { identity = await verifyIdentity(credential, env.GOOGLE_CLIENT_ID); }
   catch { return { error: 'Google sign-in required', status: 401 }; }
-  const account = await env.DB.prepare('SELECT id, owner_email, agent_email FROM accounts WHERE google_sub = ? AND active = 1')
+  const account = await env.DB.prepare('SELECT id, owner_email, agent_email, default_model FROM accounts WHERE google_sub = ? AND active = 1')
     .bind(identity.sub).first();
   if (!account || account.owner_email !== identity.email) return { error: 'Account not found', status: 404 };
   return { account };
@@ -193,6 +194,17 @@ async function revokeAccountDevice(env, accountId, deviceId) {
   const result = await env.DB.prepare('UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE id = ? AND account_id = ? AND revoked_at IS NULL')
     .bind(deviceId, accountId).run();
   return (result.meta?.changes ?? result.changes) ? { revoked: true } : null;
+}
+
+async function changeDefaultModel(request, env, accountId, headers = {}) {
+  let model;
+  try { model = (await bodyJson(request)).model; }
+  catch { return json({ error: 'Invalid model request' }, 400, headers); }
+  if (!ACCOUNT_DEFAULT_MODELS.includes(model)) return json({ error: 'Choose Codex or Claude' }, 400, headers);
+  const changed = await env.DB.prepare('UPDATE accounts SET default_model = ? WHERE id = ? AND active = 1')
+    .bind(model, accountId).run();
+  if (!(changed.meta?.changes ?? changed.changes)) return json({ error: 'Account is inactive' }, 409, headers);
+  return json({ defaultModel: model }, 200, headers);
 }
 
 async function changeParticipant(request, env, account, threadId, action, headers = {}) {
@@ -241,7 +253,10 @@ async function siteAccountRequest(request, env, pathname, verifyIdentity) {
   const { account } = owner;
   if (pathname === '/api/site/account' && request.method === 'GET') {
     return json({ ownerEmail: account.owner_email, agentEmail: account.agent_email,
-      deliveryReady: env.MAIL_DELIVERY_READY === 'true' }, 200, headers);
+      defaultModel: account.default_model, deliveryReady: env.MAIL_DELIVERY_READY === 'true' }, 200, headers);
+  }
+  if (pathname === '/api/site/default-model' && request.method === 'POST') {
+    return changeDefaultModel(request, env, account.id, headers);
   }
   if (pathname === '/api/site/devices' && request.method === 'GET') {
     return json(await accountDevices(env, account.id), 200, headers);
@@ -348,7 +363,7 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
   }
   if (pathname === '/api/account/me' && request.method === 'GET') {
     return account ? json({ ownerEmail: account.owner_email, agentEmail: account.agent_email,
-      deliveryReady: env.MAIL_DELIVERY_READY === 'true' }) : json({ error: 'Sign in required' }, 401);
+      defaultModel: account.default_model, deliveryReady: env.MAIL_DELIVERY_READY === 'true' }) : json({ error: 'Sign in required' }, 401);
   }
   if (pathname === '/api/account/devices' && request.method === 'GET') {
     if (!account) return json({ error: 'Sign in required' }, 401);
@@ -367,6 +382,7 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
     return json({ signedOut: true }, 200, { 'Set-Cookie': `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax` });
   }
   if (!account) return json({ error: 'Sign in required' }, 401);
+  if (pathname === '/api/account/default-model') return changeDefaultModel(request, env, account.id);
   const participantAction = pathname.match(/^\/api\/account\/threads\/([0-9a-f-]{36})\/(invite|revoke)$/i);
   if (participantAction) {
     return changeParticipant(request, env, account, participantAction[1], participantAction[2]);

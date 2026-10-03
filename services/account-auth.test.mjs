@@ -67,7 +67,8 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   const cookie = signedIn.headers.get('set-cookie').split(';')[0];
   assert.match(signedIn.headers.get('set-cookie'), /HttpOnly; Secure; SameSite=Lax/);
   const account = await handleAccountRequest(request('/api/account/me', 'GET', undefined, cookie), env, options);
-  assert.deepEqual(await account.json(), { ownerEmail: identity.email, agentEmail: profile.agentEmail, deliveryReady: false });
+  assert.deepEqual(await account.json(), { ownerEmail: identity.email, agentEmail: profile.agentEmail,
+    defaultModel: 'gpt-6.1-sol', deliveryReady: false });
   const second = await handleAccountRequest(request('/api/auth/google', 'POST', { credential: 'test' }), env, options);
   assert.equal((await second.json()).agentEmail, profile.agentEmail);
   assert.equal(sqlite.prepare('SELECT count(*) n FROM accounts WHERE google_sub = ?').get(identity.sub).n, 1);
@@ -82,6 +83,23 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.equal((await handleAccountRequest(new Request('https://relay.test/api/auth/google', {
     method: 'OPTIONS', headers: { Origin: env.SITE_ORIGIN },
   }), env, options)).status, 204);
+  assert.equal((await handleAccountRequest(request('/api/account/default-model', 'POST',
+    { model: 'claude-sonnet-5-5' }, cookie), env, options)).status, 200);
+  assert.equal((await handleAccountRequest(request('/api/account/default-model', 'POST',
+    { model: 'gpt-6-luna' }, cookie), env, options)).status, 400);
+  assert.equal((await handleAccountRequest(request('/api/account/default-model', 'POST',
+    { model: 'gpt-6.1-sol' }, cookie, 'https://attacker.test'), env, options)).status, 403);
+  const siteDefault = await handleAccountRequest(new Request('https://relay.test/api/site/default-model', {
+    method: 'POST', headers: { Origin: env.SITE_ORIGIN, Authorization: 'Bearer test',
+      'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'gpt-6.1-sol' }),
+  }), env, options);
+  assert.equal(siteDefault.status, 200);
+  assert.equal(siteDefault.headers.get('access-control-allow-origin'), env.SITE_ORIGIN);
+  assert.deepEqual(await siteDefault.json(), { defaultModel: 'gpt-6.1-sol' });
+  const siteAccount = await handleAccountRequest(new Request('https://relay.test/api/site/account', {
+    headers: { Origin: env.SITE_ORIGIN, Authorization: 'Bearer test' },
+  }), env, options);
+  assert.equal((await siteAccount.json()).defaultModel, 'gpt-6.1-sol');
 
   const codeResponse = await handleAccountRequest(request('/api/account/pairing-code', 'POST', {}, cookie), env, options);
   const { code } = await codeResponse.json();
@@ -200,7 +218,7 @@ test('the private Site can show the owner account and manage only its paired dev
   const account = await handleAccountRequest(site('/api/site/account'), env, options);
   assert.equal(account.headers.get('access-control-allow-origin'), env.SITE_ORIGIN);
   assert.deepEqual(await account.json(), { ownerEmail: 'owner@gmail.com',
-    agentEmail: 'agent@wonder.test', deliveryReady: false });
+    agentEmail: 'agent@wonder.test', defaultModel: 'gpt-6.1-sol', deliveryReady: false });
   assert.equal((await handleAccountRequest(site('/api/site/devices'), env, options)).status, 200);
   const code = await (await handleAccountRequest(site('/api/site/pairing-code', 'POST'), env, options)).json();
   assert.match(code.code, /^tm_pair_[A-Za-z0-9_-]{27}$/);
