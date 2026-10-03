@@ -431,7 +431,7 @@ test('one outbox sends from each account address', async () => {
   assert.deepEqual(senders, ['agent@wonder.test', 'u-second@tagmails.test']);
 });
 
-test('owner-addressed results link to the private Site transcript but a guest-only reply does not', async () => {
+test('guest-only replies link to the Site transcript only after participant access is enabled', async () => {
   const fixture = bindings();
   const { env, sqlite } = fixture;
   env.PUBLIC_ORIGIN = 'https://relay.tagmails.test';
@@ -450,6 +450,14 @@ test('owner-addressed results link to the private Site transcript but a guest-on
   await queuedTurn(fixture, { number: 2, from: 'reviewer@gmail.com', to: ['agent@wonder.test'] });
   assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
   assert.doesNotMatch(payloads[1].html, /\/run\?id=|\/runs\//);
+  assert.doesNotMatch(payloads[1].text, /\/run\?id=|\/runs\//);
+  env.SITE_PARTICIPANT_TRANSCRIPTS = 'true';
+  const guestJobId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  await queuedTurn(fixture, { number: 3, from: 'reviewer@gmail.com', to: ['agent@wonder.test'], jobId: guestJobId });
+  assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
+  assert.ok(payloads[2].html.includes(`https://site.tagmails.test/run?id=${guestJobId}`));
+  assert.ok(payloads[2].text.includes(`https://site.tagmails.test/run?id=${guestJobId}`));
+  assert.doesNotMatch(payloads[2].html, /relay\.tagmails\.test\/runs/);
 });
 
 test('without a separate Site, an owner reply links to the Worker receipt', async () => {

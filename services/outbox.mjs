@@ -183,6 +183,7 @@ async function prepare(env, row) {
   const transcriptUrl = siteOrigin
     ? `${siteOrigin}/run?id=${encodeURIComponent(row.job_id)}`
     : relayOrigin ? `${relayOrigin}/runs/${encodeURIComponent(row.job_id)}` : null;
+  const participantTranscriptReady = siteOrigin && env.SITE_PARTICIPANT_TRANSCRIPTS === 'true';
   const fileNote = result.artifactIds?.length && ownerCanOpen && siteOrigin
     ? [`${result.artifactIds.length} file${result.artifactIds.length === 1 ? '' : 's'} available on the private run page for seven days.`]
     : [];
@@ -191,7 +192,8 @@ async function prepare(env, row) {
   const rendered = renderResult({
     state: result.state, summary: result.summary,
     details: [...(selectedModel ? [selectedModel] : []), ...(result.details ?? []), ...fileNote], checks: result.checks,
-    links: transcriptUrl && ownerCanOpen ? [{ label: 'Run transcript', url: transcriptUrl }] : [],
+    links: transcriptUrl && (ownerCanOpen || participantTranscriptReady)
+      ? [{ label: 'Run transcript', url: transcriptUrl }] : [],
     note: result.state === 'needs_approval'
       ? 'No action was approved automatically. Review the request and local permissions before replying or retrying.'
       : writeRun && result.state === 'completed'
