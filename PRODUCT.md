@@ -30,16 +30,16 @@ The first beta uses Google sign-in with a verified Gmail address. Customers inst
 
 - Both the daemon and server are intended to be open source and self-hostable.
 - Codex and Claude Code are the first agent runtimes. The local subscription-backed path comes before managed API credits.
-- Explicit model choices take precedence over defaults. Laya means ConvAI Innovations' decision model; it is only a possible future classifier, not a required implementation component.
+- Explicit model choices take precedence over defaults. Jev classifies an initial email without a `Model:` directive; replies keep that thread's model unless the sender explicitly changes it.
 - The owner grants thread-scoped participation by including an address in To, Cc, or Bcc on an email to the agent. Participants can reply within that thread but cannot add others; the owner can revoke access. Production must verify inbound mail provenance before trusting the sender address. Bcc identities stay private in visible reply headers. Sensitive actions retain local approval gates.
 - Gmail users can react to an agent reply with a native emoji where Gmail offers the control. Inbound reaction mail is feedback on that message and does not start a task. Bcc recipients cannot react to the original Bcc message in Gmail.
 - Completion emails include a concise outcome, real checks and limitations, links and small previews where supported, and an accessible full trace.
 - The internal test site uses synthetic messages and must identify simulated work clearly.
-- TagMails is the chosen public brand; Wonder Email remains the internal project name. MIT is the selected source license. Domain acquisition, final pricing, and retention policy are open decisions.
+- TagMails is the chosen public brand; Wonder Email remains the internal project name. MIT is the selected source license. The user bought `tagmails.com`; final pricing and retention policy are open decisions.
 
 ## Brand Commitments
 
-The private pilot uses the TagMails name, a text-forward landing site, and a copyable setup prompt, inspired by the interaction pattern at Call4Me without copying its design. `tagmails.com` is the preferred domain. A registrar search listed it for sale and a narrow USPTO wordmark search found no exact match, but Etag Digital actively markets a `TagMail` email product. Keep the public name and domain purchase open pending a broader clearance decision. Details and sources are in PLAN.md.
+The private pilot uses the TagMails name, a text-forward landing site, and a copyable setup prompt, inspired by the interaction pattern at Call4Me without copying its design. The user bought `tagmails.com` on October 3, 2026. A narrow USPTO wordmark search found no exact match, but Etag Digital actively markets a `TagMail` email product. Keep broader name clearance open before public launch. Details and sources are in PLAN.md.
 
 Claude Tag is a reference for the use cases and collaborative feel: delegate from an existing conversation, get a concrete result in-thread, continue later, and keep memory and access scoped. The internal test site should look and behave like Gmail based on the user's supplied screenshot; it remains an internal testing surface rather than public product branding.
 

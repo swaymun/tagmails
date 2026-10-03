@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Resend } from 'resend';
-import { chooseModel } from '../apps/mock-inbox/model.mjs';
+import { routeModel } from './jev-route.mjs';
 import { inspectResendInbound } from './resend-inbound.mjs';
 import { handleDeviceRequest } from './device-jobs.mjs';
 import { reconcileOneUnknownOutbox, reconcileSentEvent, recordDeliveryOutcome, sendNextOutbox } from './outbox.mjs';
@@ -103,7 +103,7 @@ async function recordReaction(env, account, message) {
   return Response.json({ accepted: true, reaction: true, duplicate: false });
 }
 
-export async function handleInbound(request, env, { inspect = inspectResendInbound, getReceivedEmail = (id) => receivedEmail(env, id), fetchRaw = fetch } = {}) {
+export async function handleInbound(request, env, { inspect = inspectResendInbound, getReceivedEmail = (id) => receivedEmail(env, id), fetchRaw = fetch, fetchModel = fetch } = {}) {
   if (request.method !== 'POST' || new URL(request.url).pathname !== '/webhooks/resend') return new Response('Not found', { status: 404 });
   if (!env.DB || !env.MAIL || !env.RESEND_WEBHOOK_SECRET || !env.RESEND_API_KEY) {
     throw new Error('Resend relay bindings and secrets are incomplete');
@@ -168,7 +168,14 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
       ON CONFLICT(thread_id, email) DO UPDATE SET revoked_at = NULL`).bind(newThreadId, guest));
   }
   const jobId = randomUUID();
-  const model = threadUnavailable ? null : chooseModel(message.body, account.default_model);
+  const previousJob = threadId && !threadUnavailable ? await env.DB.prepare(`SELECT j.model_json FROM jobs j
+    JOIN messages m ON m.id = j.message_id
+    WHERE j.thread_id = ? AND json_extract(j.model_json, '$.id') IS NOT NULL
+    ORDER BY m.rowid DESC LIMIT 1`).bind(threadId).first() : null;
+  const priorModel = previousJob?.model_json ? JSON.parse(previousJob.model_json) : null;
+  const model = threadUnavailable ? null : await routeModel(message.body, account.default_model, {
+    apiKey: env.TYPESAFE_API_KEY, fetcher: fetchModel, priorModel,
+  });
   const unavailableResult = threadUnavailable ? {
     runtime: 'relay', state: 'failed',
     summary: owner
@@ -219,7 +226,10 @@ export default {
       catch { return new Response('Device job request failed', { status: 500 }); }
     }
     try { return await handleInbound(request, env); }
-    catch { return new Response('Inbound mail could not be accepted', { status: 500 }); }
+    catch (error) {
+      console.error('Inbound mail intake failed:', error instanceof Error ? error.message : 'Unknown error');
+      return new Response('Inbound mail could not be accepted', { status: 500 });
+    }
   },
   async scheduled(_event, env) {
     try { await deleteSettledInboundMime(env); }

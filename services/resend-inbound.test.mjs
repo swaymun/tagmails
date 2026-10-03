@@ -52,7 +52,7 @@ test('verified Resend metadata and raw MIME yield a task without granting unobse
   const item = fixture();
   const message = await inspectResendInbound({ ...options(item), fetchRaw: async (url, request) => {
     assert.equal(url, item.email.raw.download_url);
-    assert.equal(request.redirect, 'error');
+    assert.equal(request.redirect, 'manual');
     return new Response(item.raw, { status: 200 });
   } });
   assert.equal(message.providerEmailId, id);
@@ -71,11 +71,30 @@ test('a provider-returned signed CloudFront URL can supply the raw MIME without 
     getReceivedEmail: async () => ({ ...item.email, raw: { download_url: url } }),
     fetchRaw: async (actual, request) => {
       assert.equal(actual, url);
-      assert.equal(request.redirect, 'error');
+      assert.equal(request.redirect, 'manual');
       return new Response(item.raw, { status: 200 });
     },
   });
   assert.equal(message.providerEmailId, id);
+});
+
+test('the live Resend CDN host can supply the signed raw MIME URL', async () => {
+  const item = fixture();
+  const message = await inspectResendInbound({ ...options(item),
+    getReceivedEmail: async () => ({ ...item.email,
+      raw: { download_url: 'https://cdn.resend.app/receiving/raw/synthetic?Signature=abc' } }),
+  });
+  assert.equal(message.messageId, item.email.message_id);
+});
+
+test('a provider raw MIME redirect is rejected without following it', async () => {
+  const item = fixture();
+  await assert.rejects(inspectResendInbound({ ...options(item),
+    fetchRaw: async (_url, request) => {
+      assert.equal(request.redirect, 'manual');
+      return new Response(null, { status: 302, headers: { Location: 'https://attacker.example/raw' } });
+    },
+  }), /could not be retrieved/);
 });
 
 test('a signed sent event carries the job tag and provider identifiers', async () => {

@@ -9,8 +9,11 @@ export function selectedModelDetail(json) {
   try {
     const model = JSON.parse(json);
     const [label, effort] = MODEL_LABELS[model.id] ?? [];
-    if (!label || model.effort !== effort || !['default', 'explicit'].includes(model.source)) return null;
-    const source = model.source === 'explicit' ? 'requested in this email' : 'account default';
+    if (!label || model.effort !== effort || !['default', 'explicit', 'classified', 'thread'].includes(model.source)) return null;
+    const source = {
+      default: 'account default', explicit: 'requested in this email',
+      classified: 'requested in this email', thread: 'continued from this thread',
+    }[model.source];
     return `Selected model: ${label} (${effort}; ${source}).`;
   } catch { return null; }
 }

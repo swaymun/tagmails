@@ -65,7 +65,7 @@ test('queued mail keeps its selected default after the account preference change
     { id: 'gpt-6-luna', effort: 'low', source: 'explicit' });
 });
 
-test('quoted model lines do not reroute a received reply', async () => {
+test('replies inherit the original route without reclassifying quoted model lines', async () => {
   const { env, sqlite } = bindings();
   sqlite.prepare('UPDATE accounts SET default_model = ? WHERE id = ?').run('claude-sonnet-5-5', 'account-1');
   await inbound(env, 'original-route', 'Model: Luna\nDraft the review.');
@@ -75,7 +75,7 @@ test('quoted model lines do not reroute a received reply', async () => {
     JOIN messages m ON m.id = j.message_id ORDER BY m.provider_email_id`).all();
   assert.equal(jobs[0].thread_id, jobs[1].thread_id);
   assert.deepEqual(JSON.parse(jobs[1].model_json),
-    { id: 'claude-sonnet-5-5', effort: 'medium', source: 'default' });
+    { id: 'gpt-6-luna', effort: 'low', source: 'thread' });
 });
 
 test('a paired device receives a signed, account-scoped claim and completes it once', async () => {
