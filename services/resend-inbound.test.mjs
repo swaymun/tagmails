@@ -67,6 +67,16 @@ test('verified delivery accepts an agent who was Bcc on its own provider copy', 
   assert.deepEqual(message.bcc, []);
 });
 
+test('a p=none sender needs aligned DKIM when Resend reports gray DMARC', async () => {
+  const item = fixture();
+  const gray = { ...item.email, authentication: { dmarc: 'gray', spf: 'pass', dkim: 'pass' } };
+  assert.equal((await inspectResendInbound({ ...options(item), getReceivedEmail: async () => gray })).from,
+    'owner@gmail.com');
+  await assert.rejects(inspectResendInbound({ ...options(item), getReceivedEmail: async () => ({
+    ...gray, authentication: { dmarc: 'gray', spf: 'pass', dkim: 'gray' },
+  }) }), /DMARC or aligned DKIM/);
+});
+
 test('a verified event resolves one active agent address before retrieving mail', async () => {
   const item = fixture();
   let candidates;

@@ -70,7 +70,14 @@ export async function inspectResendInbound({ rawPayload, headers, webhookSecret,
       mailbox(email.from) !== mailbox(metadata.from) || !deliveredTo(email, agent)) {
     throw new Error('Retrieved Resend email does not match the verified event');
   }
-  if (email.authentication?.dmarc !== 'pass') throw new Error('Sender authentication did not pass DMARC');
+  // Resend reports DMARC as "gray" for a p=none sender even when the
+  // matching From domain has a valid DKIM signature. Personal Gmail currently
+  // publishes p=none, so accept that documented combination as authenticated.
+  const authentication = email.authentication;
+  if (authentication?.dmarc !== 'pass' &&
+      !(authentication?.dmarc === 'gray' && authentication?.dkim === 'pass')) {
+    throw new Error('Sender authentication did not pass DMARC or aligned DKIM');
+  }
   const rawUrl = new URL(email.raw?.download_url || '');
   if (rawUrl.protocol !== 'https:' || !(rawUrl.hostname === 'resend.com' || rawUrl.hostname.endsWith('.resend.com'))) {
     throw new Error('Resend raw email URL is outside the provider domain');
