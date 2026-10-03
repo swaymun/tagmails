@@ -144,6 +144,56 @@ function siteCors(request, env) {
   } : {};
 }
 
+async function createPairingCode(env, accountId) {
+  const code = `tm_pair_${randomBytes(20).toString('base64url')}`;
+  await env.DB.prepare("INSERT INTO pairing_codes (code_hash, account_id, expires_at) VALUES (?, ?, datetime('now', '+10 minutes'))")
+    .bind(hash(code), accountId).run();
+  return { code, expiresInSeconds: 600 };
+}
+
+async function accountDevices(env, accountId) {
+  const rows = await env.DB.prepare(`SELECT id, name, created_at, revoked_at FROM devices
+    WHERE account_id = ? ORDER BY created_at DESC`).bind(accountId).all();
+  return { devices: rows.results ?? rows };
+}
+
+async function revokeAccountDevice(env, accountId, deviceId) {
+  const result = await env.DB.prepare('UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE id = ? AND account_id = ? AND revoked_at IS NULL')
+    .bind(deviceId, accountId).run();
+  return (result.meta?.changes ?? result.changes) ? { revoked: true } : null;
+}
+
+async function siteAccountRequest(request, env, pathname, verifyIdentity) {
+  const headers = siteCors(request, env);
+  if (request.method === 'OPTIONS') return new Response(null, {
+    status: request.headers.get('origin') === env.SITE_ORIGIN ? 204 : 403, headers,
+  });
+  if (request.headers.get('origin') !== env.SITE_ORIGIN) return json({ error: 'Invalid origin' }, 403);
+  const credential = request.headers.get('authorization')?.match(/^Bearer (\S+)$/)?.[1];
+  let identity;
+  try { identity = await verifyIdentity(credential, env.GOOGLE_CLIENT_ID); }
+  catch { return json({ error: 'Google sign-in required' }, 401, headers); }
+  const account = await env.DB.prepare('SELECT id, owner_email, agent_email FROM accounts WHERE google_sub = ? AND active = 1')
+    .bind(identity.sub).first();
+  if (!account || account.owner_email !== identity.email) return json({ error: 'Account not found' }, 404, headers);
+  if (pathname === '/api/site/account' && request.method === 'GET') {
+    return json({ ownerEmail: account.owner_email, agentEmail: account.agent_email,
+      deliveryReady: env.MAIL_DELIVERY_READY === 'true' }, 200, headers);
+  }
+  if (pathname === '/api/site/devices' && request.method === 'GET') {
+    return json(await accountDevices(env, account.id), 200, headers);
+  }
+  if (pathname === '/api/site/pairing-code' && request.method === 'POST') {
+    return json(await createPairingCode(env, account.id), 200, headers);
+  }
+  const revoke = pathname.match(/^\/api\/site\/devices\/([0-9a-f-]{36})\/revoke$/i);
+  if (revoke && request.method === 'POST') {
+    const result = await revokeAccountDevice(env, account.id, revoke[1]);
+    return result ? json(result, 200, headers) : json({ error: 'Device not found' }, 404, headers);
+  }
+  return json({ error: 'Not found' }, 404, headers);
+}
+
 async function runRow(env, runId, accountId) {
   const row = await env.DB.prepare(`SELECT j.id, j.state, j.attempts, j.created_at, j.result_key,
     t.subject, m.sender_email, o.state AS delivery_state
@@ -171,6 +221,10 @@ async function artifactResponse(env, accountId, row, artifactId, headers = {}) {
 
 export async function handleAccountRequest(request, env, { verifyIdentity = verifyGoogleCredential } = {}) {
   const { pathname } = new URL(request.url);
+  if (pathname.startsWith('/api/site/')) {
+    if (!env.DB) throw new Error('Account database is not configured');
+    return siteAccountRequest(request, env, pathname, verifyIdentity);
+  }
   const runId = pathname.match(/^\/runs\/([0-9a-f-]{36})$/i)?.[1];
   const receiptArtifact = pathname.match(/^\/runs\/([0-9a-f-]{36})\/artifacts\/([0-9a-f-]{36})$/i);
   const apiRunId = pathname.match(/^\/api\/runs\/([0-9a-f-]{36})$/i)?.[1];
@@ -228,9 +282,7 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
   }
   if (pathname === '/api/account/devices' && request.method === 'GET') {
     if (!account) return json({ error: 'Sign in required' }, 401);
-    const rows = await env.DB.prepare(`SELECT id, name, created_at, revoked_at FROM devices
-      WHERE account_id = ? ORDER BY created_at DESC`).bind(account.id).all();
-    return json({ devices: rows.results ?? rows });
+    return json(await accountDevices(env, account.id));
   }
   if (pathname === '/api/account/threads' && request.method === 'GET') {
     if (!account) return json({ error: 'Sign in required' }, 401);
@@ -294,16 +346,12 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
     return json({ revoked: true });
   }
   if (pathname === '/api/account/pairing-code') {
-    const code = `tm_pair_${randomBytes(20).toString('base64url')}`;
-    await env.DB.prepare("INSERT INTO pairing_codes (code_hash, account_id, expires_at) VALUES (?, ?, datetime('now', '+10 minutes'))")
-      .bind(hash(code), account.id).run();
-    return json({ code, expiresInSeconds: 600 });
+    return json(await createPairingCode(env, account.id));
   }
   const revoke = pathname.match(/^\/api\/account\/devices\/([0-9a-f-]{36})\/revoke$/i);
   if (revoke) {
-    const result = await env.DB.prepare('UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE id = ? AND account_id = ? AND revoked_at IS NULL')
-      .bind(revoke[1], account.id).run();
-    return (result.meta?.changes ?? result.changes) ? json({ revoked: true }) : json({ error: 'Device not found' }, 404);
+    const result = await revokeAccountDevice(env, account.id, revoke[1]);
+    return result ? json(result) : json({ error: 'Device not found' }, 404);
   }
   return new Response('Not found', { status: 404 });
 }

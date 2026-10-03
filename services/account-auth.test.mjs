@@ -181,6 +181,47 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.equal((await handleAccountRequest(request('/api/account/me', 'GET', undefined, cookie), env, options)).status, 401);
 });
 
+test('the private Site can show the owner account and manage only its paired devices', async () => {
+  const { env, sqlite } = bindings();
+  env.GOOGLE_CLIENT_ID = clientId;
+  env.SITE_ORIGIN = 'https://tagmails.chatgpt.site';
+  const options = { verifyIdentity: async (credential) => {
+    if (credential !== 'owner-token') throw new Error('Invalid credential');
+    return { sub: 'google-sub-1', email: 'owner@gmail.com' };
+  } };
+  const site = (path, method = 'GET', credential = 'owner-token', origin = env.SITE_ORIGIN) =>
+    new Request(`https://relay.test${path}`, { method,
+      headers: { Origin: origin, Authorization: `Bearer ${credential}` } });
+  assert.equal((await handleAccountRequest(site('/api/site/account', 'OPTIONS'), env, options)).status, 204);
+  assert.equal((await handleAccountRequest(site('/api/site/account', 'GET', 'bad-token'), env, options)).status, 401);
+  const wrongOrigin = await handleAccountRequest(site('/api/site/account', 'GET', 'owner-token', 'https://attacker.test'), env, options);
+  assert.equal(wrongOrigin.status, 403);
+  assert.equal(wrongOrigin.headers.get('access-control-allow-origin'), null);
+  const account = await handleAccountRequest(site('/api/site/account'), env, options);
+  assert.equal(account.headers.get('access-control-allow-origin'), env.SITE_ORIGIN);
+  assert.deepEqual(await account.json(), { ownerEmail: 'owner@gmail.com',
+    agentEmail: 'agent@wonder.test', deliveryReady: false });
+  assert.equal((await handleAccountRequest(site('/api/site/devices'), env, options)).status, 200);
+  const code = await (await handleAccountRequest(site('/api/site/pairing-code', 'POST'), env, options)).json();
+  assert.match(code.code, /^tm_pair_[A-Za-z0-9_-]{27}$/);
+  const token = `tm_dev_${randomBytes(32).toString('base64url')}`;
+  const paired = await handleAccountRequest(new Request('https://relay.test/api/device/pair', {
+    method: 'POST', body: JSON.stringify({ code: code.code, token, name: 'Site Mac' }),
+  }), env, options);
+  assert.equal(paired.status, 201);
+  const { deviceId } = await paired.json();
+  const listed = await (await handleAccountRequest(site('/api/site/devices'), env, options)).json();
+  assert.equal(listed.devices[0].id, deviceId);
+  assert.equal(sqlite.prepare('SELECT revoked_at FROM devices WHERE id = ?').get(deviceId).revoked_at, null);
+  assert.equal((await handleAccountRequest(site(`/api/site/devices/${deviceId}/revoke`, 'POST'), env, {
+    verifyIdentity: async () => ({ sub: 'another-sub', email: 'other@gmail.com' }),
+  })).status, 404);
+  assert.equal((await handleAccountRequest(site(`/api/site/devices/${deviceId}/revoke`, 'POST'), env, options)).status, 200);
+  assert.equal((await handleDeviceRequest(new Request('https://relay.test/api/device/claim', {
+    method: 'POST', headers: { Authorization: `Bearer ${token}` },
+  }), env)).status, 401);
+});
+
 test('only the signed-in owner grants and revokes a hidden participant on an existing thread', async () => {
   const { env, sqlite } = bindings();
   env.GOOGLE_CLIENT_ID = clientId;
