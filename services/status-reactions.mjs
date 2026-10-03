@@ -12,7 +12,7 @@ export async function sendNextStatusReaction(env, { send = sendRawResendEmail } 
       ORDER BY updated_at LIMIT 1) AND state = 'sending' RETURNING job_id, status`).bind().first();
   if (stale) return { state: 'uncertain', jobId: stale.job_id, status: stale.status };
   const row = await env.DB.prepare(`SELECT s.job_id, s.status, m.message_id, m.sender_email,
-      t.id AS thread_id, a.owner_email, a.agent_email
+      t.id AS thread_id, t.subject, a.owner_email, a.agent_email
     FROM status_reactions s JOIN jobs j ON j.id = s.job_id
     JOIN messages m ON m.id = j.message_id JOIN threads t ON t.id = j.thread_id
     JOIN accounts a ON a.id = t.account_id
@@ -46,7 +46,8 @@ export async function sendNextStatusReaction(env, { send = sendRawResendEmail } 
   }
   try {
     const message = buildStatusReaction({ jobId: row.job_id, status: row.status,
-      from: row.agent_email.toLowerCase(), to: sender, targetMessageId: row.message_id });
+      from: row.agent_email.toLowerCase(), to: sender, targetMessageId: row.message_id,
+      subject: row.subject });
     const sent = await send({ ...message, apiKey: env.RESEND_API_KEY });
     if (!sent?.accepted) throw new Error('SMTP did not confirm acceptance');
   } catch {
