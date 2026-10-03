@@ -302,6 +302,17 @@ test('a renewed claim stays assigned and a real Codex result is labeled honestly
   assert.throws(() => lab.renewClaim(claim.jobId, claim.claimId), /expired or been replaced/);
 });
 
+test('a real Claude result keeps its runtime label in the email thread', (t) => {
+  const { lab } = freshLab(t);
+  lab.send({ from: 'owner@gmail.com', subject: 'Local Claude read', body: 'Model: Claude\nRead the selected note.' });
+  const claim = lab.claimNext();
+  assert.equal(lab.completeClaim(claim.jobId, claim.claimId, {
+    runtime: 'claude-cli-readonly', state: 'completed', summary: 'Claude read the note.',
+  }).state, 'completed');
+  assert.equal(lab.state.jobs[0].runtime, 'claude-cli-readonly');
+  assert.match(lab.state.threads[0].messages.at(-1).text, /Claude CLI completed locally in read-only mode/);
+});
+
 test('the real-run worker can claim only the selected queued job', (t) => {
   const { lab } = freshLab(t);
   const first = lab.send({ from: 'owner@gmail.com', subject: 'First', body: 'First task.' });

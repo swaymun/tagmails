@@ -99,9 +99,15 @@ fn mock_result(claim: &Value, attachment_evidence: Vec<String>) -> Value {
     })
 }
 
-fn codex_result(claim: &Value, base: &str) -> Result<Value, Box<dyn Error>> {
-    let runner =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/mock-inbox/codex-runner.mjs");
+fn agent_result(claim: &Value, base: &str, runtime: &str) -> Result<Value, Box<dyn Error>> {
+    let file = match runtime {
+        "codex-readonly" => "codex-runner.mjs",
+        "claude-readonly" => "claude-runner.mjs",
+        _ => return Err("Unsupported local agent runtime".into()),
+    };
+    let runner = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../apps/mock-inbox")
+        .join(file);
     let mut child = Command::new("node")
         .arg(runner)
         .env("TAGMAILS_LAB_URL", base)
@@ -116,7 +122,7 @@ fn codex_result(claim: &Value, base: &str) -> Result<Value, Box<dyn Error>> {
         .write_all(claim.to_string().as_bytes())?;
     let output = child.wait_with_output()?;
     if !output.status.success() {
-        return Err("Codex adapter process failed".into());
+        return Err("Local agent adapter process failed".into());
     }
     let result: Value = serde_json::from_slice(&output.stdout)?;
     Ok(result)
@@ -130,12 +136,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let once = env::args().any(|arg| arg == "--once");
     let runtime = env::var("TAGMAILS_RUNTIME").unwrap_or_else(|_| "mock".into());
-    if runtime != "mock" && runtime != "codex-readonly" {
-        return Err("TAGMAILS_RUNTIME must be mock or codex-readonly".into());
+    if runtime != "mock" && runtime != "codex-readonly" && runtime != "claude-readonly" {
+        return Err("TAGMAILS_RUNTIME must be mock, codex-readonly, or claude-readonly".into());
     }
-    let selected_job = if runtime == "codex-readonly" {
+    let selected_job = if runtime != "mock" {
         if !once {
-            return Err("Codex read-only prototype requires --once".into());
+            return Err("Read-only agent prototypes require --once".into());
         }
         let job = env::var("TAGMAILS_JOB_ID")?;
         if !job.starts_with("job-")
@@ -157,12 +163,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     loop {
         match post(&client, &base, "/api/claim", json!({"jobId":selected_job})) {
             Ok(claim) if claim["claimed"] == true => {
-                let result = if runtime == "codex-readonly" {
-                    match codex_result(&claim, &base) {
+                let result = if runtime != "mock" {
+                    match agent_result(&claim, &base, &runtime) {
                         Ok(result) => result,
                         Err(error) => {
-                            eprintln!("Local Codex adapter failed: {error}");
-                            json!({"runtime":"codex-cli-readonly","state":"failed","summary":"The local Codex adapter could not complete this turn."})
+                            eprintln!("Local agent adapter failed: {error}");
+                            json!({"runtime":format!("{}-cli-readonly", runtime.split('-').next().unwrap_or("agent")),"state":"failed","summary":"The local agent adapter could not complete this turn."})
                         }
                     }
                 } else {

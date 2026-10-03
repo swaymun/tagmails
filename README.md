@@ -1,6 +1,6 @@
 # TagMails
 
-TagMails gives an existing local coding agent an email address. This repository currently contains the product plan and an **internal, synthetic Gmail-style test inbox**. By default it sends no email, invokes no model, changes no files on behalf of a message, and charges no money. An explicit one-job Codex read-only mode is available for local testing.
+TagMails gives an existing local coding agent an email address. This repository currently contains the product plan and an **internal, synthetic Gmail-style test inbox**. By default it sends no email, invokes no model, changes no files on behalf of a message, and charges no money. Explicit one-job Codex and Claude read-only modes are available for local testing.
 
 ## Run the internal inbox
 
@@ -46,12 +46,25 @@ The adapter accepts Luna and GPT-6.1 Sol routes, uses Codex's read-only sandbox,
 
 This mode cannot inspect attachments or change project files. It is a Codex CLI prototype; the planned app-server integration, runtime approval flow, and production workspace boundary are still outstanding. Do not point this prototype at a private workspace you would not want the locally signed-in Codex CLI to read.
 
+### Opt-in local Claude read-only run
+
+Use a signed-in Claude Code CLI and a scratch workspace. Queue an email with `Model: Claude`, copy its `job-...` ID, and run:
+
+```sh
+TAGMAILS_RUNTIME=claude-readonly \
+TAGMAILS_WORKSPACE=/absolute/path/to/scratch-workspace \
+TAGMAILS_JOB_ID=job-123 \
+cargo run -p tagmails-daemon -- --once
+```
+
+This route pins Claude Sonnet 5.5 Medium, limits the CLI to Read/Glob/Grep in restricted mode, disables local customizations, and asks the CLI to stop at a $0.25 list-equivalent budget per turn. That CLI budget is a gate between model requests, not a guaranteed billing ceiling. The adapter omits inherited API keys, saves a Claude session ID per email thread in ignored `.local/claude-sessions.json`, renews its claim, and caches completed results for retry. A two-turn live scratch-thread test read a note, then recalled its codename and status from the resumed conversation without rereading the file. No real email was sent. Attachments, write approvals, production workspace isolation, and measured subscription/API billing remain to be built.
+
 ```sh
 npm test
 ```
 
-The tests cover durable offline mail, a six-message owner/participant/agent thread across a restart, per-turn model selection, duplicate IDs, To/Cc/Bcc access and Bcc privacy, revocation, Gmail reaction MIME, approval and failure states, HTML escaping, header injection, interrupted job recovery, claim renewal and selected-job claiming, a fake Codex CLI create/resume cycle, raw MIME, attachments, import limits, and a signed Resend event with retrieved raw email.
+The tests cover durable offline mail, a six-message owner/participant/agent thread across a restart, per-turn model selection, duplicate IDs, To/Cc/Bcc access and Bcc privacy, revocation, Gmail reaction MIME, approval and failure states, HTML escaping, header injection, interrupted job recovery, claim renewal and selected-job claiming, fake Codex and Claude CLI create/resume cycles, raw MIME, attachments, import limits, and a signed Resend event with retrieved raw email.
 
 ## Current scope
 
-The lab uses deterministic mock runners by default. The opt-in Codex CLI adapter completed an isolated new and resumed Luna turn, then a three-turn synthetic inbox thread through the Rust worker. A Resend intake module verifies webhook signatures, fetches provider-matched raw MIME, checks DMARC, and refuses to infer hidden Bcc guests; it is not connected to an account or public endpoint. Claude CLI resumed work stopped at its budget gate before replying; details are in [PLAN.md](PLAN.md). A production Codex app-server adapter, Claude adapter, production Rust daemon, hosted relay, Google sign-in, payment ledger, real delivery, and artifact storage remain. TagMails is the selected public brand; `tagmails.com` has not been purchased or verified for use.
+The lab uses deterministic mock runners by default. Opt-in Codex and Claude CLI adapters each completed a local multi-turn scratch-thread run through the Rust worker. An earlier Claude CLI probe hit its budget gate; the later restricted, short-system-prompt route completed both turns. A Resend intake module verifies webhook signatures, fetches provider-matched raw MIME, checks DMARC, and refuses to infer hidden Bcc guests; it is not connected to an account or public endpoint. Production runtime adapters with approvals, a production Rust daemon, hosted relay, Google sign-in, payment ledger, real delivery, and artifact storage remain. TagMails is the selected public brand; `tagmails.com` has not been purchased or verified for use.

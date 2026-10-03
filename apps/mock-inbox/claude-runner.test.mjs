@@ -1,0 +1,67 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { runClaim } from './claude-runner.mjs';
+
+function claim(jobId, body = 'Summarize this workspace.') {
+  return {
+    claimed: true, jobId, claimId: `claim-${jobId}`, threadId: 'thread-1',
+    model: { id: 'claude-sonnet-5-5', effort: 'medium' },
+    request: { from: 'owner@gmail.com', subject: 'Workspace summary', body, attachments: [] },
+  };
+}
+
+test('Claude read-only adapter resumes only its saved thread and caches completed jobs', async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'tagmails-claude-test-'));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const fakeBin = path.join(workspace, 'fake-claude');
+  fs.writeFileSync(fakeBin, `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+let prompt = '';
+process.stdin.on('data', chunk => { prompt += chunk; });
+process.stdin.on('end', () => {
+  fs.appendFileSync(path.join(process.cwd(), 'calls.jsonl'), JSON.stringify({ args, prompt, hadApiKey: Boolean(process.env.ANTHROPIC_API_KEY) }) + '\\n');
+  const resumed = args.includes('--resume');
+  process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false,
+    session_id: '33333333-3333-4333-8333-333333333333', result: resumed ? 'Second turn.' : 'First turn.' }));
+});
+`, { mode: 0o755 });
+  const keys = ['TAGMAILS_WORKSPACE', 'TAGMAILS_CLAUDE_SESSION_FILE', 'TAGMAILS_CLAUDE_BIN', 'ANTHROPIC_API_KEY'];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  Object.assign(process.env, {
+    TAGMAILS_WORKSPACE: workspace,
+    TAGMAILS_CLAUDE_SESSION_FILE: path.join(workspace, 'sessions.json'),
+    TAGMAILS_CLAUDE_BIN: fakeBin,
+    ANTHROPIC_API_KEY: 'FAKE_TEST_KEY',
+  });
+  t.after(() => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  const first = await runClaim(claim('job-1'));
+  assert.equal(first.state, 'completed');
+  assert.deepEqual(await runClaim(claim('job-1')), first);
+  const second = await runClaim(claim('job-2', 'Continue the summary.'));
+  assert.equal(second.state, 'completed');
+  assert.match(second.summary, /Second turn/);
+  const calls = fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(calls.length, 2);
+  assert.ok(calls[0].args.includes('--restricted'));
+  assert.ok(calls[0].args.includes('--safe-mode'));
+  assert.ok(calls[0].args.includes('Read,Glob,Grep'));
+  assert.ok(!calls[0].args.includes('--resume'));
+  assert.ok(calls[1].args.includes('33333333-3333-4333-8333-333333333333'));
+  assert.ok(calls[1].prompt.includes('Continue the summary.'));
+  assert.equal(calls[0].hadApiKey, false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(workspace, 'sessions.json'))).threads['thread-1'].workspace, workspace);
+
+  assert.equal((await runClaim({ ...claim('job-3'), model: { id: 'claude-opus-5-5', effort: 'medium' } })).state, 'failed');
+  assert.equal(fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').length, 2);
+});

@@ -61,10 +61,11 @@ function tracePage(id) {
   const thread = lab.state.threads.find((item) => item.id === job.threadId);
   const events = lab.state.events.filter((item) => item.jobId === id).slice().reverse();
   const rows = events.map((item) => `<li><time>${escapeHtml(item.at)}</time><strong>${escapeHtml(item.type)}</strong><span>${escapeHtml(item.description)}</span></li>`).join('');
-  const realCodex = job.runtime === 'codex-cli-readonly';
-  const label = realCodex ? 'Local Codex run' : 'Simulated run';
-  const notice = realCodex
-    ? `${job.state === 'completed' ? 'Codex CLI completed in read-only mode against the selected local workspace.' : 'The local Codex route did not complete.'} This fixture did not use a real email provider.`
+  const realAgent = ['codex-cli-readonly', 'claude-cli-readonly'].includes(job.runtime);
+  const agent = job.runtime === 'claude-cli-readonly' ? 'Claude' : 'Codex';
+  const label = realAgent ? `Local ${agent} run` : 'Simulated run';
+  const notice = realAgent
+    ? `${job.state === 'completed' ? `${agent} CLI completed in read-only mode against the selected local workspace.` : `The local ${agent} route did not complete.`} This fixture did not use a real email provider.`
     : 'This is an internal fixture. No model ran, no code changed, and no external action occurred.';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${label} · ${escapeHtml(id)}</title><style>body{font:16px/1.6 Arial,sans-serif;color:#202124;max-width:760px;margin:48px auto;padding:0 24px}a{color:#1a73e8}h1{font-size:28px}small{color:#5f6368}ul{list-style:none;padding:0}li{display:grid;grid-template-columns:180px 110px 1fr;gap:12px;padding:12px 0;border-bottom:1px solid #dadce0}time{font-size:12px;color:#5f6368}.notice{background:#fef7e0;padding:14px 18px;border-radius:8px}@media(max-width:650px){li{grid-template-columns:1fr;gap:0}}</style></head><body><a href="/">← Back to inbox</a><h1>${label}</h1><p class="notice">${notice}</p><p><strong>Thread:</strong> ${escapeHtml(thread.subject)}<br><strong>Route:</strong> ${escapeHtml(job.model.id ?? 'unresolved')} ${escapeHtml(job.model.effort ?? '')}<br><strong>Status:</strong> ${escapeHtml(job.state)}</p><h2>Events</h2><ul>${rows}</ul><small>Local test data, visible only on this computer.</small></body></html>`;
 }
