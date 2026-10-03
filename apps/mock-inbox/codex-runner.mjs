@@ -3,12 +3,14 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stageAgentAttachments } from './agent-attachments.mjs';
 import { renewClaim } from './claim-renew.mjs';
 
 const MODELS = new Set(['gpt-6-luna', 'gpt-6.1-sol']);
 const RUNTIME = 'codex-cli-readonly';
 const MAX_EVENTS = 2 * 1024 * 1024;
 const MAX_ANSWER = 5000;
+const MAX_CLAIM = 8 * 1024 * 1024;
 
 function fail(summary) {
   return { runtime: RUNTIME, state: 'failed', summary, checks: ['No file changes were allowed by the read-only Codex sandbox.'] };
@@ -18,7 +20,7 @@ async function readClaim() {
   let input = '';
   for await (const chunk of process.stdin) {
     input += chunk;
-    if (input.length > 128_000) throw new Error('Claim is too large');
+    if (input.length > MAX_CLAIM) throw new Error('Claim is too large');
   }
   return JSON.parse(input);
 }
@@ -41,7 +43,7 @@ async function saveStore(file, value) {
   await fs.rename(temporary, file);
 }
 
-export function promptFor(claim) {
+export function promptFor(claim, attachmentPrompt = '') {
   const request = claim.request;
   return [
     'You are handling an email sent to TagMails in a read-only local prototype.',
@@ -54,6 +56,7 @@ export function promptFor(claim) {
     `Subject: ${request.subject}`,
     '',
     request.body,
+    ...(attachmentPrompt ? ['', attachmentPrompt] : []),
   ].join('\n');
 }
 
@@ -90,7 +93,7 @@ function codexEnvironment() {
   return Object.fromEntries(allowed.filter((key) => process.env[key]).map((key) => [key, process.env[key]]));
 }
 
-async function runCodex(claim, workspace, sessionId) {
+async function runCodex(claim, workspace, sessionId, staged) {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'tagmails-codex-'));
   const answerFile = path.join(temporary, 'answer.txt');
   const model = claim.model.id;
@@ -105,7 +108,7 @@ async function runCodex(claim, workspace, sessionId) {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   child.stdin.on('error', () => {});
-  child.stdin.end(promptFor(claim));
+  child.stdin.end(promptFor(claim, staged.prompt));
 
   let output = '';
   let outputExceeded = false;
@@ -159,7 +162,6 @@ export async function runClaim(claim) {
   if (!claim?.claimed || !/^[a-z0-9-]+$/.test(claim.jobId || '') || !/^[a-z0-9-]+$/.test(claim.threadId || '')) throw new Error('Invalid local claim');
   if (claim.model?.error) return { state: 'needs_clarification', summary: claim.model.error, runtime: RUNTIME };
   if (!MODELS.has(claim.model?.id) || !['low', 'medium'].includes(claim.model?.effort)) return fail('This prototype can run Codex Luna or Sol only.');
-  if (claim.request?.attachments?.length) return fail('The read-only Codex prototype cannot inspect attached files yet.');
   const workspace = process.env.TAGMAILS_WORKSPACE;
   if (!workspace || !path.isAbsolute(workspace) || !(await fs.stat(workspace)).isDirectory()) throw new Error('Select an absolute TAGMAILS_WORKSPACE directory');
   const storeFile = process.env.TAGMAILS_SESSION_FILE || path.resolve('.local/codex-sessions.json');
@@ -167,13 +169,18 @@ export async function runClaim(claim) {
   if (store.jobs[claim.jobId]) return store.jobs[claim.jobId];
   const existing = store.threads[claim.threadId];
   if (existing && existing.workspace !== workspace) return fail('This email thread was paired with a different workspace.');
-  const { result, threadId } = await runCodex(claim, workspace, existing?.sessionId);
-  if (result.state === 'completed') {
-    store.threads[claim.threadId] = { sessionId: threadId, workspace };
-    store.jobs[claim.jobId] = result;
-    await saveStore(storeFile, store);
+  const staged = await stageAgentAttachments(claim.request.attachments);
+  try {
+    const { result, threadId } = await runCodex(claim, workspace, existing?.sessionId, staged);
+    if (result.state === 'completed') {
+      store.threads[claim.threadId] = { sessionId: threadId, workspace };
+      store.jobs[claim.jobId] = result;
+      await saveStore(storeFile, store);
+    }
+    return result;
+  } finally {
+    await staged.cleanup();
   }
-  return result;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

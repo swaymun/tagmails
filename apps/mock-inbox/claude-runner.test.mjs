@@ -24,7 +24,10 @@ const args = process.argv.slice(2);
 let prompt = '';
 process.stdin.on('data', chunk => { prompt += chunk; });
 process.stdin.on('end', () => {
-  fs.appendFileSync(path.join(process.cwd(), 'calls.jsonl'), JSON.stringify({ args, prompt, hadApiKey: Boolean(process.env.ANTHROPIC_API_KEY) }) + '\\n');
+  const attachmentLine = prompt.split(String.fromCharCode(10)).find(line => line.startsWith('1. /'));
+  const attachment = attachmentLine?.split(' (')[0].slice(3);
+  const attachmentText = attachment ? fs.readFileSync(attachment, 'utf8') : null;
+  fs.appendFileSync(path.join(process.cwd(), 'calls.jsonl'), JSON.stringify({ args, prompt, attachment, attachmentText, hadApiKey: Boolean(process.env.ANTHROPIC_API_KEY) }) + '\\n');
   const resumed = args.includes('--resume');
   const budgetFail = prompt.includes('[budget-fail]');
   process.stdout.write(JSON.stringify({ type: 'result', subtype: budgetFail ? 'error_max_budget_usd' : 'success', is_error: budgetFail,
@@ -50,7 +53,10 @@ process.stdin.on('end', () => {
     }
   });
 
-  const first = await runClaim(claim('job-1'));
+  const attached = claim('job-1');
+  attached.request.attachments = [{ name: 'note.txt', mimeType: 'text/plain', size: 17,
+    data: Buffer.from('Claude test note.').toString('base64') }];
+  const first = await runClaim(attached);
   assert.equal(first.state, 'completed');
   assert.deepEqual(first.usage, { inputTokens: 305, cachedInputTokens: 100,
     cacheCreationInputTokens: 200, outputTokens: 32, reasoningOutputTokens: 4 });
@@ -64,6 +70,9 @@ process.stdin.on('end', () => {
   assert.ok(calls[0].args.includes('--restricted'));
   assert.ok(calls[0].args.includes('--safe-mode'));
   assert.ok(calls[0].args.includes('Read,Glob,Grep'));
+  assert.equal(calls[0].attachmentText, 'Claude test note.');
+  assert.equal(calls[0].args[calls[0].args.indexOf('--add-dir') + 1], path.dirname(calls[0].attachment));
+  assert.equal(fs.existsSync(calls[0].attachment), false);
   assert.ok(!calls[0].args.includes('--resume'));
   assert.ok(calls[1].args.includes('33333333-3333-4333-8333-333333333333'));
   assert.ok(calls[1].prompt.includes('Continue the summary.'));

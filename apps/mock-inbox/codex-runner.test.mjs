@@ -28,7 +28,10 @@ process.stdin.on('end', () => {
   const resumed = args.includes('resume');
   const output = args[args.indexOf('-o') + 1];
   const id = '11111111-1111-4111-8111-111111111111';
-  fs.appendFileSync(path.join(process.cwd(), 'calls.jsonl'), JSON.stringify({ args, prompt, hadApiKey: Boolean(process.env.OPENAI_API_KEY) }) + '\\n');
+  const attachmentLine = prompt.split(String.fromCharCode(10)).find(line => line.startsWith('1. /'));
+  const attachment = attachmentLine?.split(' (')[0].slice(3);
+  const attachmentText = attachment ? fs.readFileSync(attachment, 'utf8') : null;
+  fs.appendFileSync(path.join(process.cwd(), 'calls.jsonl'), JSON.stringify({ args, prompt, attachment, attachmentText, hadApiKey: Boolean(process.env.OPENAI_API_KEY) }) + '\\n');
   fs.writeFileSync(output, resumed ? 'First turn plus second turn.' : 'First turn.');
   process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: id }) + '\\n');
   process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1200,
@@ -48,7 +51,10 @@ process.stdin.on('end', () => {
     }
   });
 
-  const first = await runClaim(claim('job-1', 'thread-1'));
+  const attached = claim('job-1', 'thread-1');
+  attached.request.attachments = [{ name: 'note.txt', mimeType: 'text/plain', size: 16,
+    data: Buffer.from('Agent test note.').toString('base64') }];
+  const first = await runClaim(attached);
   assert.equal(first.state, 'completed');
   assert.match(first.summary, /First turn/);
   assert.deepEqual(first.usage, { inputTokens: 1200, cachedInputTokens: 300,
@@ -62,6 +68,8 @@ process.stdin.on('end', () => {
   assert.equal(calls.length, 2);
   assert.ok(calls[0].args.includes('read-only'));
   assert.ok(calls[0].args.includes(workspace));
+  assert.equal(calls[0].attachmentText, 'Agent test note.');
+  assert.equal(fs.existsSync(calls[0].attachment), false);
   assert.ok(calls[1].args.includes('resume'));
   assert.ok(calls[1].args.includes('sandbox_mode="read-only"'));
   assert.ok(calls[1].args.includes('11111111-1111-4111-8111-111111111111'));
