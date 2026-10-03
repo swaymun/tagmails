@@ -4,13 +4,14 @@ import { bindings } from './bindings-fixture.mjs';
 import { reconcileOneUnknownOutbox, sendNextOutbox } from './outbox.mjs';
 import { handleInbound } from './relay-worker.mjs';
 
-function queuedTurn({ env, sqlite }, { number, from, to, cc = [], references = [], accountId = 'account-1', threadId = 'thread-1', jobId = `job-${number}`, model = null }) {
+function queuedTurn({ env, sqlite }, { number, from, to, cc = [], inReplyTo = null, references = [], accountId = 'account-1', threadId = 'thread-1', jobId = `job-${number}`, model = null }) {
   const id = `inbound-${number}`;
   const messageId = `<inbound-${number}@gmail.com>`;
   const raw = [
     `From: ${from}`, `To: ${to.join(', ')}`,
     ...(cc.length ? [`Cc: ${cc.join(', ')}`] : []),
     'Subject: Shared work', `Message-ID: ${messageId}`,
+    ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`] : []),
     ...(references.length ? [`References: ${references.join(' ')}`] : []),
     'Content-Type: text/plain; charset=utf-8', '', 'Please review this.',
   ].join('\r\n');
@@ -77,6 +78,7 @@ test('two sent turns preserve threading and only visible recipients may react', 
 
   await queuedTurn(fixture, { number: 2, from: 'reviewer@gmail.com',
     to: ['agent@wonder.test', 'owner@gmail.com'], cc: ['stranger@gmail.com'],
+    inReplyTo: '<sent-1@tagmails.test>',
     references: ['<inbound-1@gmail.com>', '<sent-1@tagmails.test>'] });
   assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
   assert.deepEqual(payloads[1].payload.to, ['reviewer@gmail.com']);

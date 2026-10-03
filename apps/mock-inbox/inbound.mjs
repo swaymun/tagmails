@@ -63,6 +63,13 @@ export async function parseInbound(raw, agentAddress = 'agent@wonder.test', {
   const body = (email.text?.trim() || (email.html ? convert(email.html, { wordwrap: false }).trim() : ''));
   if (!body) throw new Error('The email has no readable text');
   if (email.attachments.length > MAX_ATTACHMENTS) throw new Error('The email has too many attachments for this lab');
+  const directParents = [...String(email.inReplyTo || '').matchAll(MESSAGE_IDS)].map((match) => match[0]);
+  const directSet = new Set(directParents);
+  const parentIds = [...new Set([
+    ...[...String(email.references || '').matchAll(MESSAGE_IDS)].map((match) => match[0])
+      .filter((id) => !directSet.has(id)),
+    ...directParents,
+  ])];
 
   let total = 0;
   const attachments = email.attachments.map((attachment, index) => {
@@ -86,7 +93,7 @@ export async function parseInbound(raw, agentAddress = 'agent@wonder.test', {
     subject: email.subject || '(no subject)',
     body,
     messageId: email.messageId,
-    parentIds: [...String(email.inReplyTo || '').matchAll(MESSAGE_IDS), ...String(email.references || '').matchAll(MESSAGE_IDS)].map((match) => match[0]),
+    parentIds,
     attachments,
   };
 }
