@@ -70,7 +70,21 @@ TAGMAILS_WORKSPACE=/absolute/path/to/selected-workspace \
 cargo run -p tagmails-daemon -- --watch
 ```
 
-The continuous loop was exercised against a local no-job relay. Launch at login, workspace selection in account setup, and a live queued agent turn through this mode are still pending.
+The continuous loop was exercised against a local no-job relay. A macOS LaunchAgent installer is available, but it has only been checked in preview mode; no device has been left running at login. Workspace selection in account setup and a live queued agent turn through this mode are still pending.
+
+For a paired device on macOS, build the daemon and preview the login agent before installing it. The installer checks the relay URL, existing absolute workspace, executable, and owner-only token file. It saves a user LaunchAgent with the selected workspace, current CLI `PATH`, and separate logs. The agent runs the read-only Codex or Claude adapters and watches for queued relay jobs. This prototype depends on the checkout and CLI paths remaining available after login.
+
+```sh
+cargo build --release -p tagmails-daemon
+node scripts/install-macos-launchagent.mjs \
+  --relay https://your-relay.example \
+  --workspace /absolute/path/to/selected-workspace \
+  --token-file "$HOME/.config/tagmails/device-token" \
+  --print > /tmp/tagmails-launchagent-preview.plist
+plutil -lint /tmp/tagmails-launchagent-preview.plist
+```
+
+Run the same `node scripts/install-macos-launchagent.mjs` command without `--print` or the output redirection to register and start it. The installer refuses to replace an existing TagMails LaunchAgent. To stop it, run `launchctl bootout gui/$(id -u) "$HOME/Library/LaunchAgents/com.tagmails.daemon.plist"`; remove that plist only if you want to disable launch at login. Revoking the paired device in the account page also prevents new relay claims.
 
 An isolated local Wrangler run exercised D1 and R2 through the Worker, then Rust claimed a second job and submitted a result through a fake Codex executable. The first fake script failed because Node treated it as an ES module; the Worker recorded that failed result, and Rust's status output was corrected. After fixing the fixture and retrying locally, D1 showed a completed job on attempt two and R2 contained the fake Codex result. This verifies the relay protocol and retry path, not a real model or email delivery.
 
