@@ -324,7 +324,7 @@ ${run.selectedModel ? `<span><strong>Model route</strong>${escapeHtml(run.select
 <span><strong>Attempts</strong>${escapeHtml(run.attempts)}</span><span><strong>Provider send</strong>${escapeHtml(run.delivery_state ?? 'Not queued')}</span></div></section>
 ${run.artifacts?.length ? `<section class="card"><h2>Files</h2><ul>${run.artifacts.map((file) => `<li><a href="/runs/${escapeHtml(run.id)}/artifacts/${escapeHtml(file.id)}">${escapeHtml(file.name)}</a> (${escapeHtml((file.byte_size / 1_000_000).toFixed(1))} MB)</li>`).join('')}</ul><p class="muted">Files expire seven days after upload.</p></section>` : ''}
 <section class="card"><h2>Run transcript</h2>
-${transcript ? transcript.events.map((event) => `<div class="event ${event.kind === 'tool' ? 'tool' : ''}"><strong>${escapeHtml(event.kind === 'request' ? 'Email request' : event.kind === 'tool' ? 'Tool step' : 'Agent')}</strong><p>${escapeHtml(event.text)}</p></div>`).join('') : '<p class="muted">A transcript was not recorded for this run.</p>'}
+${transcript ? transcript.events.map((event) => `<div class="event ${event.kind === 'tool' ? 'tool' : ''}"><strong>${escapeHtml(event.kind === 'request' ? 'Email request' : event.kind === 'tool' ? 'Tool step' : event.phase === 'commentary' ? 'Agent update' : event.phase === 'final_answer' ? 'Agent answer' : 'Agent')}</strong><p>${escapeHtml(event.text)}</p></div>`).join('') : '<p class="muted">A transcript was not recorded for this run.</p>'}
 ${transcript?.truncated ? '<p class="muted">Long content and later steps were shortened to fit this receipt.</p>' : ''}
 <p class="muted">Private reasoning, setup prompts, and raw tool output are excluded.</p></section>
 </main></body></html>`;

@@ -297,7 +297,8 @@ test('the owner can page through one email thread without exposing private resul
   await env.MAIL.put('results/last.json', JSON.stringify({ summary: 'The last answer.',
     artifactIds: ['private-file'], usage: { inputTokens: 999 },
     transcript: { version: 1, truncated: false, events: [
-      { kind: 'request', text: 'What changed?' }, { kind: 'assistant', text: 'The last answer.' },
+      { kind: 'request', text: 'What changed?' },
+      { kind: 'assistant', phase: 'final_answer', text: 'The last answer.' },
     ] } }));
   const route = (suffix = '', verifyIdentity = async () => ({ sub: 'google-sub-1', email: 'owner@gmail.com' })) =>
     handleAccountRequest(new Request(`https://relay.test/api/site/threads/${threadId}/transcript${suffix}`, {
@@ -310,6 +311,7 @@ test('the owner can page through one email thread without exposing private resul
   assert.equal(first.runs.at(-1).id, id(22));
   assert.equal(first.nextBefore, id(3));
   assert.equal(first.runs.at(-1).transcript.events[1].text, 'The last answer.');
+  assert.equal(first.runs.at(-1).transcript.events[1].phase, 'final_answer');
   assert.doesNotMatch(JSON.stringify(first), /private-file|inputTokens/);
   const older = await (await route(`?before=${first.nextBefore}`)).json();
   assert.deepEqual(older.runs.map((run) => run.id), [id(1), id(2)]);

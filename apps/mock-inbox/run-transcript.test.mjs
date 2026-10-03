@@ -7,6 +7,7 @@ test('the linked transcript retains a long final answer beyond the email summary
   assert.ok(answer.length > 5000 && answer.length < 8000);
   const transcript = finishRunTranscript(runTranscript({ body: 'Summarize the report.' }), answer);
   assert.equal(transcript.events.at(-1).text, answer);
+  assert.equal(transcript.events.at(-1).phase, 'final_answer');
   assert.equal(transcript.truncated, false);
 });
 
@@ -17,6 +18,7 @@ test('a streamed final answer is replaced with its longer result copy', () => {
   finishRunTranscript(transcript, answer);
   assert.deepEqual(transcript.events.map((event) => event.kind), ['request', 'assistant']);
   assert.equal(transcript.events.at(-1).text, answer);
+  assert.equal(transcript.events.at(-1).phase, 'final_answer');
   assert.equal(transcript.truncated, false);
 });
 

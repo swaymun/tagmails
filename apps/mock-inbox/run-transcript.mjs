@@ -5,14 +5,14 @@ const MAX_INTERMEDIATE_BYTES = 22_000;
 const MAX_TRANSCRIPT_BYTES = 34_000;
 const truncationBefore = new WeakMap();
 
-function fitText(events, kind, value, characterLimit, byteLimit) {
+function fitText(events, item, value, characterLimit, byteLimit) {
   const clean = value.trim().slice(0, characterLimit);
   let low = 0;
   let high = clean.length;
   while (low < high) {
     const middle = Math.ceil((low + high) / 2);
     const candidate = clean.slice(0, middle).replace(/[\uD800-\uDBFF]$/, '');
-    const bytes = Buffer.byteLength(JSON.stringify([...events, { kind, text: candidate }]));
+    const bytes = Buffer.byteLength(JSON.stringify([...events, { ...item, text: candidate }]));
     if (bytes <= byteLimit) low = middle;
     else high = middle - 1;
   }
@@ -29,9 +29,10 @@ export function addRunEvent(transcript, kind, value) {
   if (!['request', 'assistant', 'tool'].includes(kind)) return;
   if (typeof value !== 'string' || !value.trim()) return;
   if (transcript.events.length >= MAX_EVENTS - 1) { transcript.truncated = true; return; }
-  const clean = fitText(transcript.events, kind, value, MAX_TEXT, MAX_INTERMEDIATE_BYTES);
+  const item = kind === 'assistant' ? { kind, phase: 'commentary' } : { kind };
+  const clean = fitText(transcript.events, item, value, MAX_TEXT, MAX_INTERMEDIATE_BYTES);
   if (clean) {
-    const event = { kind, text: clean };
+    const event = { ...item, text: clean };
     truncationBefore.set(event, transcript.truncated);
     transcript.events.push(event);
   }
@@ -49,8 +50,9 @@ export function finishRunTranscript(transcript, answer) {
     transcript.events.pop();
     transcript.truncated = truncationBefore.get(last) ?? transcript.truncated;
   }
-  const clean = fitText(transcript.events, 'assistant', original, MAX_FINAL_TEXT, MAX_TRANSCRIPT_BYTES);
-  if (clean && transcript.events.length < MAX_EVENTS) transcript.events.push({ kind: 'assistant', text: clean });
+  const item = { kind: 'assistant', phase: 'final_answer' };
+  const clean = fitText(transcript.events, item, original, MAX_FINAL_TEXT, MAX_TRANSCRIPT_BYTES);
+  if (clean && transcript.events.length < MAX_EVENTS) transcript.events.push({ ...item, text: clean });
   if (clean.length < original.length || !clean) transcript.truncated = true;
   return transcript;
 }

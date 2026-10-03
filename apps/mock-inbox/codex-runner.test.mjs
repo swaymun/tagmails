@@ -119,8 +119,8 @@ test('Codex app-server resumes the restricted thread, reads an attachment, and c
   assert.deepEqual(first.transcript.events, [
     { kind: 'request', text: 'Summarize this workspace.' },
     { kind: 'tool', text: 'Local command completed (exit 0).' },
-    { kind: 'assistant', text: 'Checking the workspace.' },
-    { kind: 'assistant', text: 'First turn.' },
+    { kind: 'assistant', phase: 'commentary', text: 'Checking the workspace.' },
+    { kind: 'assistant', phase: 'final_answer', text: 'First turn.' },
   ]);
   assert.doesNotMatch(JSON.stringify(first.transcript), /SECRET_REASONING|SECRET_FILE|secret\.txt/);
   assert.deepEqual(await runClaim(claim('job-1', 'thread-1')), first);
@@ -234,7 +234,7 @@ test('a failed Codex turn retains only the visible partial run transcript', asyn
   assert.deepEqual(result.transcript.events, [
     { kind: 'request', text: 'Summarize this workspace.' },
     { kind: 'tool', text: 'Local command completed (exit 0).' },
-    { kind: 'assistant', text: 'Checking the workspace.' },
+    { kind: 'assistant', phase: 'commentary', text: 'Checking the workspace.' },
   ]);
   assert.doesNotMatch(JSON.stringify(result.transcript), /SECRET_REASONING|SECRET_FILE|secret\.txt/);
 });

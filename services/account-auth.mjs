@@ -350,7 +350,10 @@ function visibleTranscript(value) {
   return { version: 1, truncated: value.truncated === true,
     events: value.events.slice(0, 48).flatMap((event) =>
       event && ['request', 'assistant', 'tool'].includes(event.kind) && typeof event.text === 'string'
-        ? [{ kind: event.kind, text: event.text.slice(0, event.kind === 'assistant' ? 8000 : 800) }]
+        ? [{ kind: event.kind,
+          ...(event.kind === 'assistant' && ['commentary', 'final_answer'].includes(event.phase)
+            ? { phase: event.phase } : {}),
+          text: event.text.slice(0, event.kind === 'assistant' && event.phase !== 'commentary' ? 8000 : 800) }]
         : []) };
 }
 

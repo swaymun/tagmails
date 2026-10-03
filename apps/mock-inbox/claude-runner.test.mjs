@@ -79,8 +79,8 @@ process.stdin.on('end', () => {
   assert.deepEqual(first.transcript.events, [
     { kind: 'request', text: 'Summarize this workspace.' },
     { kind: 'tool', text: 'Read requested.' },
-    { kind: 'assistant', text: 'Checking the workspace.' },
-    { kind: 'assistant', text: 'First turn.' },
+    { kind: 'assistant', phase: 'commentary', text: 'Checking the workspace.' },
+    { kind: 'assistant', phase: 'final_answer', text: 'First turn.' },
   ]);
   assert.doesNotMatch(JSON.stringify(first.transcript), /SECRET_REASONING|secret\.txt/);
   assert.deepEqual(await runClaim(claim('job-1')), first);
@@ -109,7 +109,7 @@ process.stdin.on('end', () => {
   assert.deepEqual(budgetFailure.transcript.events, [
     { kind: 'request', text: '[budget-fail]' },
     { kind: 'tool', text: 'Read requested.' },
-    { kind: 'assistant', text: 'Checking the workspace.' },
+    { kind: 'assistant', phase: 'commentary', text: 'Checking the workspace.' },
   ]);
   assert.doesNotMatch(JSON.stringify(budgetFailure.transcript), /SECRET_REASONING|secret\.txt/);
   assert.deepEqual(await runClaim(claim('job-3', '[budget-fail]')), budgetFailure);

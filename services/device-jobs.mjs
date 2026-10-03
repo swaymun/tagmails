@@ -173,8 +173,11 @@ function validResult(value) {
     (transcript === undefined || (transcript?.version === 1 && typeof transcript.truncated === 'boolean' &&
       Array.isArray(transcript.events) && transcript.events.length <= 48 &&
       transcript.events.every((event, index) => event && ['request', 'assistant', 'tool'].includes(event.kind) &&
+        (event.phase === undefined || (event.kind === 'assistant' &&
+          ['commentary', 'final_answer'].includes(event.phase))) &&
         typeof event.text === 'string' && event.text.length > 0 &&
-        event.text.length <= (index === transcript.events.length - 1 && event.kind === 'assistant' ? 8000 : 800)))) &&
+        event.text.length <= (index === transcript.events.length - 1 && event.kind === 'assistant' &&
+          event.phase !== 'commentary' ? 8000 : 800)))) &&
     (artifactIds === undefined || (Array.isArray(artifactIds) && artifactIds.length <= 5 &&
       artifactIds.every((id) => typeof id === 'string' && ARTIFACT_ID.test(id)) &&
       new Set(artifactIds).size === artifactIds.length)) &&
