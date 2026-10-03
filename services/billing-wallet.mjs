@@ -1,5 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { accountFor, sameOrigin } from './account-auth.mjs';
+import { reservePendingTestEmails, testBillingEnabled, testWalletSnapshot } from './email-charges.mjs';
 
 const TOP_UP_CENTS = 1000;
 const MAX_WEBHOOK_BYTES = 128_000;
@@ -7,12 +8,6 @@ const UUID = /^[0-9a-f-]{36}$/i;
 
 function json(value, status = 200) {
   return Response.json(value, { status, headers: { 'Cache-Control': 'no-store' } });
-}
-
-function enabled(env) {
-  return env.BILLING_TEST_MODE === 'true' &&
-    env.STRIPE_SECRET_KEY?.startsWith('sk_test_') &&
-    env.STRIPE_WEBHOOK_SECRET?.startsWith('whsec_');
 }
 
 function originFor(request, env) {
@@ -60,7 +55,7 @@ export function verifyStripeSignature(body, signature, secret, now = Date.now())
 async function createCheckout(request, env, account, stripeFetch) {
   if (!sameOrigin(request)) return json({ error: 'Invalid origin' }, 403);
   const origin = originFor(request, env);
-  if (!origin || !enabled(env)) return json({ error: 'Test checkout is not configured' }, 503);
+  if (!origin || !testBillingEnabled(env)) return json({ error: 'Test checkout is not configured' }, 503);
   const id = randomUUID();
   await env.DB.prepare('INSERT INTO billing_checkouts (id, account_id, amount_cents) VALUES (?, ?, ?)')
     .bind(id, account.id, TOP_UP_CENTS).run();
@@ -125,6 +120,7 @@ async function paidCheckout(env, session, stripeFetch) {
   ]);
   if (!(updated.meta?.changes ?? updated.changes)) return json({ error: 'Checkout identity mismatch' }, 409);
   await reconcileRefundsForPayment(env, session.payment_intent, stripeFetch);
+  await reservePendingTestEmails(env, row.account_id);
   return json({ received: true });
 }
 
@@ -184,7 +180,7 @@ async function reconcileRefundsForPayment(env, paymentIntent, stripeFetch = fetc
 }
 
 export async function reconcileDueRefunds(env, { stripeFetch = fetch } = {}) {
-  if (!enabled(env) || !env.DB) return;
+  if (!testBillingEnabled(env) || !env.DB) return;
   const rows = await env.DB.prepare(`SELECT refund_id FROM refund_notifications
     WHERE resolved_at IS NULL AND next_check_at <= CURRENT_TIMESTAMP ORDER BY next_check_at LIMIT 10`).bind().all();
   for (const row of rows.results ?? rows) {
@@ -194,7 +190,7 @@ export async function reconcileDueRefunds(env, { stripeFetch = fetch } = {}) {
 }
 
 async function stripeWebhook(request, env, now, stripeFetch) {
-  if (!enabled(env)) return json({ error: 'Test checkout is not configured' }, 503);
+  if (!testBillingEnabled(env)) return json({ error: 'Test checkout is not configured' }, 503);
   let raw;
   try { raw = await boundedBody(request); }
   catch { return json({ error: 'Invalid webhook body' }, 413); }
@@ -232,9 +228,9 @@ export async function handleTestWalletRequest(request, env, { stripeFetch = fetc
   const account = await accountFor(request, env);
   if (!account) return json({ error: 'Sign in required' }, 401);
   if (pathname === '/api/billing' && request.method === 'GET') {
-    const row = await env.DB.prepare('SELECT COALESCE(SUM(amount_cents), 0) AS balance FROM credit_ledger WHERE account_id = ?')
-      .bind(account.id).first();
-    return json({ balanceCents: row.balance, currency: 'usd', testMode: true, checkoutEnabled: Boolean(enabled(env) && originFor(request, env)) });
+    const snapshot = await testWalletSnapshot(env, account.id);
+    return json({ ...snapshot, waitingEmails: testBillingEnabled(env) ? snapshot.waitingEmails : 0,
+      currency: 'usd', testMode: true, checkoutEnabled: Boolean(testBillingEnabled(env) && originFor(request, env)) });
   }
   if (pathname === '/api/billing/checkout' && request.method === 'POST') return createCheckout(request, env, account, stripeFetch);
   return new Response('Not found', { status: 404 });

@@ -6,6 +6,8 @@ import { sendNextOutbox } from './outbox.mjs';
 import { handleAccountRequest } from './account-auth.mjs';
 import { accountPage } from './account-page.mjs';
 import { handleTestWalletRequest, reconcileDueRefunds } from './billing-wallet.mjs';
+import { fundPendingTestEmails, reconcileTestEmailCharges, reservePendingTestEmails,
+  testBillingEnabled } from './email-charges.mjs';
 
 const MAX_WEBHOOK_BYTES = 128_000;
 
@@ -123,7 +125,13 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
   if (!account) return Response.json({ accepted: false });
   const duplicate = await env.DB.prepare('SELECT id FROM messages WHERE account_id = ? AND (provider_email_id = ? OR message_id = ?) LIMIT 1')
     .bind(account.id, message.providerEmailId, message.messageId).first();
-  if (duplicate) return Response.json({ accepted: true, duplicate: true });
+  if (duplicate) {
+    if (testBillingEnabled(env)) {
+      try { await reservePendingTestEmails(env, account.id); }
+      catch (error) { console.error('Test email reservation failed', error); }
+    }
+    return Response.json({ accepted: true, duplicate: true });
+  }
   if (message.reaction) return recordReaction(env, account, message);
 
   const ownerEmail = account.owner_email.toLowerCase();
@@ -150,8 +158,9 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
     statements.push(env.DB.prepare(`INSERT INTO participants (thread_id, email) VALUES (?, ?)
       ON CONFLICT(thread_id, email) DO UPDATE SET revoked_at = NULL`).bind(newThreadId, guest));
   }
+  const jobId = randomUUID();
   statements.push(env.DB.prepare("INSERT INTO jobs (id, thread_id, message_id, state) VALUES (?, ?, ?, 'queued')")
-    .bind(randomUUID(), newThreadId, id));
+    .bind(jobId, newThreadId, id));
   try {
     await env.DB.batch(statements);
   } catch (error) {
@@ -160,6 +169,13 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
       .bind(account.id, message.providerEmailId, message.messageId).first();
     if (raced) return Response.json({ accepted: true, duplicate: true });
     throw error;
+  }
+  if (testBillingEnabled(env)) {
+    try { await reservePendingTestEmails(env, account.id); }
+    catch { console.error('Test email credit reservation is delayed'); }
+    const charge = await env.DB.prepare('SELECT job_id FROM test_email_charges WHERE job_id = ? AND state = ?')
+      .bind(jobId, 'reserved').first();
+    return Response.json({ accepted: true, duplicate: false, awaitingCredits: !charge });
   }
   return Response.json({ accepted: true, duplicate: false });
 }
@@ -185,6 +201,8 @@ export default {
   async scheduled(_event, env) {
     try { await reconcileDueRefunds(env); }
     catch { console.error('Test wallet refund reconciliation is delayed'); }
+    try { await reconcileTestEmailCharges(env); await fundPendingTestEmails(env); }
+    catch { console.error('Test email credit reconciliation is delayed'); }
     for (let index = 0; index < 10; index += 1) {
       const result = await sendNextOutbox(env);
       if (['idle', 'contended', 'accepted'].includes(result.state)) break;

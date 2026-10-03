@@ -96,7 +96,8 @@ async function threads() {
 }
 async function billing() {
   const data = await api('/api/billing');
-  $('balance').textContent = '$' + (data.balanceCents / 100).toFixed(2) + ' in test credits';
+  $('balance').textContent = '$' + (data.balanceCents / 100).toFixed(2) + ' in test credits' +
+    (data.waitingEmails ? ' · ' + data.waitingEmails + ' email' + (data.waitingEmails === 1 ? '' : 's') + ' waiting for credits' : '');
   $('topup').hidden = !data.checkoutEnabled;
 }
 let googleReady = false;
@@ -233,7 +234,7 @@ document.addEventListener('DOMContentLoaded', () => {
   <section class="card"><h2>Devices</h2><div id="devices"></div></section>
   <section class="card"><h2>Shared threads</h2><p class="muted">Only you can grant or revoke reply access. To include someone hidden in Bcc, grant their address here after you send the thread. This does not send them an invitation or reveal them in a reply.</p><button id="refreshThreads" class="secondary">Refresh threads</button><div id="threads"></div></section>
   <section class="card"><h2>Test credits</h2><p id="balance">Loading balance…</p>
-    <p class="muted">This is a non-spendable test wallet. The proposed exchange price and real payments are not enabled.</p>
+    <p class="muted">In test mode, each accepted task email reserves a provisional $0.05 and settles when its reply is accepted for delivery. Real payments and final pricing are not enabled.</p>
     <button id="topup" hidden>Add $10 in Stripe test mode</button> <button id="refreshBalance" class="secondary">Refresh balance</button></section>
 </div></main></body></html>`;
   return new Response(html, { headers: {

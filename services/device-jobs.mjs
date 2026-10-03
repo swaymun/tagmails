@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { parseInbound } from '../apps/mock-inbox/inbound.mjs';
 import { chooseModel } from '../apps/mock-inbox/model.mjs';
+import { testBillingEnabled } from './email-charges.mjs';
 
 const TOKEN = /^tm_dev_[A-Za-z0-9_-]{43}$/;
 const LEASE_SECONDS = 90;
@@ -40,6 +41,9 @@ async function boundedJson(request) {
 
 async function claim(env, device) {
   const leaseId = randomUUID();
+  const funded = testBillingEnabled(env)
+    ? "AND EXISTS (SELECT 1 FROM test_email_charges c WHERE c.job_id = j.id AND c.state = 'reserved')"
+    : '';
   const row = await env.DB.prepare(`UPDATE jobs SET
     state = 'running', device_id = ?, lease_id = ?,
     lease_until = datetime('now', '+${LEASE_SECONDS} seconds'), attempts = attempts + 1
@@ -48,6 +52,7 @@ async function claim(env, device) {
       JOIN messages m ON m.id = j.message_id JOIN accounts a ON a.id = t.account_id
       WHERE t.account_id = ? AND (j.state = 'queued' OR
         (j.state = 'running' AND (j.lease_until IS NULL OR j.lease_until <= CURRENT_TIMESTAMP)))
+        ${funded}
         AND (m.sender_email = a.owner_email OR EXISTS (
           SELECT 1 FROM participants p WHERE p.thread_id = t.id AND p.email = m.sender_email AND p.revoked_at IS NULL))
       ORDER BY j.created_at, j.id LIMIT 1

@@ -1,0 +1,93 @@
+export const TEST_EMAIL_CENTS = 5;
+
+export function testBillingEnabled(env) {
+  return env.BILLING_TEST_MODE === 'true' &&
+    env.STRIPE_SECRET_KEY?.startsWith('sk_test_') &&
+    env.STRIPE_WEBHOOK_SECRET?.startsWith('whsec_');
+}
+
+function changed(result) {
+  return result.meta?.changes ?? result.changes ?? 0;
+}
+
+export async function reservePendingTestEmails(env, accountId, limit = 20) {
+  if (!testBillingEnabled(env)) return 0;
+  let reserved = 0;
+  for (let index = 0; index < limit; index += 1) {
+    // One INSERT computes the latest balance and reserves one oldest job. The
+    // account cannot reserve the same credit twice when deliveries race.
+    const result = await env.DB.prepare(`INSERT INTO test_email_charges
+      (job_id, account_id, amount_cents, state)
+      SELECT j.id, t.account_id, ?, 'reserved'
+      FROM jobs j JOIN threads t ON t.id = j.thread_id
+      JOIN accounts a ON a.id = t.account_id
+      JOIN messages m ON m.id = j.message_id
+      WHERE t.account_id = ? AND a.active = 1 AND j.state = 'queued'
+        AND (m.sender_email = a.owner_email OR EXISTS
+          (SELECT 1 FROM participants p WHERE p.thread_id = t.id
+            AND p.email = m.sender_email AND p.revoked_at IS NULL))
+        AND NOT EXISTS (SELECT 1 FROM test_email_charges c WHERE c.job_id = j.id)
+        AND (SELECT COALESCE(SUM(amount_cents), 0) FROM credit_ledger WHERE account_id = t.account_id)
+          - (SELECT COALESCE(SUM(amount_cents), 0) FROM test_email_charges
+             WHERE account_id = t.account_id AND state != 'released') >= ?
+      ORDER BY j.created_at, j.id LIMIT 1`)
+      .bind(TEST_EMAIL_CENTS, accountId, TEST_EMAIL_CENTS).run();
+    if (!changed(result)) break;
+    reserved += 1;
+  }
+  return reserved;
+}
+
+export async function fundPendingTestEmails(env) {
+  if (!testBillingEnabled(env)) return;
+  const rows = await env.DB.prepare(`SELECT DISTINCT t.account_id FROM jobs j
+    JOIN threads t ON t.id = j.thread_id JOIN messages m ON m.id = j.message_id
+    JOIN accounts a ON a.id = t.account_id
+    WHERE j.state = 'queued' AND NOT EXISTS
+      (SELECT 1 FROM test_email_charges c WHERE c.job_id = j.id)
+      AND (m.sender_email = a.owner_email OR EXISTS
+        (SELECT 1 FROM participants p WHERE p.thread_id = t.id
+          AND p.email = m.sender_email AND p.revoked_at IS NULL))
+    ORDER BY t.account_id LIMIT 10`).bind().all();
+  for (const row of rows.results ?? rows) await reservePendingTestEmails(env, row.account_id);
+}
+
+export async function testWalletSnapshot(env, accountId) {
+  const row = await env.DB.prepare(`SELECT
+    (SELECT COALESCE(SUM(amount_cents), 0) FROM credit_ledger WHERE account_id = ?) AS credits,
+    (SELECT COALESCE(SUM(amount_cents), 0) FROM test_email_charges
+      WHERE account_id = ? AND state != 'released') AS charges,
+    (SELECT COUNT(*) FROM jobs j JOIN threads t ON t.id = j.thread_id
+      JOIN messages m ON m.id = j.message_id JOIN accounts a ON a.id = t.account_id
+      WHERE t.account_id = ? AND j.state = 'queued'
+        AND NOT EXISTS (SELECT 1 FROM test_email_charges c WHERE c.job_id = j.id)
+        AND (m.sender_email = a.owner_email OR EXISTS
+          (SELECT 1 FROM participants p WHERE p.thread_id = t.id
+            AND p.email = m.sender_email AND p.revoked_at IS NULL))) AS waiting
+  `).bind(accountId, accountId, accountId).first();
+  return { balanceCents: row.credits - row.charges, waitingEmails: row.waiting };
+}
+
+export async function settleTestEmail(env, jobId) {
+  if (!testBillingEnabled(env)) return;
+  await env.DB.prepare(`UPDATE test_email_charges SET state = 'settled', updated_at = CURRENT_TIMESTAMP
+    WHERE job_id = ? AND state = 'reserved'`).bind(jobId).run();
+}
+
+export async function releaseTestEmail(env, jobId) {
+  if (!testBillingEnabled(env)) return;
+  await env.DB.prepare(`UPDATE test_email_charges SET state = 'released', updated_at = CURRENT_TIMESTAMP
+    WHERE job_id = ? AND state = 'reserved'`).bind(jobId).run();
+}
+
+export async function reconcileTestEmailCharges(env) {
+  if (!testBillingEnabled(env)) return;
+  const rows = await env.DB.prepare(`SELECT c.job_id, o.state FROM test_email_charges c
+    JOIN outbox o ON o.job_id = c.job_id
+    WHERE c.state = 'reserved' AND o.state IN ('blocked', 'accepted', 'sent')
+    ORDER BY c.created_at, c.job_id LIMIT 50`).bind().all();
+  for (const row of rows.results ?? rows) {
+    if (row.state === 'blocked') await releaseTestEmail(env, row.job_id);
+    else await settleTestEmail(env, row.job_id);
+  }
+}

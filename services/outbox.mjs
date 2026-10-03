@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Resend } from 'resend';
 import { parseInbound } from '../apps/mock-inbox/inbound.mjs';
 import { renderResult } from '../apps/mock-inbox/mail.mjs';
+import { releaseTestEmail, settleTestEmail } from './email-charges.mjs';
 
 const MESSAGE_ID = /^<[^<>\s]+@[^<>\s]+>$/;
 
@@ -70,6 +71,7 @@ async function prepare(env, row) {
 }
 
 async function finalize(env, row, getSentEmail) {
+  await settleTestEmail(env, row.job_id);
   const { data, error } = await getSentEmail(row.provider_email_id);
   if (error || !data?.message_id || !MESSAGE_ID.test(data.message_id)) {
     return { state: 'accepted', jobId: row.job_id };
@@ -110,6 +112,7 @@ export async function sendNextOutbox(env, {
   if (!payload) {
     await env.DB.prepare("UPDATE outbox SET state = 'blocked', updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'queued'")
       .bind(row.job_id).run();
+    await releaseTestEmail(env, row.job_id);
     return { state: 'blocked', jobId: row.job_id };
   }
   if (payload.from !== row.agent_email.toLowerCase()) throw new Error('Outbox sender does not match its account');

@@ -214,6 +214,13 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
         WHERE thread_id = ? AND state IN ('queued', 'running') AND message_id IN (
           SELECT id FROM messages WHERE thread_id = ? AND sender_email = ?)`)
         .bind(threadId, threadId, email),
+      env.DB.prepare(`UPDATE test_email_charges SET state = 'released', updated_at = CURRENT_TIMESTAMP
+        WHERE state = 'reserved' AND job_id IN (
+          SELECT j.id FROM jobs j JOIN messages m ON m.id = j.message_id
+          WHERE j.thread_id = ? AND j.state = 'failed' AND m.sender_email = ?
+            AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.job_id = j.id
+              AND o.state NOT IN ('blocked', 'queued')))`)
+        .bind(threadId, email),
     ]);
     if (!(changed.meta?.changes ?? changed.changes)) return json({ error: 'Active participant not found' }, 404);
     return json({ revoked: true });
