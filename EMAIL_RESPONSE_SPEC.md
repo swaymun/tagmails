@@ -6,7 +6,7 @@ The agent returns a structured outcome. The relay, not the model, builds the HTM
 
 | Field | Purpose |
 | --- | --- |
-| `state` | `completed`, `failed`, `needs_approval`, or `needs_clarification`. The heading must reflect the state; `needs_approval` says “Needs your attention” because a local approval screen is not yet available. |
+| `state` | `completed`, `failed`, `needs_approval`, or `needs_clarification`. `completed` means the agent turn ended and is headed “Agent reply”; it does not prove every task claim. `needs_approval` says “Needs your attention” because a local approval screen is not yet available. |
 | `summary` | One concrete outcome or the one thing the recipient must decide. Never claim an unverified side effect. |
 | `details` | Short items describing work or findings. Omit when empty. |
 | `checks` | Verification, uncertainty, and material limits. Omit when empty. |
@@ -14,6 +14,8 @@ The agent returns a structured outcome. The relay, not the model, builds the HTM
 | `note` | Optional context such as “synthetic example” or “local read-only run.” Omit when empty. |
 
 The email has matching UTF-8 plain-text and HTML parts. It starts with the outcome, follows with work and checks, then links, then a reply invitation. HTML escapes all model text and uses semantic headings, paragraphs, lists, and anchors. No JavaScript or form controls are sent. Gmail supports a subset of CSS in `<style>` blocks and media queries; unsupported styles may be ignored, so content must remain readable without CSS. [Gmail CSS support](https://developers.google.com/workspace/gmail/design/css)
+
+A completed local write turn adds a note asking the recipient to verify file changes before relying on them. A model can report an edit that did not happen; the relay currently verifies only a specifically requested exported file, not every workspace change.
 
 For managed replies, the relay adds a “Selected model” detail from the model route stored when the inbound email arrived. The owner-only run receipts show the same route. It labels whether the sender requested the model in that email or the account default supplied it. This describes the selected route, not proof that the runtime completed a model call. Older jobs without a stored route and requests with an unavailable model omit the detail; the relay does not infer it from current settings or generated text.
 

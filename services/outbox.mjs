@@ -187,12 +187,15 @@ async function prepare(env, row) {
     ? [`${result.artifactIds.length} file${result.artifactIds.length === 1 ? '' : 's'} available on the private run page for seven days.`]
     : [];
   const selectedModel = selectedModelDetail(inbound.model_json);
+  const writeRun = ['codex-app-server-write', 'claude-cli-write'].includes(result.runtime);
   const rendered = renderResult({
     state: result.state, summary: result.summary,
     details: [...(selectedModel ? [selectedModel] : []), ...(result.details ?? []), ...fileNote], checks: result.checks,
     links: transcriptUrl && ownerCanOpen ? [{ label: 'Run transcript', url: transcriptUrl }] : [],
     note: result.state === 'needs_approval'
       ? 'No action was approved automatically. Review the request and local permissions before replying or retrying.'
+      : writeRun && result.state === 'completed'
+        ? 'This reply is the agent\'s report. Verify local file changes before relying on them.'
       : 'This summary came from your connected local agent.',
   });
   if (/[\r\n]/.test(inbound.subject)) throw new Error('Outbox subject contains a line break');

@@ -133,6 +133,22 @@ test('the result email names the model recorded at receipt, including an explici
   assert.doesNotMatch(sent.text, /GPT-6\.1 Sol/);
 });
 
+test('a completed write turn reports the agent answer without claiming verified edits', async () => {
+  const fixture = bindings();
+  const { env } = fixture;
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  await env.MAIL.put('results/1.json', JSON.stringify({ runtime: 'codex-app-server-write',
+    state: 'completed', summary: 'I created report.txt.' }));
+  let payload;
+  assert.equal((await sendNextOutbox(env, {
+    sendEmail: async (value) => { payload = value; return { data: { id: 'write-1' } }; },
+    getSentEmail: async () => ({ data: { message_id: '<write-1@tagmails.test>' } }),
+  })).state, 'sent');
+  assert.match(payload.text, /^Agent reply\n/);
+  assert.match(payload.text, /Verify local file changes before relying on them\./);
+  assert.match(payload.html, /<h1>Agent reply<\/h1>/);
+});
+
 test('a denied local action asks for review without inventing an approval screen', async () => {
   const fixture = bindings();
   const { env } = fixture;

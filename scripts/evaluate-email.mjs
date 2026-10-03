@@ -5,7 +5,7 @@ import { EMAIL_FORMAT_VERSION, escapeHtml, makeMime, renderResult } from '../app
 
 const fixtures = [
   {
-    id: 'completed', title: 'Task completed',
+    id: 'completed', title: 'Agent reply',
     result: { state: 'completed', summary: 'The beta decision is to start with Gmail and one Mac workspace.',
       details: ['Codex read the selected plan.', 'The domain purchase still needs an owner.'],
       checks: ['No domain was purchased.'],
@@ -15,7 +15,7 @@ const fixtures = [
     links: [{ label: 'Open run receipt', url: 'https://example.test/runs/1' }],
   },
   {
-    id: 'citations', title: 'Task completed',
+    id: 'citations', title: 'Agent reply',
     result: { state: 'completed', summary: 'I found two source documents.',
       details: ['One source states the limit; the other describes the exception.'],
       links: [{ label: 'Source document', url: 'https://example.test/source' },
@@ -27,7 +27,7 @@ const fixtures = [
     absent: ['Ignore unsafe link', 'javascript:alert(1)', 'Ignore relative link', 'Ignore credential URL'],
   },
   {
-    id: 'image-link', title: 'Task completed',
+    id: 'image-link', title: 'Agent reply',
     result: { state: 'completed', summary: 'The image draft is ready for review.',
       checks: ['Preview it in the private viewer before sharing.'],
       links: [{ label: 'Open image draft', url: 'https://example.test/private/image/1' }] },
@@ -35,7 +35,7 @@ const fixtures = [
     links: [{ label: 'Open image draft', url: 'https://example.test/private/image/1' }],
   },
   {
-    id: 'video-link', title: 'Task completed',
+    id: 'video-link', title: 'Agent reply',
     result: { state: 'completed', summary: 'The video review cut is ready.',
       checks: ['Playback stays in the private viewer.'],
       links: [{ label: 'Watch review cut', url: 'https://example.test/private/video/1' }] },
@@ -46,21 +46,21 @@ const fixtures = [
     id: 'approval', title: 'Needs your attention',
     result: { state: 'needs_approval', summary: 'Publishing is waiting for the owner.',
       checks: ['No site was published.'] },
-    phrases: ['waiting for the owner', 'No site was published.'], absent: ['Task completed'],
+    phrases: ['waiting for the owner', 'No site was published.'], absent: ['Agent reply'],
   },
   {
     id: 'failure', title: 'Could not finish',
     result: { state: 'failed', summary: 'The local agent stopped before completing the task.',
       checks: ['No result file was created.'] },
-    phrases: ['stopped before completing', 'No result file was created.'], absent: ['Task completed'],
+    phrases: ['stopped before completing', 'No result file was created.'], absent: ['Agent reply'],
   },
   {
     id: 'clarification', title: 'Which model should I use?',
     result: { state: 'needs_clarification', summary: 'Choose Codex, Claude, or Luna.' },
-    phrases: ['Choose Codex, Claude, or Luna.'], absent: ['Task completed'],
+    phrases: ['Choose Codex, Claude, or Luna.'], absent: ['Agent reply'],
   },
   {
-    id: 'hostile-text', title: 'Task completed',
+    id: 'hostile-text', title: 'Agent reply',
     result: { state: 'completed', summary: '<script>alert(1)</script> is untrusted email content.',
       details: ['The attachment name was <invoice>.'] },
     phrases: ['is untrusted email content.', 'The attachment name was'],

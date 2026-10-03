@@ -268,7 +268,7 @@ test('generic mock reply clearly labels itself as a preview', (t) => {
   const reply = lab.state.threads[0].messages.at(-1);
   assert.match(reply.text, /^Synthetic preview\n/);
   assert.match(reply.text, /No agent answered the request/);
-  assert.doesNotMatch(reply.text, /^Task completed\n/);
+  assert.doesNotMatch(reply.text, /^Agent reply\n/);
 });
 
 test('interrupted mock work is returned to the durable queue', (t) => {
