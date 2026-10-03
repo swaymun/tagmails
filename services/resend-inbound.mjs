@@ -82,7 +82,7 @@ export async function inspectResendInbound({ rawPayload, headers, webhookSecret,
   if (rawUrl.protocol !== 'https:' || !(rawUrl.hostname === 'resend.com' || rawUrl.hostname.endsWith('.resend.com'))) {
     throw new Error('Resend raw email URL is outside the provider domain');
   }
-  const rawMime = await boundedRaw(await fetchRaw(rawUrl.href));
+  const rawMime = await boundedRaw(await fetchRaw(rawUrl.href, { redirect: 'error' }));
   const parsed = await parseInbound(rawMime, agent, {
     verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false,
   });

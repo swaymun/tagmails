@@ -50,7 +50,11 @@ function options(item) {
 
 test('verified Resend metadata and raw MIME yield a task without granting unobservable Bcc guests', async () => {
   const item = fixture();
-  const message = await inspectResendInbound(options(item));
+  const message = await inspectResendInbound({ ...options(item), fetchRaw: async (url, request) => {
+    assert.equal(url, item.email.raw.download_url);
+    assert.equal(request.redirect, 'error');
+    return new Response(item.raw, { status: 200 });
+  } });
   assert.equal(message.providerEmailId, id);
   assert.equal(message.eventId, 'msg_synthetic_event_1');
   assert.equal(message.from, 'owner@gmail.com');
