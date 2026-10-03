@@ -33,7 +33,7 @@ async function receivedEmail(env, emailId) {
 }
 
 async function parentThread(db, accountId, parentIds) {
-  for (const messageId of [...parentIds].reverse()) {
+  for (const messageId of parentIds.slice(-50).reverse()) {
     const row = await db.prepare(`SELECT m.thread_id FROM messages m
       JOIN threads t ON t.id = m.thread_id
       WHERE t.account_id = ? AND m.message_id = ? LIMIT 1`).bind(accountId, messageId).first();
@@ -69,7 +69,7 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
     getReceivedEmail, fetchRaw,
   });
   if (message.ignored) return Response.json({ accepted: false });
-  const agent = env.AGENT_ADDRESS.toLowerCase();
+  const agent = env.AGENT_ADDRESS.trim().toLowerCase();
   const account = await env.DB.prepare('SELECT id, owner_email FROM accounts WHERE agent_email = ? AND active = 1')
     .bind(agent).first();
   if (!account) return Response.json({ accepted: false });
@@ -77,7 +77,8 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
     .bind(account.id, message.providerEmailId, message.messageId).first();
   if (duplicate) return Response.json({ accepted: true, duplicate: true });
 
-  const owner = message.from === account.owner_email;
+  const ownerEmail = account.owner_email.toLowerCase();
+  const owner = message.from === ownerEmail;
   const threadId = await parentThread(env.DB, account.id, message.parentIds ?? []);
   if (!owner) {
     if (!threadId) return Response.json({ accepted: false });
@@ -91,7 +92,7 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
 
   const id = randomUUID();
   const newThreadId = threadId ?? randomUUID();
-  const guests = owner ? visibleGuests(message, account.owner_email, agent) : [];
+  const guests = owner ? visibleGuests(message, ownerEmail, agent) : [];
   const objectKey = `inbound/${account.id}/${message.providerEmailId}.eml`;
   await env.MAIL.put(objectKey, message.rawMime, { httpMetadata: { contentType: 'message/rfc822' } });
   const statements = [];
