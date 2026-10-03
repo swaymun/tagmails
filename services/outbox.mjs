@@ -51,6 +51,13 @@ async function prepare(env, row) {
   // cannot bring a new address into the conversation by copying it.
   const to = [request.from];
   const cc = visible;
+  const testSender = env.RESEND_TEST_FROM;
+  if (testSender) {
+    if (testSender !== 'onboarding@resend.dev') throw new Error('Unsupported Resend test sender');
+    // Resend's test sender is for a single account-owned delivery. Keep
+    // participant mail behind a verified sending domain.
+    if (to[0] !== owner || cc.length) return null;
+  }
   const references = [...new Set([...request.parentIds, request.messageId])].filter((id) => MESSAGE_ID.test(id)).slice(-40);
   const siteOrigin = publicOrigin(env.SITE_ORIGIN);
   const relayOrigin = publicOrigin(env.PUBLIC_ORIGIN);
@@ -70,7 +77,8 @@ async function prepare(env, row) {
   });
   if (/[\r\n]/.test(inbound.subject)) throw new Error('Outbox subject contains a line break');
   return {
-    from: agent, to, ...(cc.length ? { cc } : {}),
+    from: testSender ?? agent, ...(testSender ? { replyTo: agent } : {}),
+    to, ...(cc.length ? { cc } : {}),
     subject: /^re\s*:/i.test(inbound.subject) ? inbound.subject : `Re: ${inbound.subject}`,
     html: rendered.html, text: rendered.text,
     headers: { 'In-Reply-To': request.messageId, References: references.join(' ') },
@@ -122,7 +130,9 @@ export async function sendNextOutbox(env, {
     await releaseTestEmail(env, row.job_id);
     return { state: 'blocked', jobId: row.job_id };
   }
-  if (payload.from !== row.agent_email.toLowerCase()) throw new Error('Outbox sender does not match its account');
+  if (payload.from !== (env.RESEND_TEST_FROM ?? row.agent_email.toLowerCase())) {
+    throw new Error('Outbox sender does not match its account');
+  }
   const claimed = await env.DB.prepare(`UPDATE outbox SET state = 'sending', payload_json = ?, updated_at = CURRENT_TIMESTAMP
     WHERE job_id = ? AND state = 'queued' RETURNING job_id`).bind(JSON.stringify(payload), row.job_id).first();
   if (!claimed) return { state: 'contended' };

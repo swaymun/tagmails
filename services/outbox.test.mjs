@@ -89,6 +89,30 @@ test('two sent turns preserve threading and only visible recipients may react', 
   assert.equal(payloads.length, 2);
 });
 
+test('development sender replies to the account owner through the inbound alias', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  env.RESEND_TEST_FROM = 'onboarding@resend.dev';
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  let sent;
+  assert.equal((await sendNextOutbox(env, {
+    sendEmail: async (payload) => { sent = payload; return { data: { id: 'test-sent-1' } }; },
+    getSentEmail: async () => ({ data: { message_id: '<test-sent-1@resend.dev>' } }),
+  })).state, 'sent');
+  assert.equal(sent.from, 'onboarding@resend.dev');
+  assert.equal(sent.replyTo, 'agent@wonder.test');
+  assert.deepEqual(sent.to, ['owner@gmail.com']);
+  assert.equal(sent.cc, undefined);
+
+  await queuedTurn(fixture, { number: 2, from: 'owner@gmail.com',
+    to: ['agent@wonder.test'], cc: ['reviewer@gmail.com'] });
+  sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)')
+    .run('thread-1', 'reviewer@gmail.com');
+  assert.equal((await sendNextOutbox(env, {
+    sendEmail: async () => { throw new Error('Test sender must not email participants'); },
+  })).state, 'blocked');
+});
+
 test('an uncertain send is not retried; an accepted send can finish Message-ID lookup later', async () => {
   const fixture = bindings();
   const { env, sqlite } = fixture;
