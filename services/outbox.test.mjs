@@ -329,6 +329,8 @@ test('recipient delivery events are isolated and older updates cannot overwrite 
     eventAt: '2026-10-03T10:02:00.000Z' }), { accepted: true, deliveryOutcome: true });
   assert.deepEqual(await notify({ ...base, recipient: 'owner@gmail.com', status: 'delayed',
     eventAt: '2026-10-03T10:01:00.000Z' }), { accepted: true, deliveryOutcome: true });
+  assert.deepEqual(await notify({ ...base, recipient: 'owner@gmail.com', status: 'bounced',
+    eventAt: '2026-10-03T10:01:30.000Z' }), { accepted: true, deliveryOutcome: true });
   assert.deepEqual(await notify({ ...base, recipient: 'guest@gmail.com', status: 'bounced',
     eventAt: '2026-10-03T10:03:00.000Z' }), { accepted: true, deliveryOutcome: true });
   assert.equal(sqlite.prepare('SELECT state FROM test_email_charges WHERE job_id = ?').get(jobId).state, 'settled');
