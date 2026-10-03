@@ -3,7 +3,7 @@ import { Resend } from 'resend';
 import { addressParser } from 'postal-mime';
 import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.mjs';
 import { renderResult } from '../apps/mock-inbox/mail.mjs';
-import { releaseTestEmail, settleTestEmail } from './email-charges.mjs';
+import { releaseFailedPrimaryTestEmail, releaseTestEmail, settleTestEmail } from './email-charges.mjs';
 import { selectedModelDetail } from './model-route.mjs';
 
 const MESSAGE_ID = /^<[^<>\s]+@[^<>\s]+>$/;
@@ -84,6 +84,9 @@ export async function recordDeliveryOutcome(env, event) {
       WHERE excluded.event_at > delivery_recipients.event_at`)
     .bind(event.jobId, event.providerEmailId, event.recipient, event.status,
       event.eventAt, event.eventId ?? null).run();
+  if (['bounced', 'failed', 'suppressed'].includes(event.status)) {
+    await releaseFailedPrimaryTestEmail(env, event.jobId);
+  }
   return { accepted: true, deliveryOutcome: true };
 }
 
@@ -224,6 +227,7 @@ async function recipientsStillAuthorized(env, threadId, payload) {
 
 async function finalize(env, row, getSentEmail) {
   await settleTestEmail(env, row.job_id);
+  await releaseFailedPrimaryTestEmail(env, row.job_id);
   const { data, error } = await getSentEmail(row.provider_email_id);
   if (error || !data?.message_id || !MESSAGE_ID.test(data.message_id)) {
     return { state: 'accepted', jobId: row.job_id };

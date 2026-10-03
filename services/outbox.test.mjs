@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { bindings } from './bindings-fixture.mjs';
-import { reconcileOneUnknownOutbox, sendNextOutbox } from './outbox.mjs';
+import { reconcileOneUnknownOutbox, recordDeliveryOutcome, sendNextOutbox } from './outbox.mjs';
 import { handleInbound } from './relay-worker.mjs';
 
 function queuedTurn({ env, sqlite }, { number, from, to, cc = [], inReplyTo = null, references = [], accountId = 'account-1', threadId = 'thread-1', jobId = `job-${number}`, model = null }) {
@@ -302,10 +302,14 @@ test('provider lookup reconciles only an exactly tagged uncertain reply', async 
 test('recipient delivery events are isolated and older updates cannot overwrite them', async () => {
   const fixture = bindings();
   const { env, sqlite } = fixture;
+  env.BILLING_TEST_MODE = 'true';
+  env.STRIPE_SECRET_KEY = 'sk_test_local';
+  env.STRIPE_WEBHOOK_SECRET = 'whsec_local';
   const jobId = '99999999-9999-4999-8999-999999999999';
   const providerId = '88888888-8888-4888-8888-888888888888';
   await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'],
     cc: ['guest@gmail.com'], jobId });
+  sqlite.prepare("INSERT INTO test_email_charges (job_id, account_id, amount_cents, state) VALUES (?, 'account-1', 5, 'reserved')").run(jobId);
   sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)').run('thread-1', 'guest@gmail.com');
   assert.equal((await sendNextOutbox(env, {
     sendEmail: async () => ({ data: { id: providerId } }),
@@ -327,11 +331,37 @@ test('recipient delivery events are isolated and older updates cannot overwrite 
     eventAt: '2026-10-03T10:01:00.000Z' }), { accepted: true, deliveryOutcome: true });
   assert.deepEqual(await notify({ ...base, recipient: 'guest@gmail.com', status: 'bounced',
     eventAt: '2026-10-03T10:03:00.000Z' }), { accepted: true, deliveryOutcome: true });
+  assert.equal(sqlite.prepare('SELECT state FROM test_email_charges WHERE job_id = ?').get(jobId).state, 'settled');
   assert.deepEqual(sqlite.prepare(`SELECT recipient_email, status FROM delivery_recipients
     WHERE job_id = ? ORDER BY recipient_email`).all(jobId).map((row) => ({ ...row })), [
     { recipient_email: 'guest@gmail.com', status: 'bounced' },
     { recipient_email: 'owner@gmail.com', status: 'delivered' },
   ]);
+});
+
+test('a failed primary recipient releases the test charge even when a copied guest receives the reply', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  env.BILLING_TEST_MODE = 'true';
+  env.STRIPE_SECRET_KEY = 'sk_test_local';
+  env.STRIPE_WEBHOOK_SECRET = 'whsec_local';
+  const jobId = '66666666-6666-4666-8666-666666666666';
+  const providerEmailId = '55555555-5555-4555-8555-555555555555';
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'],
+    cc: ['guest@gmail.com'], jobId });
+  sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)').run('thread-1', 'guest@gmail.com');
+  sqlite.prepare("INSERT INTO test_email_charges (job_id, account_id, amount_cents, state) VALUES (?, 'account-1', 5, 'reserved')").run(jobId);
+  assert.equal((await sendNextOutbox(env, {
+    sendEmail: async () => ({ data: { id: providerEmailId } }),
+    getSentEmail: async () => ({ data: { message_id: '<mixed@tagmails.test>' } }),
+  })).state, 'sent');
+  const base = { jobId, providerEmailId, from: 'agent@wonder.test', subject: 'Re: Shared work' };
+  assert.deepEqual(await recordDeliveryOutcome(env, { ...base, recipient: 'guest@gmail.com', status: 'delivered',
+    eventAt: '2026-10-03T10:00:00.000Z' }), { accepted: true, deliveryOutcome: true });
+  assert.equal(sqlite.prepare('SELECT state FROM test_email_charges WHERE job_id = ?').get(jobId).state, 'settled');
+  assert.deepEqual(await recordDeliveryOutcome(env, { ...base, recipient: 'owner@gmail.com', status: 'suppressed',
+    eventAt: '2026-10-03T10:01:00.000Z' }), { accepted: true, deliveryOutcome: true });
+  assert.equal(sqlite.prepare('SELECT state FROM test_email_charges WHERE job_id = ?').get(jobId).state, 'released');
 });
 
 test('a sent event arriving before the send response cannot create a second reply', async () => {

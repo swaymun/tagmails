@@ -6,6 +6,8 @@ Internal decision memo, checked October 3, 2026. These are current public list p
 
 The billable unit should be **one accepted task turn**: one authorized inbound message that starts or resumes an agent run, plus its result email and retained receipt. A second substantive reply is another turn, including when an authorized participant sends it. A duplicate delivery, Gmail reaction, invalid `Model:` request, or rejected sender is not a billable turn. The account owner funds participant turns; the owner alone can grant participants. Show the expected debit before enabling a model route, and state the refund rule for failed or bounced replies before live payments.
 
+The test wallet now returns the five-cent debit when Resend reports a terminal `bounced`, `failed`, or `suppressed` outcome for the reply's sole To recipient. That recipient is the sender of the task turn. A Cc recipient's failure alone does not release the charge, and a delayed event is not terminal. The release is one-way if a later event says delivered, in the customer's favor. This is an internal pilot rule; verify real provider event ordering and decide how to explain mixed-recipient outcomes before collecting money.
+
 Keep two prices visibly separate:
 
 1. **Bring your plan:** a service charge for intake, queueing, email reply, receipt, and seven-day file storage. Codex or Claude usage draws against the customer's own subscription and is not an API cost paid by TagMails.
@@ -30,4 +32,4 @@ An illustrative API turn with **100,000 uncached input tokens and 5,000 output t
 
 ## Decision gate
 
-Keep the five-cent debit in test mode. For a priced beta, measure at least: accepted turns and provider quota units per turn (including To/Cc fanout), Worker CPU and D1/R2 use, file storage days, card fee by top-up size, model spend per completed and failed turn, retries, bounced replies, refunds, and human support time. Sample both short and long multi-turn Codex and Claude tasks. Set the service charge from the upper observed cost range plus a clear margin; show a separate maximum for managed API work. Reconcile Stripe's signed test webhook, then write and test the failure/refund policy before collecting real money.
+Keep the five-cent debit in test mode. For a priced beta, measure at least: accepted turns and provider quota units per turn (including To/Cc fanout), Worker CPU and D1/R2 use, file storage days, card fee by top-up size, model spend per completed and failed turn, retries, bounced replies, refunds, and human support time. Sample both short and long multi-turn Codex and Claude tasks. Set the service charge from the upper observed cost range plus a clear margin; show a separate maximum for managed API work. Reconcile Stripe's signed test webhook, then validate the failure/refund policy against real delivery events before collecting real money.

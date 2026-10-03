@@ -5,9 +5,9 @@ import { bindings } from './bindings-fixture.mjs';
 import { handleInbound } from './relay-worker.mjs';
 import { handleDeviceRequest } from './device-jobs.mjs';
 import { handleAccountRequest } from './account-auth.mjs';
-import { sendNextOutbox } from './outbox.mjs';
+import { recordDeliveryOutcome, sendNextOutbox } from './outbox.mjs';
 import { handleTestWalletRequest } from './billing-wallet.mjs';
-import { reservePendingTestEmails, testWalletSnapshot } from './email-charges.mjs';
+import { reconcileTestEmailCharges, reservePendingTestEmails, testWalletSnapshot } from './email-charges.mjs';
 
 function pilot() {
   const fixture = bindings();
@@ -157,6 +157,55 @@ test('provider acceptance settles a reserved charge; uncertain delivery holds it
   assert.equal(second.state, 'sent');
   assert.equal(sqlite.prepare('SELECT state FROM test_email_charges WHERE job_id = ?').get(second.jobId).state, 'settled');
   assert.deepEqual(await testWalletSnapshot(env, 'account-1'), { balanceCents: 0, waitingEmails: 0 });
+});
+
+test('a primary-recipient bounce releases a test charge even before the send response', async () => {
+  const { env, sqlite } = pilot();
+  credit(sqlite, 'account-1', 5, 'owner');
+  await deliver(env, 'bounced-1');
+  const jobId = sqlite.prepare('SELECT id FROM jobs').get().id;
+  await env.MAIL.put('results/bounced.json', JSON.stringify({ state: 'completed', summary: 'Done.' }));
+  sqlite.prepare("UPDATE jobs SET state = 'completed', result_key = 'results/bounced.json' WHERE id = ?").run(jobId);
+  sqlite.prepare('INSERT INTO outbox (job_id) VALUES (?)').run(jobId);
+  const providerEmailId = '88888888-8888-4888-8888-888888888888';
+  assert.equal((await sendNextOutbox(env, {
+    sendEmail: async (payload) => {
+      assert.deepEqual(await recordDeliveryOutcome(env, {
+        jobId, providerEmailId, from: payload.from, subject: payload.subject,
+        recipient: 'owner@gmail.com', status: 'bounced',
+        eventAt: '2026-10-03T10:00:00.000Z', eventId: 'bounce-1',
+      }), { accepted: true, deliveryOutcome: true });
+      assert.equal(sqlite.prepare('SELECT state FROM test_email_charges WHERE job_id = ?').get(jobId).state, 'reserved');
+      return { data: { id: providerEmailId } };
+    },
+    getSentEmail: async () => ({ data: { message_id: '<bounced@tagmails.test>' } }),
+  })).state, 'sent');
+  assert.equal(sqlite.prepare('SELECT state FROM test_email_charges WHERE job_id = ?').get(jobId).state, 'released');
+  assert.deepEqual(await testWalletSnapshot(env, 'account-1'), { balanceCents: 5, waitingEmails: 0 });
+  await reconcileTestEmailCharges(env);
+  assert.equal(sqlite.prepare('SELECT state FROM test_email_charges WHERE job_id = ?').get(jobId).state, 'released');
+});
+
+test('scheduled reconciliation releases a settled charge after a missed bounce update', async () => {
+  const { env, sqlite } = pilot();
+  credit(sqlite, 'account-1', 5, 'owner');
+  await deliver(env, 'bounced-2');
+  const jobId = sqlite.prepare('SELECT id FROM jobs').get().id;
+  await env.MAIL.put('results/bounced.json', JSON.stringify({ state: 'completed', summary: 'Done.' }));
+  sqlite.prepare("UPDATE jobs SET state = 'completed', result_key = 'results/bounced.json' WHERE id = ?").run(jobId);
+  sqlite.prepare('INSERT INTO outbox (job_id) VALUES (?)').run(jobId);
+  const providerEmailId = '77777777-7777-4777-8777-777777777777';
+  assert.equal((await sendNextOutbox(env, {
+    sendEmail: async () => ({ data: { id: providerEmailId } }),
+    getSentEmail: async () => ({ data: { message_id: '<bounced-2@tagmails.test>' } }),
+  })).state, 'sent');
+  sqlite.prepare(`INSERT INTO delivery_recipients
+    (job_id, provider_email_id, recipient_email, status, event_at)
+    VALUES (?, ?, 'owner@gmail.com', 'failed', '2026-10-03T10:00:00.000Z')`).run(jobId, providerEmailId);
+  assert.equal(sqlite.prepare('SELECT state FROM test_email_charges WHERE job_id = ?').get(jobId).state, 'settled');
+  await reconcileTestEmailCharges(env);
+  assert.equal(sqlite.prepare('SELECT state FROM test_email_charges WHERE job_id = ?').get(jobId).state, 'released');
+  assert.deepEqual(await testWalletSnapshot(env, 'account-1'), { balanceCents: 5, waitingEmails: 0 });
 });
 
 test('owner revocation releases a guest job that cannot be delivered', async () => {

@@ -83,6 +83,27 @@ export async function releaseTestEmail(env, jobId) {
     WHERE job_id = ? AND state = 'reserved'`).bind(jobId).run();
 }
 
+export async function releaseFailedPrimaryTestEmail(env, jobId) {
+  if (!testBillingEnabled(env)) return;
+  const outbox = await env.DB.prepare(`SELECT o.provider_email_id, o.payload_json FROM outbox o
+    JOIN test_email_charges c ON c.job_id = o.job_id
+    WHERE o.job_id = ? AND o.provider_email_id IS NOT NULL
+      AND c.state IN ('reserved', 'settled')`).bind(jobId).first();
+  if (!outbox) return;
+  let primary;
+  try {
+    const to = JSON.parse(outbox.payload_json).to;
+    if (Array.isArray(to) && to.length === 1) primary = to[0];
+  } catch { return; }
+  if (!primary) return;
+  const failure = await env.DB.prepare(`SELECT 1 FROM delivery_recipients
+    WHERE job_id = ? AND provider_email_id = ? AND recipient_email = ?
+      AND status IN ('bounced', 'failed', 'suppressed')`).bind(jobId, outbox.provider_email_id, primary).first();
+  if (!failure) return;
+  await env.DB.prepare(`UPDATE test_email_charges SET state = 'released', updated_at = CURRENT_TIMESTAMP
+    WHERE job_id = ? AND state IN ('reserved', 'settled')`).bind(jobId).run();
+}
+
 export async function reconcileTestEmailCharges(env) {
   if (!testBillingEnabled(env)) return;
   const rows = await env.DB.prepare(`SELECT c.job_id, o.state FROM test_email_charges c
@@ -93,4 +114,13 @@ export async function reconcileTestEmailCharges(env) {
     if (row.state === 'blocked') await releaseTestEmail(env, row.job_id);
     else await settleTestEmail(env, row.job_id);
   }
+  const failed = await env.DB.prepare(`SELECT c.job_id FROM test_email_charges c
+    JOIN outbox o ON o.job_id = c.job_id
+    JOIN delivery_recipients d ON d.job_id = o.job_id AND d.provider_email_id = o.provider_email_id
+    WHERE c.state IN ('reserved', 'settled') AND o.provider_email_id IS NOT NULL
+      AND d.status IN ('bounced', 'failed', 'suppressed')
+      AND json_array_length(json_extract(o.payload_json, '$.to')) = 1
+      AND d.recipient_email = json_extract(o.payload_json, '$.to[0]')
+    ORDER BY c.updated_at, c.job_id LIMIT 50`).bind().all();
+  for (const row of failed.results ?? failed) await releaseFailedPrimaryTestEmail(env, row.job_id);
 }
