@@ -120,10 +120,10 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
         aggregatedOutput: 'SECRET_FILE', status: 'completed', exitCode: 0 } } });
       if (mode !== 'history-paged') send({ method: 'item/completed', params: { item: { type: 'agentMessage',
         ...(mode === 'unphased-progress' ? {} : { phase: 'commentary' }), text: 'Checking the workspace.' } } });
-      if (!['missing-final-event', 'history-wrong-turn', 'unphased-progress'].includes(mode)) send({ method: 'item/completed', params: { item: { type: 'agentMessage',
+      if (!['missing-final-event', 'history-wrong-turn', 'unphased-progress', 'turn-timeout'].includes(mode)) send({ method: 'item/completed', params: { item: { type: 'agentMessage',
         ...(mode === 'legacy-phase' ? {} : { phase: 'final_answer' }),
         text: resumed ? 'First turn plus second turn.' : 'First turn.' } } });
-      send({ method: 'turn/completed', params: { turn: { status: mode === 'turn-failed' ? 'failed' : 'completed' } } });
+      if (mode !== 'turn-timeout') send({ method: 'turn/completed', params: { turn: { status: mode === 'turn-failed' ? 'failed' : 'completed' } } });
     }, mode === 'slow' ? 160 : mode === 'approval-request' ? 20 : 0);
   }
 });
@@ -402,6 +402,28 @@ test('a failed Codex turn retains only the visible partial run transcript', asyn
     { kind: 'assistant', phase: 'commentary', text: 'Checking the workspace.' },
   ]);
   assert.doesNotMatch(JSON.stringify(result.transcript), /SECRET_REASONING|SECRET_FILE|secret\.txt/);
+});
+
+test('a timed-out full-access turn keeps visible steps and does not rerun the same email', async (t) => {
+  const { root, calls } = setup(t, 'turn-timeout');
+  const previous = process.env.TAGMAILS_CODEX_TIMEOUT_MS;
+  process.env.TAGMAILS_CODEX_TIMEOUT_MS = '250';
+  t.after(() => {
+    if (previous === undefined) delete process.env.TAGMAILS_CODEX_TIMEOUT_MS;
+    else process.env.TAGMAILS_CODEX_TIMEOUT_MS = previous;
+  });
+  const job = claim('job-timeout', 'thread-timeout');
+  job.request.fromOwner = true;
+  const result = await runClaim(job, { full: true });
+  assert.equal(result.state, 'failed');
+  assert.match(result.summary, /pilot time limit/);
+  assert.equal(result.transcript.truncated, true);
+  assert.equal(result.transcript.events.some((event) => event.kind === 'tool'), true);
+  assert.equal(result.transcript.events.some((event) => event.phase === 'final_answer'), false);
+  assert.deepEqual(await runClaim(job, { full: true }), result);
+  assert.equal(fs.readFileSync(calls, 'utf8').trim().split('\n').filter((line) =>
+    JSON.parse(line).method === 'turn/start').length, 1);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, 'sessions.json'))).jobs[job.jobId], result);
 });
 
 test('an interrupted Codex write is not executed a second time for the same email', async (t) => {

@@ -275,12 +275,13 @@ async function runCodex(claim, workspace, home, sessionId, staged, write, full =
   child.once('error', stop);
   child.once('close', (code) => stop(new Error(`Codex app-server exited with ${code}`)));
   let leaseLost = false;
+  let timedOut = false;
   let renewFailures = 0;
   const renew = setInterval(async () => {
     try { await renewClaim(claim); renewFailures = 0; }
     catch { if (++renewFailures >= 3) { leaseLost = true; child.kill(); } }
   }, Number(process.env.TAGMAILS_CLAIM_RENEW_MS || 15_000));
-  const timeout = setTimeout(() => { stop(new Error('Codex exceeded the three-minute prototype limit')); child.kill(); },
+  const timeout = setTimeout(() => { timedOut = true; stop(new Error('Codex exceeded the configured pilot time limit')); child.kill(); },
     Number(process.env.TAGMAILS_CODEX_TIMEOUT_MS || 180_000));
   try {
     await request('initialize', { clientInfo: { name: 'tagmails', title: 'TagMails', version: '0.1.0' },
@@ -312,7 +313,17 @@ async function runCodex(claim, workspace, home, sessionId, staged, write, full =
     const startedTurn = await request('turn/start', { threadId, cwd: workspace, model: claim.model.id, effort: claim.model.effort,
       serviceTierForTurn: tier,
       approvalPolicy, input: [{ type: 'text', text: promptFor(claim, staged.prompt, write, full) }] });
-    const status = await turnDone;
+    let status;
+    try { status = await turnDone; }
+    catch {
+      transcript.truncated = true;
+      const summary = leaseLost
+        ? 'The relay connection was lost while Codex was working. Inspect any local changes before sending a new request.'
+        : timedOut
+        ? 'Codex did not finish before the pilot time limit. Inspect any local changes before sending a new request.'
+        : 'Codex stopped before TagMails could confirm the result. Inspect any local changes before sending a new request.';
+      return { result: { ...fail(summary, write, full), transcript } };
+    }
     if (leaseLost) return { result: { ...fail('The local claim lease was lost while Codex was running.', write, full), transcript } };
     if (status !== 'completed') return { result: { ...fail('Codex did not complete this turn.', write, full), transcript } };
     let codexAllowance = null;
