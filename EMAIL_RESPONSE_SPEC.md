@@ -1,4 +1,4 @@
-# TagMails email response format v2
+# TagMails email response format v4
 
 The agent returns a structured outcome. The relay, not the model, builds the HTML and plain-text email. This format is for the first Gmail beta and its internal lab.
 
@@ -14,7 +14,7 @@ The agent returns a structured outcome. The relay, not the model, builds the HTM
 | `note` | Optional context such as “synthetic example” or a write warning. Material pending or failed notices stay beside the answer. |
 | `statusLine`, `meta`, `brandUrl` | Trusted caller-supplied footer status, small account/run facts, and the working TagMails website link. |
 
-The email has matching UTF-8 plain-text and HTML parts. The outcome and agent answer come first. A compact bottom footer holds one run-status line, credits and allowance when authorized, checks, the transcript link, a linked TagMails brand mark, and the reply invitation. It does not repeat “What happened,” “Checks and limits,” and “Open” as bullet sections. HTML escapes all model text and uses semantic headings, paragraphs, a footer, and anchors. No JavaScript or form controls are sent. Gmail supports a subset of CSS in `<style>` blocks and media queries; unsupported styles may be ignored, so content remains readable without CSS. [Gmail CSS support](https://developers.google.com/workspace/gmail/design/css)
+The email has matching UTF-8 plain-text and HTML parts. The outcome and agent answer come first. A compact bottom footer holds the transcript link first, then model/reasoning/requested speed, credits and allowance when authorized, and the linked TagMails brand mark last. Completed replies omit “Done” and any waiting-for-reply label. Failed and approval replies preserve “Stopped” and “Needs approval.” Footer pieces wrap independently on narrow screens. It does not repeat “What happened,” “Checks and limits,” and “Open” as bullet sections. HTML escapes all model text and uses semantic headings, paragraphs, a footer, and anchors. No JavaScript or form controls are sent. Gmail supports a subset of CSS in `<style>` blocks and media queries; unsupported styles may be ignored, so content remains readable without CSS. [Gmail CSS support](https://developers.google.com/workspace/gmail/design/css)
 
 ## Email status reactions
 

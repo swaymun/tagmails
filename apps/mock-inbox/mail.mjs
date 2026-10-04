@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 const CRLF = '\r\n';
-export const EMAIL_FORMAT_VERSION = 3;
+export const EMAIL_FORMAT_VERSION = 4;
 
 export function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -40,7 +40,7 @@ function base64Lines(value) {
 export function renderResult(result) {
   const title = result.preview ? 'Synthetic preview' : result.state === 'failed' ? 'Could not finish' : result.state === 'needs_approval' ? 'Needs your attention' : result.state === 'needs_clarification' ? 'Which model should I use?' : 'Agent reply';
   const note = typeof result.note === 'string' && result.note.trim() ? result.note.trim() : null;
-  const status = result.statusLine || ({ completed: 'Done', failed: 'Stopped',
+  const status = result.statusLine || ({ failed: 'Stopped',
     needs_approval: 'Needs approval' }[result.state] ?? null);
   const detailHtml = (result.details ?? []).map((item) => `<p class="detail">${escapeHtml(item).replace(/\n/g, '<br>')}</p>`).join('');
   const safeLinks = (result.links ?? []).map(({ label, url }) => ({ label, url: safeUrl(url) }))
@@ -49,8 +49,8 @@ export function renderResult(result) {
     `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`);
   const brandUrl = safeUrl(result.brandUrl);
   const brand = brandUrl ? `<a class="brand" href="${escapeHtml(brandUrl)}" target="_blank" rel="noopener noreferrer" aria-label="TagMails website"><span class="mark" aria-hidden="true">↗</span> tagmails<span class="dot">.</span></a>` : '';
-  const footerItems = [brand, status ? `<strong class="status">${escapeHtml(status)}</strong>` : null,
-    ...(result.meta ?? []).map((item) => `<span>${escapeHtml(item)}</span>`), ...links].filter(Boolean);
+  const footerItems = [...links, status ? `<strong class="status">${escapeHtml(status)}</strong>` : null,
+    ...(result.meta ?? []).map((item) => `<span>${escapeHtml(item)}</span>`), brand].filter(Boolean);
   const footerHtml = footerItems.map((item, index) =>
     `${index ? '<span class="sep" aria-hidden="true">·</span>' : ''}<span class="piece">${item}</span>`).join('');
   const bodyNotes = [...(result.checks ?? []), ...(note && result.state === 'completed' ? [note] : [])];
@@ -60,8 +60,8 @@ export function renderResult(result) {
   const text = [title, '', result.summary, ...(result.details?.length ? ['', ...result.details] : []),
     ...(note && result.state !== 'completed' ? ['', note] : []),
     ...(bodyNotes.length ? ['', ...bodyNotes] : []), '',
-    [brandUrl ? `TagMails: ${brandUrl}` : null, status, ...(result.meta ?? []),
-      ...safeLinks.map(({ label, url }) => `${label}: ${url}`)]
+    [...safeLinks.map(({ label, url }) => `${label}: ${url}`), status, ...(result.meta ?? []),
+      brandUrl ? `TagMails: ${brandUrl}` : null]
       .filter(Boolean).join(' · ')].join('\n');
   return { html, text };
 }

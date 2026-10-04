@@ -257,9 +257,8 @@ async function prepare(env, row) {
   const rendered = renderResult({
     state: result.state, summary: result.summary,
     details: result.details,
-    statusLine: selectedModel && result.state !== 'needs_clarification'
-      ? `${{ completed: 'Done', failed: 'Stopped', needs_approval: 'Needs approval' }[result.state] ?? 'Run status'} · ${selectedModel}` : null,
-    meta: [...fileNote, ...(noChargeDetail ? [noChargeDetail] : []),
+    meta: [...(selectedModel && result.state !== 'needs_clarification'
+      ? selectedModel.split(' · ') : []), ...fileNote, ...(noChargeDetail ? [noChargeDetail] : []),
       ...(creditDetail ? [creditDetail] : []), ...allowanceDetail],
     checks: result.checks,
     links: transcriptUrl && (ownerCanOpen || participantTranscriptReady)

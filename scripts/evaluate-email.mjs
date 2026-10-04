@@ -8,16 +8,17 @@ const fixtures = [
     id: 'completed', title: 'Agent reply',
     result: { state: 'completed', summary: 'The beta decision is to start with Gmail and one Mac workspace.',
       details: ['Codex read the selected plan.\nThe domain purchase still needs an owner.'],
-      statusLine: 'Done · GPT-6 Sol · high · Fast',
-      meta: ['Credits $9.25'],
+      meta: ['GPT-6 Sol', 'high', 'Fast', 'Credits $9.25'],
       brandUrl: 'https://tagmails.saimun-h-shahee.chatgpt.site',
       checks: ['No domain was purchased.'],
-      links: [{ label: 'Open run receipt', url: 'https://example.test/runs/1' }],
+      links: [{ label: 'Transcript', url: 'https://example.test/runs/1' }],
       note: 'Reply with the next decision.' },
     phrases: ['Gmail and one Mac workspace',
-      'Done · GPT-6 Sol · high · Fast', 'Credits $9.25'],
+      'GPT-6 Sol', 'high', 'Fast', 'Credits $9.25'],
     textOnlyPhrases: ['No domain was purchased.', 'Reply with the next decision.'],
-    links: [{ label: 'Open run receipt', url: 'https://example.test/runs/1' }],
+    absent: ['Done', 'Waiting for your reply'],
+    footerOrder: ['Transcript', 'GPT-6 Sol', 'high', 'Fast', 'Credits $9.25', 'TagMails'],
+    links: [{ label: 'Transcript', url: 'https://example.test/runs/1' }],
   },
   {
     id: 'citations', title: 'Agent reply',
@@ -58,13 +59,13 @@ const fixtures = [
     id: 'approval', title: 'Needs your attention',
     result: { state: 'needs_approval', summary: 'Publishing is waiting for the owner.',
       checks: ['No site was published.'] },
-    phrases: ['waiting for the owner', 'No site was published.'], absent: ['Agent reply'],
+    phrases: ['waiting for the owner', 'No site was published.', 'Needs approval'], absent: ['Agent reply'],
   },
   {
     id: 'failure', title: 'Could not finish',
     result: { state: 'failed', summary: 'The local agent stopped before completing the task.',
       checks: ['No result file was created.'] },
-    phrases: ['stopped before completing', 'No result file was created.'], absent: ['Agent reply'],
+    phrases: ['stopped before completing', 'No result file was created.', 'Stopped'], absent: ['Agent reply'],
   },
   {
     id: 'clarification', title: 'Which model should I use?',
@@ -110,6 +111,14 @@ for (const fixture of fixtures) {
   }
   if (fixture.id === 'completed' && (/<ul\b|<h2>What happened|<h2>Checks and limits|<h2>Open/.test(html) ||
       !html.includes('<br>'))) failures.push('Compact answer and footer layout is missing');
+  for (const content of [text.split('\n').at(-1), html.slice(html.indexOf('<footer'))]) {
+    let previous = -1;
+    for (const item of fixture.footerOrder ?? []) {
+      const position = content.indexOf(item);
+      if (position <= previous) failures.push(`Footer order differs: ${item}`);
+      previous = position;
+    }
+  }
   for (const value of fixture.absent ?? []) {
     if (text.includes(value) || html.includes(value)) failures.push(`Unexpected content: ${value}`);
   }

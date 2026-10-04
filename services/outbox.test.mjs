@@ -244,8 +244,15 @@ test('the result email names the model recorded at receipt, including an explici
     sendEmail: async (payload) => { sent = payload; return { data: { id: 'model-sent-1' } }; },
     getSentEmail: async () => ({ data: { message_id: '<model-sent-1@tagmails.test>' } }),
   })).state, 'sent');
-  assert.match(sent.text, /Done · Claude Sonnet 5\.5 · medium/);
-  assert.match(sent.html, /Done · Claude Sonnet 5\.5 · medium/);
+  assert.match(sent.text, /Claude Sonnet 5\.5 · medium/);
+  assert.match(sent.html, /Claude Sonnet 5\.5<\/span>/);
+  assert.match(sent.html, />medium<\/span>/);
+  assert.doesNotMatch(sent.text, /Done|Waiting for your reply/);
+  assert.doesNotMatch(sent.html, /Done|Waiting for your reply/);
+  for (const content of [sent.text, sent.html.slice(sent.html.indexOf('<footer'))]) {
+    assert.ok(content.indexOf('Transcript') < content.indexOf('Claude Sonnet'));
+    assert.ok(content.indexOf('medium') < content.indexOf('TagMails'));
+  }
   assert.doesNotMatch(sent.html, /<h2>What happened<\/h2>|<h2>Checks and limits<\/h2>|<ul>/);
   assert.match(sent.html, /class="mark"/);
   assert.match(sent.html, /href="https:\/\/tagmails\.example\/"/);
