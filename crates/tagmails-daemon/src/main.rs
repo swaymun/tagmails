@@ -13,7 +13,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path};
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn post(client: &Client, base: &str, path: &str, body: Value) -> Result<Value, Box<dyn Error>> {
     let response = client
@@ -167,6 +167,29 @@ fn relay_post(
         .send()?
         .error_for_status()?;
     Ok(response.json()?)
+}
+
+fn publish_model_catalog(client: &Client, base: &str, token: &str) -> Result<(), Box<dyn Error>> {
+    let executable = env::current_exe()?;
+    let root = executable
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .ok_or("Daemon must run from the project's target directory")?;
+    let probe = root.join("apps/mock-inbox/codex-models.mjs");
+    if !probe.is_file() {
+        return Err("Codex model probe is missing beside the daemon checkout".into());
+    }
+    let output = Command::new("node").arg(probe).output()?;
+    if !output.status.success() {
+        return Err("Codex model probe could not read this Mac's catalog".into());
+    }
+    let catalog: Value = serde_json::from_slice(&output.stdout)?;
+    let response = relay_post(client, base, "/api/device/models", token, catalog)?;
+    if response["saved"] != true {
+        return Err("Relay did not save the model catalog".into());
+    }
+    Ok(())
 }
 
 fn verified_claim(response: &Value, token: &str) -> Result<Value, Box<dyn Error>> {
@@ -607,7 +630,15 @@ fn run_relay(base: &str) -> Result<(), Box<dyn Error>> {
     if watch {
         println!("TagMails relay watching {base}. Press Ctrl-C to stop.");
     }
+    let mut next_model_probe = Instant::now();
     loop {
+        if Instant::now() >= next_model_probe {
+            next_model_probe = Instant::now() + Duration::from_secs(120);
+            match publish_model_catalog(&client, base, token) {
+                Ok(()) => next_model_probe = Instant::now() + Duration::from_secs(3600),
+                Err(error) => eprintln!("Model catalog refresh unavailable: {error}"),
+            }
+        }
         let claimed = match relay_iteration(&client, base, token, &access) {
             Ok(false) if once => {
                 println!("No queued relay mail.");

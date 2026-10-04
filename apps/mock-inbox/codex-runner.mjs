@@ -9,7 +9,7 @@ import { prepareCodexProfile, PROFILE, WRITE_PROFILE, FULL_PROFILE } from './cod
 import { renewClaim } from './claim-renew.mjs';
 import { addRunEvent, codexRunEvent, finishRunTranscript, runTranscript } from './run-transcript.mjs';
 
-const MODELS = new Set(['gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol']);
+const CODEX_MODEL_ID = /^[a-z][a-z0-9][a-z0-9._-]{0,62}$/;
 const runtimeFor = (write, full = false) => full ? 'codex-app-server-full' : write ? 'codex-app-server-write' : 'codex-app-server-readonly';
 const MAX_EVENTS = 2 * 1024 * 1024;
 const MAX_CLAIM = 8 * 1024 * 1024;
@@ -184,7 +184,7 @@ async function savedRunTranscript(request, threadId, turnId, requestRpc) {
   return { answer: savedAnswer, transcript: finishRunTranscript(transcript, savedAnswer) };
 }
 
-function codexEnvironment(home) {
+export function codexEnvironment(home) {
   const allowed = ['HOME', 'USER', 'PATH', 'TMPDIR', 'LANG', 'LC_ALL', 'SSL_CERT_FILE'];
   return { ...Object.fromEntries(allowed.filter((key) => process.env[key]).map((key) => [key, process.env[key]])),
     CODEX_HOME: home };
@@ -194,7 +194,7 @@ function empty(value) {
   return value == null || (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0);
 }
 
-function restrictedConfiguration(value) {
+export function restrictedConfiguration(value) {
   const config = value?.config;
   if (!config || !Array.isArray(value.layers) || config.web_search !== 'disabled' || config.sandbox_mode != null ||
       !empty(config.mcp_servers) || !empty(config.plugins) || !empty(config.marketplaces) ||
@@ -366,8 +366,9 @@ export async function runClaim(claim, { write = false, full = false } = {}) {
   if (full) write = true;
   if (!claim?.claimed || !/^[a-z0-9-]+$/.test(claim.jobId || '') || !/^[a-z0-9-]+$/.test(claim.threadId || '')) throw new Error('Invalid local claim');
   if (claim.model?.error) return { state: 'needs_clarification', summary: claim.model.error, runtime: runtimeFor(write, full) };
-  if (!MODELS.has(claim.model?.id) || typeof claim.model?.effort !== 'string' ||
-      !['standard', 'fast', 'ultrafast'].includes(claim.model?.speed || 'standard')) return fail('This prototype can run Codex Luna or Sol only.', write, full);
+  if (!CODEX_MODEL_ID.test(claim.model?.id ?? '') || claim.model.id.startsWith('claude-') ||
+      typeof claim.model?.effort !== 'string' ||
+      !['standard', 'fast', 'ultrafast'].includes(claim.model?.speed || 'standard')) return fail('The selected Codex model or setting is invalid.', write, full);
   const selected = process.env.TAGMAILS_WORKSPACE;
   if (!selected || !path.isAbsolute(selected) || !(await fs.stat(selected)).isDirectory()) throw new Error('Select an absolute TAGMAILS_WORKSPACE directory');
   const workspace = await fs.realpath(selected);

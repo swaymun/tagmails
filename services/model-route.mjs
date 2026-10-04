@@ -4,13 +4,20 @@ const MODEL_LABELS = {
   'claude-sonnet-5-5': 'Claude Code Sonnet 5.5',
   'gpt-6-luna': 'Codex GPT-6 Luna',
 };
-const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+const EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+
+function modelLabel(id) {
+  if (MODEL_LABELS[id]) return MODEL_LABELS[id];
+  if (!/^gpt-[a-z0-9][a-z0-9._-]{0,62}$/.test(id ?? '')) return null;
+  return `Codex ${id.split('-').map((part, index) => index === 0 ? 'GPT' :
+    part.charAt(0).toUpperCase() + part.slice(1)).join('-').replace(/-([A-Z][a-z]+)$/, ' $1')}`;
+}
 
 export function selectedModelDetail(json) {
   if (!json) return null;
   try {
     const model = JSON.parse(json);
-    const label = MODEL_LABELS[model.id];
+    const label = modelLabel(model.id);
     if (!label || !EFFORTS.has(model.effort) ||
         !['standard', 'fast', 'ultrafast'].includes(model.speed || 'standard') ||
         !['default', 'pilot', 'explicit', 'classified', 'thread'].includes(model.source)) return null;
@@ -27,7 +34,7 @@ export function selectedModelStatus(json) {
   if (!json) return null;
   try {
     const model = JSON.parse(json);
-    const label = MODEL_LABELS[model.id]?.replace(/^Codex /, '').replace(/^Claude Code /, 'Claude ');
+    const label = modelLabel(model.id)?.replace(/^Codex /, '').replace(/^Claude Code /, 'Claude ');
     if (!label || !EFFORTS.has(model.effort) ||
         !['standard', 'fast', 'ultrafast'].includes(model.speed || 'standard') ||
         !['default', 'pilot', 'explicit', 'classified', 'thread'].includes(model.source)) return null;

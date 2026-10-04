@@ -13,6 +13,7 @@ import { fundPendingTestEmails, reconcileTestEmailCharges, reservePendingTestEma
 import { deleteExpiredRunArtifacts } from './run-artifacts.mjs';
 import { deleteSettledInboundMime } from './inbound-retention.mjs';
 import { sendNextStatusReaction } from './status-reactions.mjs';
+import { accountModelCatalog } from './model-catalog.mjs';
 
 const MAX_WEBHOOK_BYTES = 128_000;
 
@@ -198,8 +199,9 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
   const objectKey = `inbound/${account.id}/${message.providerEmailId}.eml`;
   await env.MAIL.put(objectKey, message.rawMime, { httpMetadata: { contentType: 'message/rfc822' } });
   const statements = [];
-  if (!threadId) statements.push(env.DB.prepare('INSERT INTO threads (id, account_id, subject) VALUES (?, ?, ?)')
-    .bind(newThreadId, account.id, message.subject.slice(0, 300)));
+  const catalog = await accountModelCatalog(env.DB, account.id, threadId);
+  if (!threadId) statements.push(env.DB.prepare('INSERT INTO threads (id, account_id, subject, device_id) VALUES (?, ?, ?, ?)')
+    .bind(newThreadId, account.id, message.subject.slice(0, 300), catalog.deviceId));
   statements.push(env.DB.prepare(`INSERT INTO messages
     (id, account_id, thread_id, provider_email_id, message_id, direction, sender_email, object_key, agent_email)
     VALUES (?, ?, ?, ?, ?, 'inbound', ?, ?, ?)`).bind(id, account.id, newThreadId, message.providerEmailId, message.messageId, message.from, objectKey, agent));
@@ -217,6 +219,7 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
     apiKey: env.TYPESAFE_API_KEY, fetcher: fetchModel, priorModel, subject: message.subject,
     pilotCodexModel: env.PILOT_CODEX_MODEL,
     defaultEffort: account.default_effort, defaultSpeed: account.default_speed,
+    availableModels: catalog.models,
   });
   if (model?.id === 'claude-sonnet-5-5' && env.CLAUDE_ROUTE_ENABLED !== 'true') {
     model = { error: 'Claude models are not enabled in this pilot. Ask for an available OpenAI model or omit the model to use your default.' };

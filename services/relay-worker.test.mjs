@@ -52,6 +52,26 @@ test('Jev routes natural model requests in a thread and ordinary replies inherit
   ]);
 });
 
+test('a new thread uses the paired Mac catalog for Jev and stays on that Mac', async () => {
+  const { env, sqlite } = bindings();
+  env.TYPESAFE_API_KEY = 'test-key';
+  sqlite.prepare(`INSERT INTO devices (id, account_id, token_hash, model_catalog_json, model_catalog_at)
+    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`).run('mac-1', 'account-1', 'hash-1',
+    JSON.stringify([{ id: 'gpt-6-astra', name: 'GPT-6 Astra', efforts: ['medium'],
+      speeds: ['standard'] }, { id: 'gpt-6-sol', name: 'GPT-6 Sol', efforts: ['medium'],
+      speeds: ['standard'] }]));
+  const fetchModel = async (_url, request) => {
+    const route = JSON.parse(request.body).questions.route;
+    assert.match(route.criteria.model0, /GPT-6 Astra/);
+    assert.equal(route.criteria.codex61, undefined);
+    return Response.json({ answers: { route: { type: 'choice', choice: 'model0',
+      probabilities: { model0: 0.96 } } } });
+  };
+  await deliver(env, mail('mac-model', 'owner@gmail.com', { body: 'Use Astra for this review.' }), { fetchModel });
+  assert.equal(sqlite.prepare('SELECT device_id FROM threads').get().device_id, 'mac-1');
+  assert.equal(JSON.parse(sqlite.prepare('SELECT model_json FROM jobs').get().model_json).id, 'gpt-6-astra');
+});
+
 test('the live pilot holds Claude subscription requests without charging or running an agent', async () => {
   const { env, sqlite } = bindings();
   delete env.CLAUDE_ROUTE_ENABLED;

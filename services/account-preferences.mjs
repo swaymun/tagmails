@@ -1,5 +1,7 @@
-const MODELS = new Set(['gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'claude-sonnet-5-5']);
-const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+import { accountModelCatalog } from './model-catalog.mjs';
+
+const LEGACY_MODELS = new Set(['gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'claude-sonnet-5-5']);
+const EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 const SPEEDS = new Set(['standard', 'fast', 'ultrafast']);
 
 export async function accountPreferences(env, account) {
@@ -14,8 +16,14 @@ export async function accountPreferences(env, account) {
 
 export async function saveAccountPreferences(env, account, input) {
   const { model, effort, speed } = input ?? {};
-  if (!MODELS.has(model) || !EFFORTS.has(effort) || !SPEEDS.has(speed)) {
+  const catalog = await accountModelCatalog(env.DB, account.id);
+  const available = catalog.models.find((item) => item.id === model);
+  if (!(catalog.models.length ? available || (model === 'claude-sonnet-5-5' && env.CLAUDE_ROUTE_ENABLED === 'true')
+    : LEGACY_MODELS.has(model)) || !EFFORTS.has(effort) || !SPEEDS.has(speed)) {
     throw new Error('Choose an available model, reasoning effort, and speed.');
+  }
+  if (available && (!available.efforts.includes(effort) || !available.speeds.includes(speed))) {
+    throw new Error('That model does not offer the selected reasoning effort or speed on this Mac.');
   }
   if (model === 'claude-sonnet-5-5' && speed !== 'standard') {
     throw new Error('Claude Code does not offer this speed in the pilot.');

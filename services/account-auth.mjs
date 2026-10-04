@@ -5,6 +5,7 @@ import { selectedModelDetail } from './model-route.mjs';
 import { artifactForDownload, selectedRunArtifacts } from './run-artifacts.mjs';
 import { knownAgentAddresses } from './agent-addresses.mjs';
 import { accountPreferences, saveAccountPreferences } from './account-preferences.mjs';
+import { accountModelCatalog } from './model-catalog.mjs';
 
 const googleKeys = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
 const DEVICE_TOKEN = /^tm_dev_[A-Za-z0-9_-]{43}$/;
@@ -298,6 +299,9 @@ async function siteAccountRequest(request, env, pathname, verifyIdentity) {
   if (pathname === '/api/site/preferences' && request.method === 'GET') {
     return json(await accountPreferences(env, account), 200, headers);
   }
+  if (pathname === '/api/site/models' && request.method === 'GET') {
+    return json(await accountModelCatalog(env.DB, account.id), 200, headers);
+  }
   if (pathname === '/api/site/preferences' && request.method === 'POST') {
     try { return json(await saveAccountPreferences(env, account, await bodyJson(request)), 200, headers); }
     catch (error) { return json({ error: error.message }, 400, headers); }
@@ -511,6 +515,10 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
   if (pathname === '/api/account/devices' && request.method === 'GET') {
     if (!account) return json({ error: 'Sign in required' }, 401);
     return json(await accountDevices(env, account.id));
+  }
+  if (pathname === '/api/account/models' && request.method === 'GET') {
+    if (!account) return json({ error: 'Sign in required' }, 401);
+    return json(await accountModelCatalog(env.DB, account.id));
   }
   if (pathname === '/api/account/threads' && request.method === 'GET') {
     if (!account) return json({ error: 'Sign in required' }, 401);

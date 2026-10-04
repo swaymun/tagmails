@@ -3,6 +3,7 @@ import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.m
 import { chooseModel } from '../apps/mock-inbox/model.mjs';
 import { testBillingEnabled } from './email-charges.mjs';
 import { ARTIFACT_ID, selectedRunArtifacts, uploadRunArtifact } from './run-artifacts.mjs';
+import { cleanCodexCatalog } from './model-catalog.mjs';
 
 const TOKEN = /^tm_dev_[A-Za-z0-9_-]{43}$/;
 const LEASE_SECONDS = 90;
@@ -257,7 +258,7 @@ async function complete(env, device, body) {
 export async function handleDeviceRequest(request, env) {
   const url = new URL(request.url);
   if (!((request.method === 'GET' && ['/api/device/attachment', '/api/device/status'].includes(url.pathname)) ||
-    (request.method === 'POST' && ['/api/device/claim', '/api/device/renew', '/api/device/started', '/api/device/complete', '/api/device/artifacts'].includes(url.pathname)))) {
+    (request.method === 'POST' && ['/api/device/claim', '/api/device/renew', '/api/device/started', '/api/device/complete', '/api/device/artifacts', '/api/device/models'].includes(url.pathname)))) {
     return new Response('Not found', { status: 404 });
   }
   if (url.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(url.hostname)) return json({ error: 'HTTPS required' }, 403);
@@ -273,6 +274,15 @@ export async function handleDeviceRequest(request, env) {
   let body;
   try { body = await boundedJson(request); }
   catch { return json({ error: 'Invalid or oversized JSON body' }, 400); }
+  if (url.pathname === '/api/device/models') {
+    let models;
+    try { models = cleanCodexCatalog(body?.models); }
+    catch { return json({ error: 'Invalid model catalog' }, 400); }
+    await env.DB.prepare(`UPDATE devices SET model_catalog_json = ?, model_catalog_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND account_id = ? AND revoked_at IS NULL`)
+      .bind(JSON.stringify(models), device.id, device.account_id).run();
+    return json({ saved: true, count: models.length });
+  }
   if (url.pathname === '/api/device/renew') return renew(env, device, body);
   return url.pathname === '/api/device/started' ? started(env, device, body) : complete(env, device, body);
 }

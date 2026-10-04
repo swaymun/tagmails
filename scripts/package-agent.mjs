@@ -20,6 +20,7 @@ const files = [
   'apps/mock-inbox/claim-renew.mjs',
   'apps/mock-inbox/claude-runner.mjs',
   'apps/mock-inbox/codex-profile.mjs',
+  'apps/mock-inbox/codex-models.mjs',
   'apps/mock-inbox/codex-runner.mjs',
   'apps/mock-inbox/run-transcript.mjs',
 ];

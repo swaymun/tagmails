@@ -20,10 +20,12 @@ function requestedModel(body) {
   return null;
 }
 
-export function chooseModel(body, defaultModel = 'gpt-6.1-sol', { codexModel = 'gpt-6.1-sol' } = {}) {
+export function chooseModel(body, defaultModel = 'gpt-6.1-sol', { codexModel = 'gpt-6.1-sol', availableModels } = {}) {
   const requested = requestedModel(body);
   if (requested === null) {
-    const saved = ACCOUNT_DEFAULT_MODELS.includes(defaultModel) ? defaultModel : 'gpt-6.1-sol';
+    const ids = Array.isArray(availableModels) && availableModels.length
+      ? availableModels.map((model) => model.id) : ACCOUNT_DEFAULT_MODELS;
+    const saved = ids.includes(defaultModel) ? defaultModel : ids.includes(codexModel) ? codexModel : ids[0];
     return { id: saved === 'gpt-6.1-sol' ? codexModel : saved,
       effort: 'medium', source: saved === 'gpt-6.1-sol' && codexModel !== saved ? 'pilot' : 'default' };
   }
@@ -52,7 +54,8 @@ export function chooseModel(body, defaultModel = 'gpt-6.1-sol', { codexModel = '
   };
   const match = requested.match(/^(.*?)(?:\s+(low|medium|high|xhigh|max|ultra))?$/);
   const choice = choices[match?.[1]];
-  return choice ? { id: choice[0], effort: match[2] || choice[1], source: 'explicit' } : {
+  return choice && (!availableModels?.length || availableModels.some((model) => model.id === choice[0]))
+    ? { id: choice[0], effort: match[2] || choice[1], source: 'explicit' } : {
     error: UNKNOWN_MODEL,
   };
 }
