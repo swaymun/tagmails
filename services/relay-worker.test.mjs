@@ -60,7 +60,7 @@ test('the live pilot holds Claude subscription requests without charging or runn
   assert.deepEqual(await deliver(env, message), { accepted: true, duplicate: false });
   const job = sqlite.prepare('SELECT model_json, state FROM jobs').get();
   assert.equal(job.state, 'queued');
-  assert.match(JSON.parse(job.model_json).error, /Claude Code is unavailable/);
+  assert.match(JSON.parse(job.model_json).error, /Claude models are not enabled/);
   assert.equal(await completeOneModelClarification(env), true);
   assert.equal(sqlite.prepare('SELECT state FROM jobs').get().state, 'completed');
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM test_email_charges').get().count, 0);
@@ -124,8 +124,9 @@ test('a malformed model request gets a relay clarification without a paired Mac'
   assert.equal(reply.replyTo, 'agent@wonder.test');
   assert.deepEqual(reply.to, ['owner@gmail.com']);
   assert.match(reply.text, /Which model should I use\?/);
-  assert.match(reply.text, /Ask for Codex, Claude, or Luna, or omit the model to use your default/);
+  assert.match(reply.text, /available OpenAI or Claude model.*omit the model to use your default/);
   assert.match(reply.text, /Run details/);
+  assert.doesNotMatch(reply.html, /Waiting for your reply|Needs reply/);
   assert.match(reply.text, /No local agent ran/);
   assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM outbox').get().n, 1);
 });

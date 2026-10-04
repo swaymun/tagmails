@@ -8,14 +8,15 @@ const fixtures = [
     id: 'completed', title: 'Agent reply',
     result: { state: 'completed', summary: 'The beta decision is to start with Gmail and one Mac workspace.',
       details: ['Codex read the selected plan.\nThe domain purchase still needs an owner.'],
-      statusLine: 'Completed · Codex GPT-6 Sol · high reasoning · Fast requested',
-      meta: ['TagMails test credits remaining: $9.25.'],
+      statusLine: 'Done · GPT-6 Sol · high · Fast',
+      meta: ['Credits $9.25'],
       brandUrl: 'https://tagmails.saimun-h-shahee.chatgpt.site',
       checks: ['No domain was purchased.'],
       links: [{ label: 'Open run receipt', url: 'https://example.test/runs/1' }],
       note: 'Reply with the next decision.' },
-    phrases: ['Gmail and one Mac workspace', 'No domain was purchased.', 'Reply with the next decision.',
-      'Completed · Codex GPT-6 Sol · high reasoning · Fast requested', 'TagMails test credits remaining: $9.25.'],
+    phrases: ['Gmail and one Mac workspace',
+      'Done · GPT-6 Sol · high · Fast', 'Credits $9.25'],
+    textOnlyPhrases: ['No domain was purchased.', 'Reply with the next decision.'],
     links: [{ label: 'Open run receipt', url: 'https://example.test/runs/1' }],
   },
   {
@@ -35,7 +36,7 @@ const fixtures = [
     result: { state: 'completed', summary: 'The image draft is ready for review.',
       checks: ['Preview it in the private viewer before sharing.'],
       links: [{ label: 'Open image draft', url: 'https://example.test/private/image/1' }] },
-    phrases: ['image draft is ready', 'private viewer'],
+    phrases: ['image draft is ready'], textOnlyPhrases: ['private viewer'],
     links: [{ label: 'Open image draft', url: 'https://example.test/private/image/1' }],
   },
   {
@@ -50,7 +51,7 @@ const fixtures = [
     result: { state: 'completed', summary: 'The video review cut is ready.',
       checks: ['Playback stays in the private viewer.'],
       links: [{ label: 'Watch review cut', url: 'https://example.test/private/video/1' }] },
-    phrases: ['video review cut', 'Playback stays'],
+    phrases: ['video review cut'], textOnlyPhrases: ['Playback stays'],
     links: [{ label: 'Watch review cut', url: 'https://example.test/private/video/1' }],
   },
   {
@@ -67,8 +68,8 @@ const fixtures = [
   },
   {
     id: 'clarification', title: 'Which model should I use?',
-    result: { state: 'needs_clarification', summary: 'Choose Codex, Claude, or Luna.' },
-    phrases: ['Choose Codex, Claude, or Luna.'], absent: ['Agent reply'],
+    result: { state: 'needs_clarification', summary: 'Ask for an available OpenAI or Claude model.' },
+    phrases: ['Ask for an available OpenAI or Claude model.'], absent: ['Agent reply'],
   },
   {
     id: 'hostile-text', title: 'Agent reply',
@@ -93,9 +94,11 @@ for (const fixture of fixtures) {
   const failures = [];
   if (!text || !html) failures.push('Multipart text or HTML is missing');
   if (!html.includes(`<h1>${fixture.title}</h1>`) || !text.startsWith(fixture.title)) failures.push('Outcome heading differs');
-  if (!text.includes('Reply to this email to continue the same task.') || !html.includes('Reply to this email to continue the same task.')) failures.push('Reply continuity is missing');
   for (const phrase of fixture.phrases ?? []) {
     if (!text.includes(phrase) || !html.includes(escapeHtml(phrase))) failures.push(`Content missing: ${phrase}`);
+  }
+  for (const phrase of fixture.textOnlyPhrases ?? []) {
+    if (!text.includes(phrase)) failures.push(`Plain-text detail missing: ${phrase}`);
   }
   for (const link of fixture.links ?? []) {
     if (!text.includes(`${link.label}: ${link.url}`) || !html.includes(`href="${escapeHtml(link.url)}"`)) failures.push(`Link missing: ${link.label}`);

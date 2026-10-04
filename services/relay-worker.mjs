@@ -219,7 +219,7 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
     defaultEffort: account.default_effort, defaultSpeed: account.default_speed,
   });
   if (model?.id === 'claude-sonnet-5-5' && env.CLAUDE_ROUTE_ENABLED !== 'true') {
-    model = { error: 'Claude Code is unavailable in this pilot. Please ask for Codex or Luna.' };
+    model = { error: 'Claude models are not enabled in this pilot. Ask for an available OpenAI model or omit the model to use your default.' };
   }
   const unavailableResult = threadUnavailable ? {
     runtime: 'relay', state: 'failed',

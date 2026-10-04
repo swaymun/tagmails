@@ -156,14 +156,19 @@ test('a free clarification can reply while an earlier task waits for the Mac or 
   await queuedTurn(fixture, { number: 2, from: 'owner@gmail.com', to: ['agent@wonder.test'],
     inReplyTo: '<inbound-1@gmail.com>' });
   await env.MAIL.put('results/2.json', JSON.stringify({ runtime: 'relay',
-    state: 'needs_clarification', summary: 'Put Model: Codex on its own line.' }));
+    state: 'needs_clarification', summary: 'Please choose an available model.' }));
   let sent = 0;
+  let clarification;
   const provider = {
-    sendEmail: async () => ({ data: { id: `ordered-${++sent}` } }),
+    sendEmail: async (payload) => {
+      if (!sent) clarification = payload;
+      return { data: { id: `ordered-${++sent}` } };
+    },
     getSentEmail: async (id) => ({ data: { message_id: `<${id}@tagmails.test>` } }),
   };
   assert.equal((await sendNextOutbox(env, provider)).jobId, 'job-2');
   assert.equal(sent, 1);
+  assert.doesNotMatch(clarification.html, /Waiting for your reply|Needs reply/);
   sqlite.prepare("UPDATE jobs SET state = 'completed', result_key = 'results/1.json' WHERE id = 'job-1'").run();
   sqlite.prepare("INSERT INTO outbox (job_id) VALUES ('job-1')").run();
   assert.equal((await sendNextOutbox(env, provider)).jobId, 'job-1');
@@ -239,8 +244,8 @@ test('the result email names the model recorded at receipt, including an explici
     sendEmail: async (payload) => { sent = payload; return { data: { id: 'model-sent-1' } }; },
     getSentEmail: async () => ({ data: { message_id: '<model-sent-1@tagmails.test>' } }),
   })).state, 'sent');
-  assert.match(sent.text, /Completed · Claude Code Sonnet 5\.5 · medium reasoning · Standard speed/);
-  assert.match(sent.html, /Completed · Claude Code Sonnet 5\.5 · medium reasoning · Standard speed/);
+  assert.match(sent.text, /Done · Claude Sonnet 5\.5 · medium/);
+  assert.match(sent.html, /Done · Claude Sonnet 5\.5 · medium/);
   assert.doesNotMatch(sent.html, /<h2>What happened<\/h2>|<h2>Checks and limits<\/h2>|<ul>/);
   assert.match(sent.html, /class="mark"/);
   assert.match(sent.html, /href="https:\/\/tagmails\.example\/"/);
@@ -655,7 +660,7 @@ test('guest-only replies link to the Site transcript only after participant acce
   };
   assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
   assert.ok(payloads[0].html.includes(`https://site.tagmails.test/run?id=${receiptJobId}`));
-  assert.match(payloads[0].text, /Run transcript \(owner only\)/);
+  assert.match(payloads[0].text, /Transcript \(owner only\)/);
   assert.doesNotMatch(payloads[0].html, /relay\.tagmails\.test\/runs/);
   await queuedTurn(fixture, { number: 2, from: 'reviewer@gmail.com', to: ['agent@wonder.test'] });
   assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
@@ -693,9 +698,9 @@ test('owner-only replies show remaining test credits without exposing them to gu
     getSentEmail: async (id) => ({ data: { message_id: `<${id}@tagmails.test>` } }),
   };
   assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
-  assert.match(payloads[0].text, /TagMails test credits remaining: \$9\.95\./);
-  assert.match(payloads[0].html, /TagMails test credits remaining: \$9\.95\./);
-  assert.match(payloads[0].text, /Connected Codex plan: 66% remaining/);
+  assert.match(payloads[0].text, /Credits \$9\.95/);
+  assert.match(payloads[0].html, /Credits \$9\.95/);
+  assert.match(payloads[0].text, /Codex 66% \(7-day\)/);
 
   sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)').run('thread-1', 'reviewer@gmail.com');
   await queuedTurn(fixture, { number: 2, from: 'reviewer@gmail.com',

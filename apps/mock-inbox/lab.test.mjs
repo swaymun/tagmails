@@ -63,7 +63,7 @@ test('offline mail survives restart and produces a threaded multipart reply', (t
   assert.match(outgoing.mime, new RegExp(`In-Reply-To: ${thread.messages[0].id.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
   assert.ok(outgoing.mime.includes(`References: ${thread.messages[0].id}`));
   assert.match(readGeneratedMime(outgoing.mime).html, /No model was called/);
-  assert.match(readGeneratedMime(outgoing.mime).text, /Reply to this email/);
+  assert.match(readGeneratedMime(outgoing.mime).text, /View simulated run/);
 });
 
 test('the Gmail lab shows ordered status reactions through a shared follow-up and failure', (t) => {
@@ -229,7 +229,7 @@ test('owner and invited guest continue one MIME thread across turns, restart, an
   assert.equal(secondAgent.replyTo, guestId);
   assert.ok(secondAgent.mime.includes(`In-Reply-To: ${guestId}`));
   assert.ok(secondAgent.mime.includes(`References: ${ownerId} ${firstAgent.id} ${guestId}`));
-  assert.match(readGeneratedMime(secondAgent.mime).text, /Reply to this email to continue the same task/);
+  assert.match(readGeneratedMime(secondAgent.mime).text, /View simulated run/);
 
   const ownerFollowupId = '<owner-turn-3@example.test>';
   const followup = await resumed.importMime(rawTextMail({

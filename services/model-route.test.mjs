@@ -16,5 +16,5 @@ test('the receipt names the available pilot Sol default', () => {
 test('the email footer keeps the selected route compact without claiming measured speed', () => {
   assert.equal(selectedModelStatus(JSON.stringify({ id: 'gpt-6-sol', effort: 'high',
     speed: 'fast', source: 'classified' })),
-  'Codex GPT-6 Sol · high reasoning · Fast requested');
+  'GPT-6 Sol · high · Fast');
 });

@@ -291,7 +291,7 @@ async function runCodex(claim, workspace, home, sessionId, staged, write, full =
     const available = catalog?.data?.find((model) => model?.id === claim.model.id);
     const speed = claim.model.speed || 'standard';
     if (!available) return {
-      result: { ...fail(`${claim.model.id} is not available on this Mac's Codex app-server. Ask for Codex Sol or Luna.`, write, full),
+      result: { ...fail(`${claim.model.id} is not available on this Mac's Codex app-server. Choose an OpenAI model it offers, or omit the model to use your default.`, write, full),
         state: 'needs_clarification', transcript } };
     const efforts = available?.supportedReasoningEfforts?.map((item) => item.reasoningEffort) ?? [];
     if (available && !efforts.includes(claim.model.effort)) return { result: { ...fail(`${claim.model.id} does not offer ${claim.model.effort} reasoning on this Mac.`, write, full),

@@ -1,5 +1,6 @@
 export const ACCOUNT_DEFAULT_MODELS = ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'claude-sonnet-5-5'];
-const UNKNOWN_MODEL = 'I could not identify an available model in this request. Ask for Codex, Claude, or Luna, or omit the model to use your default.';
+export const UNAVAILABLE_MODEL = 'That model is unavailable for this agent. Ask for an available OpenAI or Claude model, or omit the model to use your default.';
+const UNKNOWN_MODEL = 'I could not identify an available OpenAI or Claude model in this request. Reply with a supported model, or omit the model to use your default.';
 
 function requestedModel(body) {
   let inDirectives = false;

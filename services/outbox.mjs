@@ -224,9 +224,9 @@ async function prepare(env, row) {
     : relayOrigin ? `${relayOrigin}/runs/${encodeURIComponent(row.job_id)}` : null;
   const participantTranscriptReady = siteOrigin && env.SITE_PARTICIPANT_TRANSCRIPTS === 'true';
   const sharedWithParticipant = [...to, ...cc].some((email) => email !== owner);
-  const runLinkLabel = result.runtime === 'relay' ? 'Run details' : 'Run transcript';
+  const runLinkLabel = result.runtime === 'relay' ? 'Run details' : 'Transcript';
   const fileNote = result.artifactIds?.length && ownerCanOpen && siteOrigin
-    ? [`${result.artifactIds.length} file${result.artifactIds.length === 1 ? '' : 's'} available on the private run page for seven days.`]
+    ? [`${result.artifactIds.length} file${result.artifactIds.length === 1 ? '' : 's'} · 7 days`]
     : [];
   const selectedModel = selectedModelStatus(inbound.model_json);
   const ownerOnly = to.length === 1 && to[0] === owner && cc.length === 0;
@@ -236,9 +236,9 @@ async function prepare(env, row) {
     ? await env.DB.prepare('SELECT state FROM test_email_charges WHERE job_id = ?').bind(row.job_id).first()
     : null;
   const noChargeDetail = charge?.state === 'released'
-    ? 'This attempt did not use a TagMails test credit.' : null;
+    ? 'No credit used' : null;
   const creditDetail = balance
-    ? `TagMails test credits remaining: $${(balance.balanceCents / 100).toFixed(2)}.` : null;
+    ? `Credits $${(balance.balanceCents / 100).toFixed(2)}` : null;
   const allowance = ownerOnly && result.codexAllowance;
   const allowanceFresh = allowance && Number.isSafeInteger(allowance.observedAt) &&
     Date.now() >= allowance.observedAt && Date.now() - allowance.observedAt <= 15 * 60_000;
@@ -251,15 +251,14 @@ async function prepare(env, row) {
         const duration = window.durationMins % 1440 === 0
           ? `${window.durationMins / 1440}-day` : window.durationMins % 60 === 0
             ? `${window.durationMins / 60}-hour` : `${window.durationMins}-minute`;
-        return `Connected Codex plan: ${window.remainingPercent}% remaining in the ${duration} window (resets ${new Date(window.resetsAt * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC).`;
+        return `Codex ${window.remainingPercent}% (${duration})`;
       }) : [];
   const writeRun = ['codex-app-server-write', 'claude-cli-write'].includes(result.runtime);
   const rendered = renderResult({
     state: result.state, summary: result.summary,
     details: result.details,
-    statusLine: selectedModel
-      ? `${{ completed: 'Completed', failed: 'Could not finish', needs_approval: 'Needs attention',
-        needs_clarification: 'Waiting for your reply' }[result.state] ?? 'Run status'} · ${selectedModel}` : null,
+    statusLine: selectedModel && result.state !== 'needs_clarification'
+      ? `${{ completed: 'Done', failed: 'Stopped', needs_approval: 'Needs approval' }[result.state] ?? 'Run status'} · ${selectedModel}` : null,
     meta: [...fileNote, ...(noChargeDetail ? [noChargeDetail] : []),
       ...(creditDetail ? [creditDetail] : []), ...allowanceDetail],
     checks: result.checks,

@@ -20,7 +20,10 @@ test('Jev routes a clear new-thread model request and defaults when uncertain', 
   }), { id: 'gpt-6.1-sol', effort: 'medium', source: 'default' });
   assert.deepEqual(await routeModel('Use Gemini for this review.', 'gpt-6.1-sol', {
     apiKey: 'test-key', fetcher: jev('unsupported', 0.97),
-  }), { error: 'That model is not available. Use Codex, Claude, or Luna.' });
+  }), { error: 'That model is unavailable for this agent. Ask for an available OpenAI or Claude model, or omit the model to use your default.' });
+  assert.deepEqual(await routeModel('Use Claude Opus for this review.', 'gpt-6.1-sol', {
+    apiKey: 'test-key', fetcher: jev('unsupported', 0.67),
+  }), { error: 'That model is unavailable for this agent. Ask for an available OpenAI or Claude model, or omit the model to use your default.' });
 });
 
 test('an exact directive stays authoritative without a Jev call', async () => {
@@ -54,17 +57,24 @@ test('private pilot uses available Sol without silently replacing an exact 6.1 r
   }), { id: 'gpt-6-sol', effort: 'high', source: 'thread' });
 });
 
-test('a collapsed leading Model line is classified and otherwise uses the saved default', async () => {
+test('a collapsed leading Model line is classified or clarified without running another model', async () => {
   assert.deepEqual(await routeModel('Model: Luna please review this.', 'gpt-6.1-sol', {
     apiKey: 'test-key', fetcher: jev('luna', 0.94),
   }), { id: 'gpt-6-luna', effort: 'medium', source: 'classified' });
   const uncertain = await routeModel('Model: Luna please review this.', 'gpt-6.1-sol', {
     apiKey: 'test-key', fetcher: jev('luna', 0.42),
   });
-  assert.deepEqual(uncertain, { id: 'gpt-6.1-sol', effort: 'medium', source: 'default' });
+  assert.match(uncertain.error, /could not identify an available OpenAI or Claude model/);
+  const unsupported = await routeModel('Model: Gemini\nReview the copy.', 'gpt-6.1-sol', {
+    apiKey: 'test-key', fetcher: jev('none', 0.71),
+  });
+  assert.match(unsupported.error, /could not identify an available OpenAI or Claude model/);
+  const lowConfidenceUnsupported = await routeModel('Model: Claude Opus please review this.',
+    'gpt-6.1-sol', { apiKey: 'test-key', fetcher: jev('unsupported', 0.63) });
+  assert.match(lowConfidenceUnsupported.error, /model is unavailable/);
   assert.deepEqual(await routeModel('Model: Claude Opus please review this.', 'gpt-6.1-sol', {
     apiKey: 'test-key', fetcher: jev('unsupported', 0.95),
-  }), { error: 'That model is not available. Use Codex, Claude, or Luna.' });
+  }), { error: 'That model is unavailable for this agent. Ask for an available OpenAI or Claude model, or omit the model to use your default.' });
   assert.deepEqual(await routeModel('Model: Claude Internal routing check. Review this.',
     'gpt-6.1-sol', { apiKey: 'test-key', fetcher: jev('claude', 0.92) }),
   { id: 'claude-sonnet-5-5', effort: 'medium', source: 'classified' });

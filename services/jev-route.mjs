@@ -1,4 +1,4 @@
-import { chooseModel } from '../apps/mock-inbox/model.mjs';
+import { chooseModel, UNAVAILABLE_MODEL } from '../apps/mock-inbox/model.mjs';
 
 const CLAUDE = { id: 'claude-sonnet-5-5', effort: 'medium' };
 const LUNA = { id: 'gpt-6-luna', effort: 'medium' };
@@ -31,8 +31,8 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
   const direct = chooseModel(body, defaultModel, { codexModel });
   const knownPrior = priorModel && Object.values(routes).some(({ id }) => priorModel.id === id) &&
     EFFORTS.has(priorModel.effort);
-  // A malformed optional Model line is still an email request. Let Jev read
-  // its intent, then use the saved route if the classification is uncertain.
+  // Let Jev recover a natural request from a malformed Model line. If it
+  // cannot identify a supported choice, ask rather than run a different model.
   const fallback = direct.source === 'explicit' ? direct : knownPrior
     ? { id: priorModel.id, effort: priorModel.effort, source: 'thread' }
     : { ...chooseModel('', defaultModel, { codexModel }), effort: defaultEffort };
@@ -105,9 +105,10 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
     });
     if (!response.ok) throw new Error(`Jev HTTP ${response.status}`);
     const answers = (await response.json()).answers;
-    const routeChoice = confidentChoice(answers?.route, answers?.route?.choice === 'unsupported' ? 0.75 : 0.6);
-    if (routeChoice === 'unsupported') return { error: 'That model is not available. Use Codex, Claude, or Luna.' };
+    const routeChoice = confidentChoice(answers?.route, 0.6);
+    if (routeChoice === 'unsupported') return { error: UNAVAILABLE_MODEL };
     const route = Object.hasOwn(routes, routeChoice) ? routes[routeChoice] : null;
+    if (!route && direct.error) return direct;
     const selected = route ? { ...route, effort: defaultEffort, source: 'classified' } : { ...fallback };
     if (defaultSpeed !== 'standard') selected.speed = defaultSpeed;
     if (route && knownPrior && route.id === priorModel.id) selected.effort = priorModel.effort;

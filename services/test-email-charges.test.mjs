@@ -119,7 +119,7 @@ test('an invalid model gets a free clarification reply while funded work still w
   const result = JSON.parse(Buffer.from(await saved.arrayBuffer()).toString());
   assert.equal(result.runtime, 'relay');
   assert.equal(result.state, 'needs_clarification');
-  assert.match(result.summary, /could not identify an available model/i);
+  assert.match(result.summary, /could not identify an available OpenAI or Claude model/i);
   assert.deepEqual(await claim(env, token), { claimed: false });
   assert.equal((await sendNextOutbox(env, {
     sendEmail: async () => ({ data: { id: 'sent-clarification' } }),
@@ -202,8 +202,8 @@ test('failed and approval-waiting agent turns return test credit before their no
     assert.deepEqual(await testWalletSnapshot(env, 'account-1'), { balanceCents: 5, waitingEmails: 0 });
     assert.equal((await sendNextOutbox(env, {
       sendEmail: async (payload) => {
-        assert.match(payload.text, /This attempt did not use a TagMails test credit/);
-        assert.match(payload.text, /TagMails test credits remaining: \$0\.05/);
+        assert.match(payload.text, /No credit used/);
+        assert.match(payload.text, /Credits \$0\.05/);
         return { data: { id: `sent-${state}` } };
       },
       getSentEmail: async () => ({ data: { message_id: `<sent-${state}@tagmails.test>` } }),
