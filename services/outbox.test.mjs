@@ -244,14 +244,14 @@ test('the result email names the model recorded at receipt, including an explici
     sendEmail: async (payload) => { sent = payload; return { data: { id: 'model-sent-1' } }; },
     getSentEmail: async () => ({ data: { message_id: '<model-sent-1@tagmails.test>' } }),
   })).state, 'sent');
-  assert.match(sent.text, /Claude Sonnet 5\.5 · medium/);
+  assert.match(sent.text, /Claude Sonnet 5\.5 · Medium/);
   assert.match(sent.html, /Claude Sonnet 5\.5<\/span>/);
-  assert.match(sent.html, />medium<\/span>/);
+  assert.match(sent.html, />Medium<\/span>/);
   assert.doesNotMatch(sent.text, /Done|Waiting for your reply/);
   assert.doesNotMatch(sent.html, /Done|Waiting for your reply/);
   for (const content of [sent.text, sent.html.slice(sent.html.indexOf('<footer'))]) {
     assert.ok(content.indexOf('Transcript') < content.indexOf('Claude Sonnet'));
-    assert.ok(content.indexOf('medium') < content.indexOf('TagMails'));
+    assert.ok(content.indexOf('Medium') < content.indexOf('TagMails'));
   }
   assert.doesNotMatch(sent.html, /<h2>What happened<\/h2>|<h2>Checks and limits<\/h2>|<ul>/);
   assert.match(sent.html, /class="mark"/);
@@ -733,4 +733,77 @@ test('without a separate Site, an owner reply links to the Worker receipt', asyn
   })).state, 'sent');
   assert.ok(sent.html.includes(`https://relay.tagmails.test/runs/${jobId}`));
   assert.doesNotMatch(sent.html, /\/run\?id=/);
+});
+
+test('small output files attach only to an owner-only reply, with exact saved bytes', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  env.SITE_ORIGIN = 'https://tagmails.example';
+  const fileId = '11111111-1111-4111-8111-111111111111';
+  const bytes = Buffer.from('TagMails pilot workspace\n');
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  sqlite.prepare(`INSERT INTO run_artifacts
+    (id, account_id, job_id, lease_id, object_key, name, mime_type, byte_size)
+    VALUES (?, 'account-1', 'job-1', 'lease-1', 'files/status', 'status.txt', 'text/plain', ?)`)
+    .run(fileId, bytes.length);
+  await env.MAIL.put('files/status', bytes);
+  await env.MAIL.put('results/1.json', JSON.stringify({ state: 'completed', summary: 'File ready.', artifactIds: [fileId] }));
+  let sent;
+  let sends = 0;
+  const provider = { sendEmail: async (payload) => { sent = payload; return { data: { id: `attached-${++sends}` } }; },
+    getSentEmail: async (id) => ({ data: { message_id: `<${id}@tagmails.test>` } }) };
+  assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
+  assert.deepEqual(sent.attachments, [{ filename: 'status.txt', contentType: 'text/plain', content: bytes.toString('base64') }]);
+  assert.match(sent.text, /1 file attached/);
+  assert.match(sent.text, /Transcript/);
+  const saved = JSON.parse(sqlite.prepare('SELECT payload_json FROM outbox WHERE job_id = ?').get('job-1').payload_json);
+  assert.equal(saved.attachments[0].content, undefined);
+  assert.equal(await purgeSettledOutboundBodies(env), 1);
+  assert.equal(JSON.parse(sqlite.prepare('SELECT payload_json FROM outbox WHERE job_id = ?').get('job-1').payload_json).attachments, undefined);
+
+  // A shared reply must not carry an owner-only file, even if its result selects that ID.
+  sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)').run('thread-1', 'reviewer@gmail.com');
+  await queuedTurn(fixture, { number: 2, from: 'owner@gmail.com', to: ['agent@wonder.test', 'reviewer@gmail.com'] });
+  await env.MAIL.put('results/2.json', JSON.stringify({ state: 'completed', summary: 'Shared answer.', artifactIds: [fileId] }));
+  assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
+  assert.equal(sent.attachments, undefined);
+});
+
+test('large, expired, and different-job files are never attached to an email', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  env.SITE_ORIGIN = 'https://tagmails.example';
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  await queuedTurn(fixture, { number: 2, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  const rows = [
+    ['large-file', 'job-1', 5_000_001, '2099-01-01'],
+    ['expired-file', 'job-1', 10, '2000-01-01'],
+    ['different-job', 'job-2', 10, '2099-01-01'],
+  ];
+  for (const [id, job, size, expiry] of rows) sqlite.prepare(`INSERT INTO run_artifacts
+    (id, account_id, job_id, lease_id, object_key, name, mime_type, byte_size, expires_at)
+    VALUES (?, 'account-1', ?, 'lease-1', ?, 'file.txt', 'text/plain', ?, ?)`)
+    .run(id, job, `files/${id}`, size, expiry);
+  await env.MAIL.put('results/1.json', JSON.stringify({ state: 'completed', summary: 'Files ready.', artifactIds: rows.map(([id]) => id) }));
+  let sent;
+  assert.equal((await sendNextOutbox(env, { sendEmail: async (payload) => { sent = payload; return { data: { id: 'large-1' } }; },
+    getSentEmail: async () => ({ data: { message_id: '<large-1@tagmails.test>' } }) })).state, 'sent');
+  assert.equal(sent.attachments, undefined);
+  assert.match(sent.text, /1 file · 7 days/);
+  assert.match(sent.text, /Transcript/);
+});
+
+test('changed attachment bytes block the reply before a provider send', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  sqlite.prepare(`INSERT INTO run_artifacts
+    (id, account_id, job_id, lease_id, object_key, name, mime_type, byte_size, sha256)
+    VALUES ('changed-file', 'account-1', 'job-1', 'lease-1', 'files/changed', 'file.txt', 'text/plain', 4, ?)`)
+    .run('0'.repeat(64));
+  await env.MAIL.put('files/changed', Buffer.from('oops'));
+  await env.MAIL.put('results/1.json', JSON.stringify({ state: 'completed', summary: 'Ready.', artifactIds: ['changed-file'] }));
+  let sent = false;
+  assert.equal((await sendNextOutbox(env, { sendEmail: async () => { sent = true; } })).state, 'blocked');
+  assert.equal(sent, false);
 });

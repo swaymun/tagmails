@@ -40,6 +40,6 @@ export function selectedModelStatus(json) {
         !['default', 'pilot', 'explicit', 'classified', 'thread'].includes(model.source)) return null;
     const speed = model.speed && model.speed !== 'standard'
       ? ` · ${model.speed === 'fast' ? 'Fast' : 'Ultra-fast'}` : '';
-    return `${label} · ${model.effort}${speed}`;
+    return `${label} · ${model.effort.charAt(0).toUpperCase() + model.effort.slice(1)}${speed}`;
   } catch { return null; }
 }

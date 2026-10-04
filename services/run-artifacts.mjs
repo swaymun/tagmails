@@ -121,7 +121,7 @@ export async function selectedRunArtifacts(env, accountId, jobId, ids, leaseId =
 }
 
 export async function artifactForDownload(env, accountId, jobId, artifactId) {
-  return env.DB.prepare(`SELECT id, name, mime_type, byte_size, object_key, expires_at
+  return env.DB.prepare(`SELECT id, name, mime_type, byte_size, object_key, expires_at, sha256
     FROM run_artifacts WHERE account_id = ? AND job_id = ? AND id = ?
       AND expires_at > CURRENT_TIMESTAMP LIMIT 1`).bind(accountId, jobId, artifactId).first();
 }

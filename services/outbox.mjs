@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Resend } from 'resend';
 import { addressParser } from 'postal-mime';
 import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.mjs';
@@ -6,6 +6,10 @@ import { knownAgentAddresses } from './agent-addresses.mjs';
 import { renderResult } from '../apps/mock-inbox/mail.mjs';
 import { releaseFailedPrimaryTestEmail, releaseTestEmail, settleTestEmail, testBillingEnabled, testWalletSnapshot } from './email-charges.mjs';
 import { selectedModelStatus } from './model-route.mjs';
+import { artifactForDownload, selectedRunArtifacts } from './run-artifacts.mjs';
+
+// Keep direct attachments bounded; larger files remain owner-only downloads.
+const MAX_EMAIL_ATTACHMENT_BYTES = 5_000_000;
 
 const MESSAGE_ID = /^<[^<>\s]+@[^<>\s]+>$/;
 
@@ -225,11 +229,32 @@ async function prepare(env, row) {
   const participantTranscriptReady = siteOrigin && env.SITE_PARTICIPANT_TRANSCRIPTS === 'true';
   const sharedWithParticipant = [...to, ...cc].some((email) => email !== owner);
   const runLinkLabel = result.runtime === 'relay' ? 'Run details' : 'Transcript';
-  const fileNote = result.artifactIds?.length && ownerCanOpen && siteOrigin
-    ? [`${result.artifactIds.length} file${result.artifactIds.length === 1 ? '' : 's'} · 7 days`]
-    : [];
   const selectedModel = selectedModelStatus(inbound.model_json);
   const ownerOnly = to.length === 1 && to[0] === owner && cc.length === 0;
+  const attachments = [];
+  const files = ownerOnly && result.state === 'completed'
+    ? await selectedRunArtifacts(env, row.account_id, row.job_id, result.artifactIds) : [];
+  let attachedBytes = 0;
+  for (const file of files) {
+    if (attachedBytes + file.byte_size > MAX_EMAIL_ATTACHMENT_BYTES) continue;
+    const source = await artifactForDownload(env, row.account_id, row.job_id, file.id);
+    if (!source) continue;
+    const stored = await env.MAIL.get(source.object_key);
+    if (!stored) throw new InvalidOutboxSource('Selected email attachment is missing');
+    const bytes = Buffer.from(await stored.arrayBuffer());
+    if (bytes.length !== source.byte_size || (source.sha256 &&
+        createHash('sha256').update(bytes).digest('hex') !== source.sha256)) {
+      throw new InvalidOutboxSource('Selected email attachment does not match its saved bytes');
+    }
+    attachments.push({ filename: source.name, contentType: source.mime_type,
+      content: bytes.toString('base64') });
+    attachedBytes += bytes.length;
+  }
+  const fileNote = [
+    ...(attachments.length ? [`${attachments.length} file${attachments.length === 1 ? '' : 's'} attached`] : []),
+    ...(files.length > attachments.length && siteOrigin
+      ? [`${files.length - attachments.length} file${files.length - attachments.length === 1 ? '' : 's'} · 7 days`] : []),
+  ];
   const balance = ownerOnly && testBillingEnabled(env)
     ? await testWalletSnapshot(env, row.account_id) : null;
   const charge = balance
@@ -279,6 +304,7 @@ async function prepare(env, row) {
     to, ...(cc.length ? { cc } : {}),
     subject: /^re\s*:/i.test(inbound.subject) ? inbound.subject : `Re: ${inbound.subject}`,
     html: rendered.html, text: rendered.text,
+    ...(attachments.length ? { attachments } : {}),
     tags: [{ name: 'tagmails_job', value: row.job_id }],
     headers: { 'In-Reply-To': request.messageId, References: references.join(' ') },
   };
@@ -415,8 +441,11 @@ export async function sendNextOutbox(env, {
   if (payload.from !== (env.RESEND_TEST_FROM ?? row.agent_email.toLowerCase())) {
     throw new Error('Outbox sender does not match its account');
   }
+  // Attachment bytes stay in R2, avoiding D1's row-size limit and extra plaintext copies.
+  const savedPayload = { ...payload, ...(payload.attachments ? { attachments:
+    payload.attachments.map(({ filename, contentType }) => ({ filename, contentType })) } : {}) };
   const claimed = await env.DB.prepare(`UPDATE outbox SET state = 'sending', payload_json = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE job_id = ? AND state = 'queued' RETURNING job_id`).bind(JSON.stringify(payload), row.job_id).first();
+    WHERE job_id = ? AND state = 'queued' RETURNING job_id`).bind(JSON.stringify(savedPayload), row.job_id).first();
   if (!claimed) return { state: 'contended' };
   const objectKey = `outbound/${row.account_id}/${row.job_id}.json`;
   try {
