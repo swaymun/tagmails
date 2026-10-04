@@ -5,7 +5,7 @@ import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.m
 import { knownAgentAddresses } from './agent-addresses.mjs';
 import { renderResult } from '../apps/mock-inbox/mail.mjs';
 import { releaseFailedPrimaryTestEmail, releaseTestEmail, settleTestEmail, testBillingEnabled, testWalletSnapshot } from './email-charges.mjs';
-import { selectedModelDetail } from './model-route.mjs';
+import { selectedModelStatus } from './model-route.mjs';
 
 const MESSAGE_ID = /^<[^<>\s]+@[^<>\s]+>$/;
 
@@ -228,7 +228,7 @@ async function prepare(env, row) {
   const fileNote = result.artifactIds?.length && ownerCanOpen && siteOrigin
     ? [`${result.artifactIds.length} file${result.artifactIds.length === 1 ? '' : 's'} available on the private run page for seven days.`]
     : [];
-  const selectedModel = selectedModelDetail(inbound.model_json);
+  const selectedModel = selectedModelStatus(inbound.model_json);
   const ownerOnly = to.length === 1 && to[0] === owner && cc.length === 0;
   const balance = ownerOnly && testBillingEnabled(env)
     ? await testWalletSnapshot(env, row.account_id) : null;
@@ -256,19 +256,24 @@ async function prepare(env, row) {
   const writeRun = ['codex-app-server-write', 'claude-cli-write'].includes(result.runtime);
   const rendered = renderResult({
     state: result.state, summary: result.summary,
-    details: [...(selectedModel ? [selectedModel] : []), ...(result.details ?? []), ...fileNote,
-      ...(noChargeDetail ? [noChargeDetail] : []), ...(creditDetail ? [creditDetail] : []),
-      ...allowanceDetail], checks: result.checks,
+    details: result.details,
+    statusLine: selectedModel
+      ? `${{ completed: 'Completed', failed: 'Could not finish', needs_approval: 'Needs attention',
+        needs_clarification: 'Waiting for your reply' }[result.state] ?? 'Run status'} · ${selectedModel}` : null,
+    meta: [...fileNote, ...(noChargeDetail ? [noChargeDetail] : []),
+      ...(creditDetail ? [creditDetail] : []), ...allowanceDetail],
+    checks: result.checks,
     links: transcriptUrl && (ownerCanOpen || participantTranscriptReady)
       ? [{ label: sharedWithParticipant && !participantTranscriptReady ? `${runLinkLabel} (owner only)` : runLinkLabel,
         url: transcriptUrl }] : [],
+    brandUrl: siteOrigin,
     note: result.runtime === 'relay'
       ? 'No local agent ran for this email.'
       : result.state === 'needs_approval'
       ? 'No action was approved automatically. Review the request and local permissions before replying or retrying.'
       : writeRun && result.state === 'completed'
         ? 'This reply is the agent\'s report. Verify local file changes before relying on them.'
-      : 'This summary came from your connected local agent.',
+      : null,
   });
   if (/[\r\n]/.test(inbound.subject)) throw new InvalidOutboxSource('Outbox subject contains a line break');
   return {

@@ -22,3 +22,16 @@ export function selectedModelDetail(json) {
     return `Selected model: ${label} (${model.effort}; ${speed}; ${source}).`;
   } catch { return null; }
 }
+
+export function selectedModelStatus(json) {
+  if (!json) return null;
+  try {
+    const model = JSON.parse(json);
+    const label = MODEL_LABELS[model.id];
+    if (!label || !EFFORTS.has(model.effort) ||
+        !['standard', 'fast', 'ultrafast'].includes(model.speed || 'standard') ||
+        !['default', 'pilot', 'explicit', 'classified', 'thread'].includes(model.source)) return null;
+    const speed = model.speed ? `${model.speed === 'fast' ? 'Fast' : 'Ultra-fast'} requested` : 'Standard speed';
+    return `${label} · ${model.effort} reasoning · ${speed}`;
+  } catch { return null; }
+}

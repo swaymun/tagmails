@@ -128,15 +128,29 @@ test('one Jev request interprets natural model, effort, and speed choices', asyn
     apiKey: 'test-key', fetcher: async (_url, request) => {
       calls += 1;
       const questions = JSON.parse(request.body).questions;
-      assert.deepEqual(Object.keys(questions), ['route', 'effort', 'speed']);
+      assert.deepEqual(Object.keys(questions), ['route', 'requestedEffort', 'effort', 'speed']);
       return Response.json({ answers: Object.fromEntries([
-        ['route', 'luna', 0.96], ['effort', 'low', 0.94], ['speed', 'fast', 0.91],
+        ['route', 'luna', 0.96], ['requestedEffort', 'low', 0.94],
+        ['effort', 'medium', 0.91], ['speed', 'fast', 0.91],
       ].map(([key, choice, probability]) => [key, { type: 'choice', choice,
         probabilities: { [choice]: probability } }])) });
     },
   });
   assert.equal(calls, 1);
   assert.deepEqual(selected, { id: 'gpt-6-luna', effort: 'low', speed: 'fast', source: 'classified' });
+});
+
+test('an explicit high reasoning request wins over an ordinary complexity estimate', async () => {
+  const selected = await routeModel('Use Codex Sol with high reasoning and Fast mode.',
+    'gpt-6.1-sol', { apiKey: 'test-key', pilotCodexModel: 'gpt-6-sol',
+      fetcher: async () => Response.json({ answers: {
+        route: { type: 'choice', choice: 'codex', probabilities: { codex: 0.95 } },
+        requestedEffort: { type: 'choice', choice: 'high', probabilities: { high: 0.65 } },
+        effort: { type: 'choice', choice: 'medium', probabilities: { medium: 0.88 } },
+        speed: { type: 'choice', choice: 'fast', probabilities: { fast: 0.93 } },
+      } }),
+    });
+  assert.deepEqual(selected, { id: 'gpt-6-sol', effort: 'high', speed: 'fast', source: 'classified' });
 });
 
 test('uncertain effort uses medium and an explicit ultra-fast request reaches runtime validation', async () => {

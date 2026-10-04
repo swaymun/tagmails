@@ -64,13 +64,26 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
               unsupported: 'The sender clearly asks to use an unavailable model or a named variant other than the supported Codex, Sonnet 5.5, and Luna choices.',
             },
           },
+          requestedEffort: {
+            type: 'choice',
+            instructions: 'Did the sender explicitly request a reasoning effort for this task? Choose none unless they name an effort, for example high reasoning, Luna Low, Sonnet High, or xhigh. Ignore quoted earlier messages.',
+            criteria: {
+              none: 'No explicit reasoning effort request.',
+              low: 'The sender explicitly requests low reasoning effort.',
+              medium: 'The sender explicitly requests medium reasoning effort.',
+              high: 'The sender explicitly requests high reasoning effort.',
+              xhigh: 'The sender explicitly requests extra high or xhigh reasoning effort.',
+              max: 'The sender explicitly requests max reasoning effort.',
+              ultra: 'The sender explicitly requests ultra reasoning effort.',
+            },
+          },
           effort: {
             type: 'choice',
-            instructions: 'Choose the effort for this current email task. An explicit effort request such as Luna Low or Sonnet High takes priority. Otherwise choose low for clearly simple work, high for clearly complex multistep work, and medium when uncertain or ordinary. Reserve xhigh, max, and ultra for explicit requests. Ignore quoted earlier messages.',
+            instructions: 'If the sender did not specify reasoning effort, choose effort for the current email task based on complexity. Choose low for clearly simple work, high for clearly complex multistep work, and medium when uncertain or ordinary. Reserve xhigh, max, and ultra for explicit requests. Ignore quoted earlier messages.',
             criteria: {
-              low: 'Explicit low effort, or a clearly trivial task.',
-              medium: 'Explicit medium effort, or ordinary or ambiguous complexity.',
-              high: 'Explicit high effort, or clearly complex multistep work.',
+              low: 'Clearly trivial task.',
+              medium: 'Ordinary or ambiguous complexity.',
+              high: 'Clearly complex multistep work.',
               xhigh: 'Explicit extra high or xhigh effort.',
               max: 'Explicit max effort.',
               ultra: 'Explicit ultra reasoning effort.',
@@ -100,6 +113,8 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
     if (route && knownPrior && route.id === priorModel.id) selected.effort = priorModel.effort;
     const effort = confidentChoice(answers?.effort, 0.7);
     if (EFFORTS.has(effort)) selected.effort = effort;
+    const requestedEffort = confidentChoice(answers?.requestedEffort, 0.6);
+    if (EFFORTS.has(requestedEffort)) selected.effort = requestedEffort;
     const speed = confidentChoice(answers?.speed, 0.75);
     if (speed === 'fast' || speed === 'ultrafast') selected.speed = speed;
     if (speed === 'standard') delete selected.speed;

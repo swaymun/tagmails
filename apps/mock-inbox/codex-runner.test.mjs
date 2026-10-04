@@ -213,6 +213,8 @@ test('Codex passes advertised effort and fast tier and records reasoning summari
   const turn = fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse).find((item) => item.method === 'turn/start');
   assert.equal(turn.params.effort, 'medium');
   assert.equal(turn.params.serviceTierForTurn, 'priority');
+  assert.match(turn.params.input[0].text, /already selected gpt-6-luna with medium reasoning and fast speed/);
+  assert.match(turn.params.input[0].text, /routing preferences already applied by the app-server/);
 });
 
 test('Codex rejects a speed tier missing from its live model catalog', async (t) => {

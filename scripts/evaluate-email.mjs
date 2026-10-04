@@ -7,11 +7,15 @@ const fixtures = [
   {
     id: 'completed', title: 'Agent reply',
     result: { state: 'completed', summary: 'The beta decision is to start with Gmail and one Mac workspace.',
-      details: ['Codex read the selected plan.', 'The domain purchase still needs an owner.'],
+      details: ['Codex read the selected plan.\nThe domain purchase still needs an owner.'],
+      statusLine: 'Completed · Codex GPT-6 Sol · high reasoning · Fast requested',
+      meta: ['TagMails test credits remaining: $9.25.'],
+      brandUrl: 'https://tagmails.saimun-h-shahee.chatgpt.site',
       checks: ['No domain was purchased.'],
       links: [{ label: 'Open run receipt', url: 'https://example.test/runs/1' }],
       note: 'Reply with the next decision.' },
-    phrases: ['Gmail and one Mac workspace', 'No domain was purchased.', 'Reply with the next decision.'],
+    phrases: ['Gmail and one Mac workspace', 'No domain was purchased.', 'Reply with the next decision.',
+      'Completed · Codex GPT-6 Sol · high reasoning · Fast requested', 'TagMails test credits remaining: $9.25.'],
     links: [{ label: 'Open run receipt', url: 'https://example.test/runs/1' }],
   },
   {
@@ -96,6 +100,13 @@ for (const fixture of fixtures) {
   for (const link of fixture.links ?? []) {
     if (!text.includes(`${link.label}: ${link.url}`) || !html.includes(`href="${escapeHtml(link.url)}"`)) failures.push(`Link missing: ${link.label}`);
   }
+  const brandUrl = fixture.result.brandUrl && new URL(fixture.result.brandUrl).href;
+  if (brandUrl && (!text.includes(`TagMails: ${brandUrl}`) ||
+      !html.includes(`href="${escapeHtml(brandUrl)}"`) || !html.includes('class="mark"'))) {
+    failures.push('Brand link or mark is missing');
+  }
+  if (fixture.id === 'completed' && (/<ul\b|<h2>What happened|<h2>Checks and limits|<h2>Open/.test(html) ||
+      !html.includes('<br>'))) failures.push('Compact answer and footer layout is missing');
   for (const value of fixture.absent ?? []) {
     if (text.includes(value) || html.includes(value)) failures.push(`Unexpected content: ${value}`);
   }

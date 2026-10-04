@@ -229,6 +229,7 @@ test('a transient storage read leaves the outbox queued for retry', async () => 
 test('the result email names the model recorded at receipt, including an explicit override', async () => {
   const fixture = bindings();
   const { env, sqlite } = fixture;
+  env.SITE_ORIGIN = 'https://tagmails.example';
   await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'],
     model: { id: 'claude-sonnet-5-5', effort: 'medium', source: 'explicit' } });
   // An account preference change after receipt must not relabel a queued result.
@@ -238,8 +239,11 @@ test('the result email names the model recorded at receipt, including an explici
     sendEmail: async (payload) => { sent = payload; return { data: { id: 'model-sent-1' } }; },
     getSentEmail: async () => ({ data: { message_id: '<model-sent-1@tagmails.test>' } }),
   })).state, 'sent');
-  assert.match(sent.text, /Selected model: Claude Code Sonnet 5\.5 \(medium; standard speed; requested in this email\)/);
-  assert.match(sent.html, /Selected model: Claude Code Sonnet 5\.5 \(medium; standard speed; requested in this email\)/);
+  assert.match(sent.text, /Completed · Claude Code Sonnet 5\.5 · medium reasoning · Standard speed/);
+  assert.match(sent.html, /Completed · Claude Code Sonnet 5\.5 · medium reasoning · Standard speed/);
+  assert.doesNotMatch(sent.html, /<h2>What happened<\/h2>|<h2>Checks and limits<\/h2>|<ul>/);
+  assert.match(sent.html, /class="mark"/);
+  assert.match(sent.html, /href="https:\/\/tagmails\.example\/"/);
   assert.doesNotMatch(sent.text, /GPT-6\.1 Sol/);
 });
 

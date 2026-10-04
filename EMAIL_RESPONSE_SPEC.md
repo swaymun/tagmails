@@ -1,4 +1,4 @@
-# TagMails email response format v1
+# TagMails email response format v2
 
 The agent returns a structured outcome. The relay, not the model, builds the HTML and plain-text email. This format is for the first Gmail beta and its internal lab.
 
@@ -8,12 +8,13 @@ The agent returns a structured outcome. The relay, not the model, builds the HTM
 | --- | --- |
 | `state` | `completed`, `failed`, `needs_approval`, or `needs_clarification`. `completed` means the agent turn ended and is headed “Agent reply”; it does not prove every task claim. `needs_approval` says “Needs your attention” because a local approval screen is not yet available. |
 | `summary` | One concrete outcome or the one thing the recipient must decide. Never claim an unverified side effect. |
-| `details` | Short items describing work or findings. Omit when empty. |
-| `checks` | Verification, uncertainty, and material limits. Omit when empty. |
+| `details` | Short paragraphs continuing the answer. Omit when empty. |
+| `checks` | Verification, uncertainty, and material limits shown in the footer. Omit when empty. |
 | `links` | Links supplied by the trusted caller, with human-readable labels. The managed outbox currently supplies only the owner-authorized run receipt. Model text does not create trusted links. |
-| `note` | Optional context such as “synthetic example” or “local read-only run.” Omit when empty. |
+| `note` | Optional context such as “synthetic example” or a write warning. Material pending or failed notices stay beside the answer. |
+| `statusLine`, `meta`, `brandUrl` | Trusted caller-supplied footer status, small account/run facts, and the working TagMails website link. |
 
-The email has matching UTF-8 plain-text and HTML parts. It starts with the outcome, follows with work and checks, then links, then a reply invitation. HTML escapes all model text and uses semantic headings, paragraphs, lists, and anchors. No JavaScript or form controls are sent. Gmail supports a subset of CSS in `<style>` blocks and media queries; unsupported styles may be ignored, so content must remain readable without CSS. [Gmail CSS support](https://developers.google.com/workspace/gmail/design/css)
+The email has matching UTF-8 plain-text and HTML parts. The outcome and agent answer come first. A compact bottom footer holds one run-status line, credits and allowance when authorized, checks, the transcript link, a linked TagMails brand mark, and the reply invitation. It does not repeat “What happened,” “Checks and limits,” and “Open” as bullet sections. HTML escapes all model text and uses semantic headings, paragraphs, a footer, and anchors. No JavaScript or form controls are sent. Gmail supports a subset of CSS in `<style>` blocks and media queries; unsupported styles may be ignored, so content remains readable without CSS. [Gmail CSS support](https://developers.google.com/workspace/gmail/design/css)
 
 ## Email status reactions
 
@@ -31,7 +32,7 @@ The linked transcript now retains the agent's final answer up to 8,000 character
 
 If Codex or Claude reports a failed turn after it began, the private run page also keeps the visible steps captured before that failure. Its status and summary still identify the run as failed; the partial transcript is not evidence that the task finished.
 
-For managed replies, the relay adds a “Selected model” detail from the model route stored when the inbound email arrived. The owner-only run receipts show the same route. It labels whether the sender requested the model in that email or the account default supplied it. This describes the selected route, not proof that the runtime completed a model call. Older jobs without a stored route and requests with an unavailable model omit the detail; the relay does not infer it from current settings or generated text.
+For managed replies, the relay adds a compact model, reasoning, and requested-speed status from the route stored when the inbound email arrived. The owner-only run receipt retains the fuller source label, including whether the sender requested the model or the account default supplied it. This describes the selected route, not proof that the runtime completed a model call or measured speed. Older jobs without a stored route and requests with an unavailable model omit the model status; the relay does not infer it from current settings or generated text.
 
 Only absolute HTTPS links are accepted in normal mail. The localhost lab additionally accepts an explicit `127.0.0.1` HTTP port. The renderer checks URL syntax and scheme, then uses the same accepted links in HTML and plain text; a section with no accepted links is omitted. The caller is responsible for verifying that a link belongs to this run, has appropriate access, and points to a real resource. In the managed path, a guest-only reply has no transcript link while the Site is owner-private. A shared reply labels its link “owner only” so copied participants know they cannot open it. Once participant transcript access is enabled, authorized visible recipients may use the shared link.
 
