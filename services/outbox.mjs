@@ -251,7 +251,6 @@ async function prepare(env, row) {
     attachedBytes += bytes.length;
   }
   const fileNote = [
-    ...(attachments.length ? [`${attachments.length} file${attachments.length === 1 ? '' : 's'} attached`] : []),
     ...(files.length > attachments.length && siteOrigin
       ? [`${files.length - attachments.length} file${files.length - attachments.length === 1 ? '' : 's'} · 7 days`] : []),
   ];

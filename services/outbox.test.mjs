@@ -244,9 +244,8 @@ test('the result email names the model recorded at receipt, including an explici
     sendEmail: async (payload) => { sent = payload; return { data: { id: 'model-sent-1' } }; },
     getSentEmail: async () => ({ data: { message_id: '<model-sent-1@tagmails.test>' } }),
   })).state, 'sent');
-  assert.match(sent.text, /Claude Sonnet 5\.5 · Medium/);
-  assert.match(sent.html, /Claude Sonnet 5\.5<\/span>/);
-  assert.match(sent.html, />Medium<\/span>/);
+  assert.match(sent.text, /Claude Sonnet 5\.5 Medium/);
+  assert.match(sent.html, /Claude Sonnet 5\.5 Medium<\/span>/);
   assert.doesNotMatch(sent.text, /Done|Waiting for your reply/);
   assert.doesNotMatch(sent.html, /Done|Waiting for your reply/);
   for (const content of [sent.text, sent.html.slice(sent.html.indexOf('<footer'))]) {
@@ -754,7 +753,8 @@ test('small output files attach only to an owner-only reply, with exact saved by
     getSentEmail: async (id) => ({ data: { message_id: `<${id}@tagmails.test>` } }) };
   assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
   assert.deepEqual(sent.attachments, [{ filename: 'status.txt', contentType: 'text/plain', content: bytes.toString('base64') }]);
-  assert.match(sent.text, /1 file attached/);
+  assert.doesNotMatch(sent.text, /file attached/);
+  assert.doesNotMatch(sent.html, /file attached/);
   assert.match(sent.text, /Transcript/);
   const saved = JSON.parse(sqlite.prepare('SELECT payload_json FROM outbox WHERE job_id = ?').get('job-1').payload_json);
   assert.equal(saved.attachments[0].content, undefined);
