@@ -15,7 +15,17 @@ const cases = [
   { id: 'natural-seoul', body: 'Please use Seoul for this review.', expected: codex },
   { id: 'seoul-location', body: 'Find hotels in Seoul for my trip.', expected: codex },
   { id: 'natural-luna', body: 'Use Luna for a quick first pass.', expected: luna },
+  { id: 'natural-luna-low-fast', body: 'Use Luna Low in Fast mode to check this file.',
+    expected: luna, expectedEffort: 'low', expectedSpeed: 'fast' },
+  { id: 'natural-sol-high-fast', body: 'Use Codex Sol with high reasoning and Fast mode to compare these approaches.',
+    expected: codex, expectedEffort: 'high', expectedSpeed: 'fast' },
+  { id: 'natural-luna-ultrafast', body: 'Use Luna in ultra-fast mode for this task.',
+    expected: luna, expectedSpeed: 'ultrafast' },
   { id: 'natural-gpt-luna', body: 'Please run this with GPT-6 Luna.', expected: luna },
+  { id: 'quickly-not-fast-tier', body: 'Please review this quickly and give me two bullets.',
+    expected: codex, expectedSpeed: 'standard' },
+  { id: 'saved-fast-standard', body: 'Use standard speed for this review.',
+    defaultModel: luna, defaultSpeed: 'fast', expected: luna, expectedSpeed: 'standard' },
   { id: 'subject-claude', subject: 'Use Claude to summarize the attached report', body: '', expected: claude },
   { id: 'compare-models', body: 'Compare Claude and Codex for this project; recommend one.', expected: codex },
   { id: 'model-discussion', body: 'Would Luna be cheaper later? For now, just review this.', expected: codex },
@@ -38,19 +48,24 @@ const cases = [
   { id: 'reply-old-subject', subject: 'Use Claude for the review',
     body: 'Please use Luna for this next step.',
     priorModel: { id: claude, effort: 'medium' }, expected: luna },
+  { id: 'reply-effort-speed', body: 'Continue this with low reasoning in Fast mode.',
+    priorModel: { id: luna, effort: 'medium' }, expected: luna,
+    expectedEffort: 'low', expectedSpeed: 'fast' },
   { id: 'reply-override', body: 'Model: Luna\nContinue the review.',
     priorModel: { id: claude, effort: 'medium' }, expected: luna, calls: 0 },
   { id: 'empty-body', body: '', expected: codex, calls: 0 },
 ];
 const classifiedCases = new Set(['natural-claude', 'natural-sonnet', 'natural-codex',
-  'natural-sol', 'natural-seoul', 'natural-luna', 'natural-gpt-luna', 'subject-claude',
+  'natural-sol', 'natural-seoul', 'natural-luna', 'natural-luna-low-fast',
+  'natural-sol-high-fast', 'natural-luna-ultrafast', 'natural-gpt-luna', 'subject-claude',
   'reply-natural-switch', 'reply-old-subject', 'collapsed-model-line']);
 const explicitCases = new Set(['explicit-directive', 'reply-override']);
 
 if (process.argv.includes('--list')) {
   for (const item of cases) {
     const calls = item.calls ?? 1;
-    console.log(`${item.id}: ${item.expected} (${calls} Jev ${calls === 1 ? 'call' : 'calls'})`);
+    const options = [item.expectedEffort, item.expectedSpeed].filter(Boolean).join(', ');
+    console.log(`${item.id}: ${item.expected}${options ? ` (${options})` : ''} (${calls} Jev ${calls === 1 ? 'call' : 'calls'})`);
   }
   process.exit(0);
 }
@@ -71,19 +86,26 @@ for (const item of cases) {
     let payload = null;
     try { payload = await response.clone().json(); } catch { /* Route records the fallback. */ }
     provider = { status: response.status, model: payload?.model,
-      answer: payload?.answers?.route, usage: payload?.usage };
+      answers: payload?.answers, usage: payload?.usage };
     return response;
   };
   const route = await routeModel(item.body, item.defaultModel ?? codex, {
     apiKey, fetcher, priorModel: item.priorModel, subject: item.subject,
+    defaultSpeed: item.defaultSpeed,
   });
   const actual = route.error ? 'error' : route.id;
+  const actualEffort = route.error ? null : route.effort;
+  const actualSpeed = route.error ? null : route.speed ?? 'standard';
   const expectedSource = item.expected === 'error' ? undefined : classifiedCases.has(item.id)
     ? 'classified' : explicitCases.has(item.id) ? 'explicit'
       : item.priorModel ? 'thread' : 'default';
   results.push({ id: item.id, expected: item.expected, actual,
+    expectedEffort: item.expectedEffort, actualEffort,
+    expectedSpeed: item.expectedSpeed, actualSpeed,
     expectedSource, source: route.source, calls, provider,
     passed: actual === item.expected && route.source === expectedSource && calls === (item.calls ?? 1) &&
+      (item.expectedEffort === undefined || actualEffort === item.expectedEffort) &&
+      (item.expectedSpeed === undefined || actualSpeed === item.expectedSpeed) &&
       (!provider || provider.status === 200) });
 }
 
@@ -93,6 +115,11 @@ const report = { evaluatedAt: new Date().toISOString(), cases: results,
   totalCalls: results.reduce((sum, item) => sum + item.calls, 0),
   inputTokens: results.reduce((sum, item) => sum + (item.provider?.usage?.input_tokens ?? 0), 0) };
 fs.writeFileSync(output, JSON.stringify(report, null, 2));
-for (const item of results) console.log(`${item.passed ? 'PASS' : 'FAIL'} ${item.id}: ${item.actual} (expected ${item.expected})`);
+for (const item of results) {
+  const expected = [item.expected, item.expectedEffort, item.expectedSpeed].filter(Boolean).join(' / ');
+  const actual = [item.actual, item.expectedEffort && item.actualEffort,
+    item.expectedSpeed && item.actualSpeed].filter(Boolean).join(' / ');
+  console.log(`${item.passed ? 'PASS' : 'FAIL'} ${item.id}: ${actual} (expected ${expected})`);
+}
 console.log(`${results.filter((item) => item.passed).length}/${results.length} passed; ${report.totalCalls} Jev calls; ${report.inputTokens} input tokens. Report: ${output}`);
 if (results.some((item) => !item.passed)) process.exitCode = 1;

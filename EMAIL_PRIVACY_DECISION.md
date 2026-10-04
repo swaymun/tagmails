@@ -24,9 +24,17 @@ Sources: [Resend inbound visibility](https://resend.com/blog/inbound-emails),
 
 ## Customer architecture to validate before opening signup
 
-1. Replace Resend for customer inbound mail. Cloudflare Email Routing can send
-   a `*@tagmails.com` catch-all to an Email Worker without creating a browseable
-   Resend inbox. Confirm its actual dashboard and API visibility with test mail.
+1. Replace Resend for customer inbound mail. Amazon SES is the lead candidate
+   for an authenticated intake trial: its Lambda receive event supplies SES-issued
+   DKIM, DMARC, spam, and virus verdicts plus the envelope recipients. Its S3
+   action stores raw MIME, so the account administrator can still access mail
+   until content is encrypted to a device-held key and the plaintext staging
+   copy is removed. Confirm the dashboard, logs, and actual retention with test
+   mail. Cloudflare Email Routing remains a candidate only if a live Email
+   Worker trial proves that the handler receives a trustworthy authentication
+   verdict. Its documented handler exposes sender, headers, and raw mail, but
+   does not document a structured authentication result. Do not authorize a
+   task from a claimed From address or an untrusted header alone.
 2. Replace Resend for customer outbound mail. Cloudflare Email Sending is one
    candidate, with **Email preview disabled** on the sending domain; its default
    is enabled and otherwise exposes sent HTML, text, attachments, and raw MIME
@@ -44,12 +52,23 @@ Sources: [Resend inbound visibility](https://resend.com/blog/inbound-emails),
    technical inability would require sender-side encryption or a user-owned
    mailbox path.
 
-Cloudflare references: [Email Worker receive API](https://developers.cloudflare.com/email-service/api/route-emails/email-handler/),
+Provider references: [SES Lambda receive event](https://docs.aws.amazon.com/ses/latest/dg/receiving-email-action-lambda.html),
+[SES verdict fields](https://docs.aws.amazon.com/ses/latest/dg/receiving-email-notifications-contents.html),
+[SES S3 action](https://docs.aws.amazon.com/ses/latest/dg/receiving-email-action-s3.html),
+[Email Worker receive API](https://developers.cloudflare.com/email-service/api/route-emails/email-handler/),
 [catch-all routing](https://developers.cloudflare.com/email-service/configuration/email-routing-addresses/),
 [email preview setting](https://developers.cloudflare.com/email-service/observability/logs/).
 
 ## Migration constraints checked October 3, 2026
 
+- SES needs an AWS account, a receiving Region, a verified receiving domain,
+  receipt rules, and an MX change. A Lambda action supplies authentication
+  metadata but not the message body; an S3 action can provide the raw MIME for
+  the bridge. The default S3 action limit is 40 MB. Design and test the
+  authenticated SES-to-relay handoff, S3 access controls, plaintext deletion,
+  and device-held encryption before accepting customer mail. SES verdicts need
+  an explicit authorization policy; `DMARC GRAY` does not by itself establish
+  alignment, and a sender address in MIME is never proof of account ownership.
 - Cloudflare Email Service requires Cloudflare DNS. `tagmails.com` still uses
   GoDaddy nameservers, and its apex MX still points to Resend. Adding an Email
   Worker alone cannot receive mail for this domain. Prepare and compare the
@@ -77,17 +96,18 @@ Cloudflare references: [Email Worker receive API](https://developers.cloudflare.
   then to Partially Verified with that record still pending. Do not assume
   either provider is ready from DNS lookup alone.
 
-Before switching the live MX, verify the Email Worker with test mail on a
-Cloudflare-managed domain, including envelope/header sender alignment,
-To/Cc/Bcc and alias routing, duplicate delivery, sender authentication,
-reactions, attachments at the actual provider limit, and a delayed or failed
-Worker invocation. Then prove outbound threading, uncertain-send recovery,
-delivery/bounce state, and Gmail rendering with preview disabled. Reinspect
-both provider dashboards using the same test messages. Keep the owner-only
+Before switching the live MX, verify the candidate on a separate owned test
+address or domain. Test trusted authentication verdicts, spoofed From headers,
+To/Cc/Bcc and alias routing, duplicate delivery, reactions, attachments at the
+provider limit, and a delayed or failed invocation. Then prove outbound
+threading, uncertain-send recovery, delivery/bounce state, and Gmail rendering.
+Reinspect provider dashboards using the same test messages. Keep the owner-only
 Resend development route until those checks pass.
 
 Sources: [Cloudflare setup and DNS requirement](https://developers.cloudflare.com/email-service/get-started/route-emails/),
 [routing rules and catch-all](https://developers.cloudflare.com/email-service/configuration/email-routing-addresses/),
 [email size limits](https://developers.cloudflare.com/email-service/platform/limits/),
 [pricing](https://developers.cloudflare.com/email-service/platform/pricing/),
-[activity log and preview](https://developers.cloudflare.com/email-service/observability/logs/).
+[activity log and preview](https://developers.cloudflare.com/email-service/observability/logs/),
+[SES receiving metadata](https://docs.aws.amazon.com/ses/latest/dg/receiving-email-notifications-contents.html),
+[SES S3 storage](https://docs.aws.amazon.com/ses/latest/dg/receiving-email-action-s3.html).
