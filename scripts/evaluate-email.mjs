@@ -94,7 +94,8 @@ for (const fixture of fixtures) {
   const html = parsed.html ?? '';
   const failures = [];
   if (!text || !html) failures.push('Multipart text or HTML is missing');
-  if (!html.includes(`<h1>${fixture.title}</h1>`) || !text.startsWith(fixture.title)) failures.push('Outcome heading differs');
+  // The answer leads: no generic heading in either part.
+  if (/<h1\b/.test(html) || text.startsWith(fixture.title)) failures.push('Unexpected heading');
   for (const phrase of fixture.phrases ?? []) {
     if (!text.includes(phrase) || !html.includes(escapeHtml(phrase))) failures.push(`Content missing: ${phrase}`);
   }

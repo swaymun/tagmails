@@ -143,9 +143,10 @@ test('a malformed model request gets a relay clarification without a paired Mac'
   assert.equal(reply.from, 'onboarding@resend.dev');
   assert.equal(reply.replyTo, 'agent@wonder.test');
   assert.deepEqual(reply.to, ['owner@gmail.com']);
-  assert.match(reply.text, /Which model should I use\?/);
+  assert.match(reply.text, /^I could not identify an available OpenAI or Claude model/);
   assert.match(reply.text, /available OpenAI or Claude model.*omit the model to use your default/);
-  assert.match(reply.text, /Run details/);
+  // Nothing ran, so there is no run page to link.
+  assert.doesNotMatch(reply.text, /Run details|Transcript/);
   assert.doesNotMatch(reply.html, /Waiting for your reply|Needs reply/);
   assert.match(reply.text, /No local agent ran/);
   assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM outbox').get().n, 1);

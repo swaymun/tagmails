@@ -245,7 +245,7 @@ test('the result email names the model recorded at receipt, including an explici
     getSentEmail: async () => ({ data: { message_id: '<model-sent-1@tagmails.test>' } }),
   })).state, 'sent');
   assert.match(sent.text, /Claude Sonnet 5\.5 Medium/);
-  assert.match(sent.html, /Claude Sonnet 5\.5 Medium<\/span>/);
+  assert.match(sent.html, /<span>Claude Sonnet 5\.5 Medium<\/span>/);
   assert.doesNotMatch(sent.text, /Done|Waiting for your reply/);
   assert.doesNotMatch(sent.html, /Done|Waiting for your reply/);
   for (const content of [sent.text, sent.html.slice(sent.html.indexOf('<footer'))]) {
@@ -269,9 +269,10 @@ test('a completed write turn reports the agent answer without claiming verified 
     sendEmail: async (value) => { payload = value; return { data: { id: 'write-1' } }; },
     getSentEmail: async () => ({ data: { message_id: '<write-1@tagmails.test>' } }),
   })).state, 'sent');
-  assert.match(payload.text, /^Agent reply\n/);
+  // The answer leads; there is no generic heading.
+  assert.match(payload.text, /^I created report\.txt\./);
   assert.match(payload.text, /Verify local file changes before relying on them\./);
-  assert.match(payload.html, /<h1>Agent reply<\/h1>/);
+  assert.doesNotMatch(payload.html, /<h1>/);
 });
 
 test('a denied local action asks for review without inventing an approval screen', async () => {
@@ -285,7 +286,8 @@ test('a denied local action asks for review without inventing an approval screen
     sendEmail: async (value) => { payload = value; return { data: { id: 'review-1' } }; },
     getSentEmail: async () => ({ data: { message_id: '<review-1@tagmails.test>' } }),
   })).state, 'sent');
-  assert.match(payload.text, /^Needs your attention/m);
+  assert.match(payload.text, /^The requested file is outside the selected workspace\./);
+  assert.match(payload.text, /Needs approval/);
   assert.match(payload.text, /Review the request and local permissions/);
   assert.doesNotMatch(payload.text, /waiting for your approval in the connected app/i);
 });

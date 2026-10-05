@@ -1,6 +1,7 @@
 const SUMMARY_LIMIT = 500;
 const DETAIL_LIMIT = 300;
 const DETAIL_COUNT = 12;
+export const ANSWER_LIMIT = 32_000;
 
 function take(text, limit, preferParagraph = false) {
   const paragraph = text.indexOf('\n\n');
@@ -25,5 +26,7 @@ export function formatAgentAnswer(answer) {
     [detail, remaining] = take(remaining, DETAIL_LIMIT, true);
     if (detail) details.push(detail);
   }
-  return { summary, details, truncated: Boolean(remaining) };
+  const full = answer.trim().replace(/\r\n/g, '\n');
+  return { summary, details, truncated: Boolean(remaining),
+    answer: full.slice(0, ANSWER_LIMIT), answerTruncated: full.length > ANSWER_LIMIT };
 }

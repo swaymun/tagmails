@@ -1,10 +1,14 @@
 #!/usr/bin/env node
-// Builds the agent source release and its Homebrew formula from the committed tree.
+// Builds the agent release from the committed tree:
 //
 //   node scripts/package-agent.mjs [output-dir]
 //
-// Writes tagmails-<version>.tar.gz (what Homebrew and install.sh build from),
-// install.sh, and Formula/tagmails.rb with the archive's checksum.
+// - tagmails-<version>-<target>.tar.gz: prebuilt binary plus Node adapters for
+//   macOS and Linux (arm64, x86_64), cross-compiled with cargo-zigbuild
+// - tagmails-<version>.tar.gz: source, for install.sh's build-from-source fallback
+// - install.sh and Formula/tagmails.rb with each archive's checksum
+//
+// Needs `zig` and `cargo-zigbuild` on PATH, plus the four rustup targets.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -22,6 +26,15 @@ const releaseBase = process.env.TAGMAILS_RELEASE_BASE ||
 const destination = path.resolve(process.argv[2] || path.join(root, '.local/release', version));
 fs.mkdirSync(path.join(destination, 'Formula'), { recursive: true });
 
+const TARGETS = {
+  'aarch64-apple-darwin': 'aarch64-apple-darwin',
+  'x86_64-apple-darwin': 'x86_64-apple-darwin',
+  'aarch64-unknown-linux-gnu': 'aarch64-unknown-linux-gnu.2.28',
+  'x86_64-unknown-linux-gnu': 'x86_64-unknown-linux-gnu.2.28',
+};
+const sums = {};
+const sha256 = (file) => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+
 const tracked = execFileSync('git', ['ls-files', 'agent', 'crates/tagmails-daemon'], { cwd: root, encoding: 'utf8' })
   .split('\n').filter((file) => file && !file.endsWith('.test.mjs'));
 const files = ['Cargo.toml', 'Cargo.lock', 'LICENSE', 'packaging/install.sh', ...tracked];
@@ -31,23 +44,63 @@ const tar = execFileSync('git', ['archive', '--format=tar', `--prefix=${prefix}`
 });
 const archive = path.join(destination, `tagmails-${version}.tar.gz`);
 fs.writeFileSync(archive, gzipSync(tar, { level: 9 }));
-const sha256 = createHash('sha256').update(fs.readFileSync(archive)).digest('hex');
-fs.copyFileSync(path.join(root, 'packaging/install.sh'), path.join(destination, 'install.sh'));
+sums.source = sha256(archive);
 
+const adapters = execFileSync('git', ['ls-files', 'agent'], { cwd: root, encoding: 'utf8' })
+  .split('\n').filter((file) => file && !file.endsWith('.test.mjs'));
+for (const [target, zigTarget] of Object.entries(TARGETS)) {
+  execFileSync('cargo', ['zigbuild', '--release', '--locked', '-p', 'tagmails-daemon', '--target', zigTarget],
+    { cwd: root, stdio: ['ignore', 'ignore', 'inherit'] });
+  const stage = fs.mkdtempSync(path.join(destination, '.stage-'));
+  const top = path.join(stage, `tagmails-${version}`);
+  fs.mkdirSync(path.join(top, 'bin'), { recursive: true });
+  fs.mkdirSync(path.join(top, 'libexec/tagmails'), { recursive: true });
+  fs.copyFileSync(path.join(root, `target/${target}/release/tagmails`), path.join(top, 'bin/tagmails'));
+  fs.chmodSync(path.join(top, 'bin/tagmails'), 0o755);
+  for (const file of adapters) fs.copyFileSync(path.join(root, file), path.join(top, 'libexec/tagmails', path.basename(file)));
+  fs.copyFileSync(path.join(root, 'LICENSE'), path.join(top, 'LICENSE'));
+  const output = path.join(destination, `tagmails-${version}-${target}.tar.gz`);
+  execFileSync('tar', ['-czf', output, '-C', stage, `tagmails-${version}`], { env: { ...process.env, COPYFILE_DISABLE: '1' } });
+  fs.rmSync(stage, { recursive: true, force: true });
+  sums[target] = sha256(output);
+}
+fs.writeFileSync(path.join(destination, 'install.sh'),
+  fs.readFileSync(path.join(root, 'packaging/install.sh'), 'utf8').replace(/^VERSION=.*$/m, `VERSION="\${TAGMAILS_VERSION:-${version}}"`));
+fs.chmodSync(path.join(destination, 'install.sh'), 0o755);
+fs.writeFileSync(path.join(destination, 'SHA256SUMS'), Object.entries(sums).map(([target, sum]) =>
+  `${sum}  tagmails-${version}${target === 'source' ? '' : `-${target}`}.tar.gz`).join('\n') + '\n');
+
+const asset = (target) => `    url "${releaseBase}/tagmails-${version}-${target}.tar.gz"\n    sha256 "${sums[target]}"`;
 const formula = `class Tagmails < Formula
   desc "Email your coding agent: runs Codex or Claude Code for mail sent to your TagMails address"
   homepage "https://tagmails.com"
-  url "${releaseBase}/tagmails-${version}.tar.gz"
-  sha256 "${sha256}"
+  version "${version}"
   license "MIT"
 
-  depends_on "rust" => :build
+  on_macos do
+    on_arm do
+${asset('aarch64-apple-darwin')}
+    end
+    on_intel do
+${asset('x86_64-apple-darwin')}
+    end
+  end
+
+  on_linux do
+    on_arm do
+${asset('aarch64-unknown-linux-gnu')}
+    end
+    on_intel do
+${asset('x86_64-unknown-linux-gnu')}
+    end
+  end
+
   depends_on "node"
 
   def install
-    system "cargo", "install", *std_cargo_args(path: "crates/tagmails-daemon")
+    bin.install "bin/tagmails"
     adapters = libexec/"tagmails"
-    adapters.install Dir["agent/*.mjs"], "agent/package.json", "agent/package-lock.json"
+    adapters.install Dir["libexec/tagmails/*"]
     cd adapters do
       system "npm", "ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"
     end
@@ -69,4 +122,4 @@ const formula = `class Tagmails < Formula
 end
 `;
 fs.writeFileSync(path.join(destination, 'Formula/tagmails.rb'), formula);
-process.stdout.write(`${archive}\nsha256 ${sha256}\n${path.join(destination, 'Formula/tagmails.rb')}\n`);
+process.stdout.write(`${destination}\n${fs.readFileSync(path.join(destination, 'SHA256SUMS'), 'utf8')}`);

@@ -1,13 +1,10 @@
 import { createHash } from 'node:crypto';
+import { escapeHtml, renderMarkdown } from './markdown.mjs';
+
+export { escapeHtml };
 
 const CRLF = '\r\n';
-export const EMAIL_FORMAT_VERSION = 4;
-
-export function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (character) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  })[character]);
-}
+export const EMAIL_FORMAT_VERSION = 5;
 
 export function safeUrl(value) {
   if (typeof value !== 'string') return null;
@@ -37,29 +34,39 @@ function base64Lines(value) {
   return Buffer.from(value, 'utf8').toString('base64').match(/.{1,76}/g)?.join(CRLF) ?? '';
 }
 
+const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+
+// The answer leads the email. Status, model, credits and links sit in one
+// quiet footer line; there is no heading or card chrome.
 export function renderResult(result) {
-  const title = result.preview ? 'Synthetic preview' : result.state === 'failed' ? 'Could not finish' : result.state === 'needs_approval' ? 'Needs your attention' : result.state === 'needs_clarification' ? 'Which model should I use?' : 'Agent reply';
+  const answer = typeof result.answer === 'string' && result.answer.trim()
+    ? result.answer.trim()
+    : [result.summary, ...(result.details ?? [])].filter(Boolean).join('\n\n');
   const note = typeof result.note === 'string' && result.note.trim() ? result.note.trim() : null;
   const status = result.statusLine || ({ failed: 'Stopped',
     needs_approval: 'Needs approval' }[result.state] ?? null);
-  const detailHtml = (result.details ?? []).map((item) => `<p class="detail">${escapeHtml(item).replace(/\n/g, '<br>')}</p>`).join('');
   const safeLinks = (result.links ?? []).map(({ label, url }) => ({ label, url: safeUrl(url) }))
     .filter(({ url }) => url);
+  const linkStyle = 'color:#1f5c41;text-decoration:underline';
   const links = safeLinks.map(({ label, url }) =>
-    `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`);
+    `<a href="${escapeHtml(url)}" style="${linkStyle}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`);
   const brandUrl = safeUrl(result.brandUrl);
-  const brand = brandUrl ? `<a class="brand" href="${escapeHtml(brandUrl)}" target="_blank" rel="noopener noreferrer" aria-label="TagMails website"><span class="mark" aria-hidden="true">↗</span> tagmails<span class="dot">.</span></a>` : '';
-  const footerItems = [...links, status ? `<strong class="status">${escapeHtml(status)}</strong>` : null,
+  const brand = brandUrl ? `<a class="brand" href="${escapeHtml(brandUrl)}" target="_blank" rel="noopener noreferrer" aria-label="TagMails website" style="color:#1d2420;font-weight:600;text-decoration:none"><span class="mark" aria-hidden="true" style="display:inline-block;background:#1d2420;color:#d0f06c;border-radius:4px;padding:0 4px;margin-right:3px;font-size:11px;line-height:16px">↗</span>tagmails<span style="color:#7aa33a">.</span></a>` : '';
+  const footerItems = [...links, status ? `<span style="color:#1d2420">${escapeHtml(status)}</span>` : null,
     ...(result.meta ?? []).map((item) => `<span>${escapeHtml(item)}</span>`), brand].filter(Boolean);
   const footerHtml = footerItems.map((item, index) =>
-    `${index ? '<span class="sep" aria-hidden="true">·</span>' : ''}<span class="piece">${item}</span>`).join('');
+    `${index ? '<span aria-hidden="true" style="color:#b3bab5;padding:0 6px">·</span>' : ''}<span style="white-space:nowrap">${item}</span>`).join('');
   const bodyNotes = [...(result.checks ?? []), ...(note && result.state === 'completed' ? [note] : [])];
-  const notesHtml = bodyNotes.length && (result.preview || !safeLinks.length)
-    ? `<p class="notice">${escapeHtml(bodyNotes.join(' '))}</p>` : '';
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>body{font:16px/1.5 Arial,sans-serif;color:#172620;max-width:640px;margin:0 auto;padding:22px}h1{font-size:21px;line-height:1.25;margin:0 0 14px}p{margin:0 0 13px}.detail{white-space:pre-wrap}.notice{color:#5b3412}.foot{background:#f1f4f0;border:1px solid #dce4df;border-radius:12px;margin-top:24px;padding:10px 12px;color:#42534a;font-size:12px;line-height:1.8}.piece{display:inline-block;white-space:nowrap;vertical-align:middle}.sep{color:#8b9a91;padding:0 7px}.status{color:#172620}.brand{color:#172620;font-weight:700;text-decoration:none}.mark{display:inline-block;background:#172620;color:#d0f06c;border-radius:5px;padding:0 5px;margin-right:4px;font-size:14px;line-height:1.5}.dot{color:#729323}a{color:#235b43;text-decoration:underline;text-underline-offset:2px}</style></head><body><h1>${title}</h1><p>${escapeHtml(result.summary)}</p>${detailHtml}${note && result.state !== 'completed' ? `<p class="notice">${escapeHtml(note)}</p>` : ''}${notesHtml}${footerHtml ? `<footer class="foot">${footerHtml}</footer>` : ''}</body></html>`;
-  const text = [title, '', result.summary, ...(result.details?.length ? ['', ...result.details] : []),
+  const showNotes = bodyNotes.length && (result.preview || !safeLinks.length);
+  const noticeStyle = 'margin:0 0 12px;color:#7a5a2c;font-size:14px';
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head><body style="margin:0;padding:0"><div style="font:15px/1.55 ${FONT};color:#1d2420;max-width:640px;word-wrap:break-word">${
+    result.preview ? `<p style="${noticeStyle}">Synthetic preview</p>` : ''}${renderMarkdown(answer)}${
+    note && result.state !== 'completed' ? `<p style="${noticeStyle}">${escapeHtml(note)}</p>` : ''}${
+    showNotes ? `<p style="${noticeStyle}">${escapeHtml(bodyNotes.join(' '))}</p>` : ''}${
+    footerHtml ? `<footer style="margin-top:22px;padding-top:9px;border-top:1px solid #e6e8e4;color:#6f7a73;font-size:12px;line-height:1.8">${footerHtml}</footer>` : ''}</div></body></html>`;
+  const text = [...(result.preview ? ['Synthetic preview', ''] : []), answer,
     ...(note && result.state !== 'completed' ? ['', note] : []),
-    ...(bodyNotes.length ? ['', ...bodyNotes] : []), '',
+    ...(bodyNotes.length ? ['', ...bodyNotes] : []), '', '—',
     [...safeLinks.map(({ label, url }) => `${label}: ${url}`), status, ...(result.meta ?? []),
       brandUrl ? `TagMails: ${brandUrl}` : null]
       .filter(Boolean).join(' · ')].join('\n');

@@ -22,5 +22,6 @@ test('email answer truncation is explicit when the result contract is full', () 
 test('the first short paragraph remains the summary', () => {
   assert.deepEqual(formatAgentAnswer('Done.\n\nChecked the source.\n\nOne caveat.'), {
     summary: 'Done.', details: ['Checked the source.', 'One caveat.'], truncated: false,
+    answer: 'Done.\n\nChecked the source.\n\nOne caveat.', answerTruncated: false,
   });
 });

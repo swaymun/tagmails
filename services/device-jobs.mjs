@@ -9,6 +9,8 @@ import { cleanProjectCatalog } from './project-route.mjs';
 const TOKEN = /^tm_dev_[A-Za-z0-9_-]{43}$/;
 const LEASE_SECONDS = 90;
 const MAX_RESULT_BYTES = 64_000;
+// The full answer for the reply email; summary/details stay as a short preview.
+const MAX_ANSWER_CHARS = 32_000;
 
 function json(value, status = 200) { return Response.json(value, { status }); }
 function digest(value) { return createHash('sha256').update(value).digest('hex'); }
@@ -169,7 +171,8 @@ async function started(env, device, body) {
 
 function validResult(value) {
   if (!value || !['completed', 'failed', 'needs_approval', 'needs_clarification'].includes(value.state) ||
-      typeof value.summary !== 'string' || !value.summary.trim() || value.summary.length > 500) return false;
+      typeof value.summary !== 'string' || !value.summary.trim() || value.summary.length > 500 ||
+      (value.answer !== undefined && (typeof value.answer !== 'string' || value.answer.length > MAX_ANSWER_CHARS))) return false;
   const tokens = ['inputTokens', 'cachedInputTokens', 'cacheCreationInputTokens', 'outputTokens', 'reasoningOutputTokens'];
   const transcript = value.transcript;
   const artifactIds = value.artifactIds;

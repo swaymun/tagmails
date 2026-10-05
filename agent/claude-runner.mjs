@@ -85,9 +85,10 @@ function resultFromAnswer(answer, write) {
     state: 'completed',
     summary: formatted.summary,
     details: formatted.details,
+    answer: formatted.answer,
     checks: [write ? `Claude ${MODEL} completed with file tools in the selected workspace; review its reported edits and checks.`
       : `Claude ${MODEL} completed with read-only file tools; no write tool was available.`,
-    ...(formatted.truncated ? ['The agent answer was shortened to fit this email. Reply to request the omitted portion.'] : [])],
+    ...(formatted.answerTruncated ? ['The agent answer was shortened to fit this email. Reply to request the omitted portion.'] : [])],
   };
 }
 

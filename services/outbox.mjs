@@ -168,7 +168,7 @@ export async function reconcileOneUnknownOutbox(env, {
 
 async function prepare(env, row) {
   const inbound = await env.DB.prepare(`SELECT m.object_key, m.message_id, m.sender_email,
-      t.subject, a.owner_email, a.agent_email, COALESCE(m.agent_email, a.agent_email) AS received_agent_email, j.model_json
+      t.subject, a.owner_email, a.agent_email, COALESCE(m.agent_email, a.agent_email) AS received_agent_email, j.model_json, j.workspace_json
     FROM jobs j JOIN messages m ON m.id = j.message_id
     JOIN threads t ON t.id = j.thread_id JOIN accounts a ON a.id = t.account_id
     WHERE j.id = ? LIMIT 1`).bind(row.job_id).first();
@@ -230,6 +230,8 @@ async function prepare(env, row) {
   const sharedWithParticipant = [...to, ...cc].some((email) => email !== owner);
   const runLinkLabel = result.runtime === 'relay' ? 'Run details' : 'Transcript';
   const selectedModel = selectedModelStatus(inbound.model_json);
+  let projectName = null;
+  try { projectName = JSON.parse(inbound.workspace_json ?? 'null')?.name ?? null; } catch { /* Older jobs have no folder. */ }
   const ownerOnly = to.length === 1 && to[0] === owner && cc.length === 0;
   const attachments = [];
   const files = ownerOnly && result.state === 'completed'
@@ -280,17 +282,16 @@ async function prepare(env, row) {
   const writeRun = ['codex-app-server-write', 'claude-cli-write'].includes(result.runtime);
   const rendered = renderResult({
     state: result.state, summary: result.summary,
-    details: result.details,
+    details: result.details, answer: result.answer,
     meta: [...(selectedModel && result.state !== 'needs_clarification'
-      ? selectedModel.split(' · ') : []), ...fileNote, ...(noChargeDetail ? [noChargeDetail] : []),
+      ? selectedModel.split(' · ') : []), ...(projectName ? [`in ${projectName}`] : []), ...fileNote, ...(noChargeDetail ? [noChargeDetail] : []),
       ...(creditDetail ? [creditDetail] : []), ...allowanceDetail],
     checks: result.checks,
-    links: transcriptUrl && (ownerCanOpen || participantTranscriptReady)
+    links: transcriptUrl && result.runtime !== 'relay' && (ownerCanOpen || participantTranscriptReady)
       ? [{ label: sharedWithParticipant && !participantTranscriptReady ? `${runLinkLabel} (owner only)` : runLinkLabel,
         url: transcriptUrl }] : [],
     brandUrl: siteOrigin,
-    note: result.runtime === 'relay'
-      ? 'No local agent ran for this email.'
+    note: result.runtime === 'relay' ? null
       : result.state === 'needs_approval'
       ? 'No action was approved automatically. Review the request and local permissions before replying or retrying.'
       : writeRun && result.state === 'completed'
@@ -386,7 +387,9 @@ export async function purgeSettledOutboundBodies(env) {
 }
 
 export async function sendNextOutbox(env, {
-  sendEmail = (payload, options) => new Resend(env.RESEND_API_KEY).emails.send(payload, options),
+  // Saved payloads keep the bare address for sender checks; mail shows a display name.
+  sendEmail = (payload, options) => new Resend(env.RESEND_API_KEY).emails.send(
+    { ...payload, from: `TagMails <${payload.from}>` }, options),
   getSentEmail = (id) => new Resend(env.RESEND_API_KEY).emails.get(id),
 } = {}) {
   if (!env.DB || !env.MAIL || !env.RESEND_API_KEY) throw new Error('Outbound bindings are incomplete');
