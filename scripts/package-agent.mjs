@@ -12,6 +12,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
@@ -50,7 +51,9 @@ const adapters = execFileSync('git', ['ls-files', 'agent'], { cwd: root, encodin
   .split('\n').filter((file) => file && !file.endsWith('.test.mjs'));
 for (const [target, zigTarget] of Object.entries(TARGETS)) {
   execFileSync('cargo', ['zigbuild', '--release', '--locked', '-p', 'tagmails-daemon', '--target', zigTarget],
-    { cwd: root, stdio: ['ignore', 'ignore', 'inherit'] });
+    { cwd: root, stdio: ['ignore', 'ignore', 'inherit'], env: { ...process.env,
+      // Keep the builder's home and checkout paths out of published binaries.
+      RUSTFLAGS: `--remap-path-prefix=${os.homedir()}=~ --remap-path-prefix=${root}=tagmails` } });
   const stage = fs.mkdtempSync(path.join(destination, '.stage-'));
   const top = path.join(stage, `tagmails-${version}`);
   fs.mkdirSync(path.join(top, 'bin'), { recursive: true });
