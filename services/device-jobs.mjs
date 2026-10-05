@@ -5,6 +5,7 @@ import { testBillingEnabled } from './email-charges.mjs';
 import { ARTIFACT_ID, selectedRunArtifacts, uploadRunArtifact } from './run-artifacts.mjs';
 import { catalogFromDevice, deviceDefaults } from './model-catalog.mjs';
 import { cleanProjectCatalog } from './project-route.mjs';
+import { currentText } from './jev-route.mjs';
 
 const TOKEN = /^tm_dev_[A-Za-z0-9_-]{43}$/;
 const LEASE_SECONDS = 90;
@@ -94,13 +95,16 @@ async function claim(env, device) {
   });
   if (parsed.messageId !== message.message_id) throw new Error('Stored MIME no longer matches the claimed job');
   const workspace = row.workspace_json ? JSON.parse(row.workspace_json) : null;
+  const earlier = await unrunEarlierRequests(env, device, row, message.agent_email ?? account.agent_email);
+  const body = earlier.length ? `${earlier.map((item) =>
+    `Earlier in this thread, ${item.from} wrote (the relay replied without running an agent):\n${item.text}`).join('\n\n')}\n\nThe current message:\n${parsed.body}` : parsed.body;
   const envelope = {
     jobId: row.id, threadId: row.thread_id, leaseId, leaseUntil: row.lease_until,
     model: row.model_json ? JSON.parse(row.model_json) : chooseModel(parsed.body, account.default_model),
     ...(workspace?.kind === 'project' ? { workspace: { kind: 'project', path: workspace.path } }
       : workspace?.kind === 'scratch' ? { workspace: { kind: 'scratch' } } : {}),
     request: { from: parsed.from, fromOwner: parsed.from === account.owner_email,
-      subject: parsed.subject, body: parsed.body,
+      subject: parsed.subject, body,
       attachments: parsed.attachments.map((attachment, index) => ({
         ...attachment, path: `/api/device/attachment?jobId=${row.id}&leaseId=${leaseId}&index=${index}`,
       })) },
@@ -109,6 +113,36 @@ async function claim(env, device) {
   const payload = bytes.toString('base64url');
   const signature = createHmac('sha256', device.token).update(bytes).digest('base64url');
   return json({ claimed: true, payload, signature });
+}
+
+// A turn the relay answered itself ("which project?", an unavailable model)
+// never reached an agent, and the sender's reply usually quotes only that
+// answer. Hand the agent those earlier requests, newest last.
+async function unrunEarlierRequests(env, device, row, agentEmail) {
+  const { results = [] } = await env.DB.prepare(`SELECT m.object_key, m.message_id FROM jobs j
+    JOIN messages m ON m.id = j.message_id JOIN threads t ON t.id = j.thread_id
+    WHERE j.thread_id = ? AND t.account_id = ? AND j.id != ?
+      AND json_type(j.model_json, '$.error') = 'text'
+      AND (j.created_at, j.rowid) < (SELECT created_at, rowid FROM jobs WHERE id = ?)
+      AND NOT EXISTS (SELECT 1 FROM jobs ran WHERE ran.thread_id = j.thread_id
+        AND (ran.created_at, ran.rowid) > (j.created_at, j.rowid)
+        AND (ran.created_at, ran.rowid) < (SELECT created_at, rowid FROM jobs WHERE id = ?)
+        AND ran.model_json IS NOT NULL AND json_type(ran.model_json, '$.error') IS NULL)
+    ORDER BY j.created_at DESC, j.rowid DESC LIMIT 3`)
+    .bind(row.thread_id, device.account_id, row.id, row.id, row.id).all();
+  const earlier = [];
+  for (const item of results.reverse()) {
+    const object = await env.MAIL.get(item.object_key);
+    if (!object) continue;
+    try {
+      const parsed = await parseInbound(await object.arrayBuffer(), agentEmail, {
+        verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false,
+      });
+      const text = currentText(parsed.body).trim();
+      if (parsed.messageId === item.message_id && text) earlier.push({ from: parsed.from, text });
+    } catch { /* Skip a message that no longer parses. */ }
+  }
+  return earlier;
 }
 
 async function attachment(request, env, device, url) {

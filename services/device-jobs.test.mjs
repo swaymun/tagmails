@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { handleDeviceRequest } from './device-jobs.mjs';
-import { handleInbound } from './relay-worker.mjs';
+import { completeOneModelClarification, handleInbound } from './relay-worker.mjs';
 import { bindings } from './bindings-fixture.mjs';
 import { handleAccountRequest } from './account-auth.mjs';
 import { deleteExpiredRunArtifacts } from './run-artifacts.mjs';
@@ -458,4 +458,16 @@ test('a revoked participant email cannot be claimed even if its job remains queu
     VALUES (?, 'account-1', ?, ?, 'inbound', 'guest@gmail.com', ?)`).run('revoked-message', threadId, '<revoked@gmail.com>', 'inbound/revoked.eml');
   sqlite.prepare("INSERT INTO jobs (id, thread_id, message_id, state) VALUES ('revoked-job', ?, 'revoked-message', 'queued')").run(threadId);
   assert.deepEqual((await call(env, paired.token, 'claim')).body, { claimed: false });
+});
+
+test('a reply after a relay-only answer also hands the agent the original request', async () => {
+  const { env, sqlite } = bindings();
+  const paired = device(sqlite);
+  await inbound(env, 'unrun-1', 'Model: Gemini Ultra\nWrite travel guide scripts for Madrid and Paris.');
+  assert.equal(await completeOneModelClarification(env), true);
+  assert.equal((await call(env, paired.token, 'claim')).body.claimed, false);
+  await inbound(env, 'unrun-2', 'try now?\n\nOn Mon, TagMails wrote:\n> That model is unavailable.', ['<unrun-1@gmail.com>']);
+  const claim = envelope((await call(env, paired.token, 'claim')).body);
+  assert.match(claim.request.body, /owner@gmail\.com wrote \(the relay replied without running an agent\):\nModel: Gemini Ultra\nWrite travel guide scripts for Madrid and Paris\./);
+  assert.match(claim.request.body, /The current message:\ntry now\?/);
 });
