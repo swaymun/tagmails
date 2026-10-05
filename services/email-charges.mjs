@@ -1,9 +1,35 @@
 export const TEST_EMAIL_CENTS = 5;
 
+export const SIGNUP_BONUS_CENTS = 100;
+export const FILE_TRANSFER_CENTS_PER_GB = 5;
+export const ATTACHABLE_BYTES = 5_000_000;
+
+// Live billing needs both the explicit flag and a live Stripe key; test
+// billing needs a test key. The two never mix.
+export function billingLive(env) {
+  return env.BILLING_LIVE === 'true' && /^(?:sk|rk)_live_/.test(env.STRIPE_SECRET_KEY ?? '') &&
+    Boolean(env.STRIPE_WEBHOOK_SECRET?.startsWith('whsec_'));
+}
+
 export function testBillingEnabled(env) {
+  if (billingLive(env)) return true;
   return env.BILLING_TEST_MODE === 'true' &&
     /^(?:sk|rk)_test_/.test(env.STRIPE_SECRET_KEY ?? '') &&
     env.STRIPE_WEBHOOK_SECRET?.startsWith('whsec_');
+}
+
+export async function grantSignupBonus(env, accountId) {
+  if (!testBillingEnabled(env)) return;
+  await env.DB.prepare(`INSERT OR IGNORE INTO credit_ledger (id, account_id, amount_cents, kind, source_id)
+    VALUES (?, ?, ?, 'signup_bonus', ?)`).bind(crypto.randomUUID(), accountId, SIGNUP_BONUS_CENTS, accountId).run();
+}
+
+// Files too big to attach become download links: one credit per started GB.
+export async function chargeFileTransfer(env, accountId, artifactId, bytes) {
+  if (!testBillingEnabled(env) || bytes <= ATTACHABLE_BYTES) return;
+  const cents = Math.ceil(bytes / 1e9) * FILE_TRANSFER_CENTS_PER_GB;
+  await env.DB.prepare(`INSERT OR IGNORE INTO credit_ledger (id, account_id, amount_cents, kind, source_id)
+    VALUES (?, ?, ?, 'file_transfer', ?)`).bind(crypto.randomUUID(), accountId, -cents, artifactId).run();
 }
 
 function changed(result) {

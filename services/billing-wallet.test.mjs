@@ -144,14 +144,14 @@ test('the private Site shows only its Gmail owner test credits and returns from 
   const response = await call(site('/api/site/billing/checkout', 'POST'));
   assert.equal(response.status, 200);
   assert.equal((await response.json()).testMode, true);
-  assert.equal(checkout.get('success_url'), `${env.SITE_ORIGIN}/setup?topup=returned`);
-  assert.equal(checkout.get('cancel_url'), `${env.SITE_ORIGIN}/setup?topup=canceled`);
+  assert.equal(checkout.get('success_url'), `${env.SITE_ORIGIN}/?topup=returned#credits`);
+  assert.equal(checkout.get('cancel_url'), `${env.SITE_ORIGIN}/?topup=canceled#credits`);
   assert.equal(checkout.get('customer_email'), 'owner@gmail.com');
   assert.equal(sqlite.prepare('SELECT count(*) n FROM billing_checkouts').get().n, 1);
   assert.equal((await call(site('/api/site/billing/checkout', 'POST', 'owner-token',
     'https://tagmails.com'))).status, 200);
-  assert.equal(checkout.get('success_url'), 'https://tagmails.com/setup?topup=returned');
-  assert.equal(checkout.get('cancel_url'), 'https://tagmails.com/setup?topup=canceled');
+  assert.equal(checkout.get('success_url'), 'https://tagmails.com/?topup=returned#credits');
+  assert.equal(checkout.get('cancel_url'), 'https://tagmails.com/?topup=canceled#credits');
   assert.equal(sqlite.prepare('SELECT count(*) n FROM billing_checkouts').get().n, 2);
   env.BILLING_TEST_MODE = 'false';
   assert.equal((await (await call(site('/api/site/billing'))).json()).checkoutEnabled, false);
@@ -221,4 +221,22 @@ test('scheduled reconciliation applies a refund after its first provider lookup 
   await reconcileDueRefunds(env, { stripeFetch: async () => { throw new Error('Already resolved'); } });
   assert.equal(sqlite.prepare('SELECT SUM(amount_cents) balance FROM credit_ledger').get().balance, 700);
   assert.equal(sqlite.prepare('SELECT count(*) n FROM refund_notifications WHERE resolved_at IS NOT NULL').get().n, 1);
+});
+
+test('live billing needs the flag and a live key, accepts only live events, and grants bonuses and transfer charges once', async () => {
+  const { billingLive, testBillingEnabled, grantSignupBonus, chargeFileTransfer } = await import('./email-charges.mjs');
+  assert.equal(billingLive({ BILLING_LIVE: 'true', STRIPE_SECRET_KEY: 'sk_test_x', STRIPE_WEBHOOK_SECRET: 'whsec_x' }), false);
+  assert.equal(billingLive({ STRIPE_SECRET_KEY: 'rk_live_x', STRIPE_WEBHOOK_SECRET: 'whsec_x' }), false);
+  const live = { BILLING_LIVE: 'true', STRIPE_SECRET_KEY: 'rk_live_x', STRIPE_WEBHOOK_SECRET: 'whsec_x' };
+  assert.equal(billingLive(live), true);
+  assert.equal(testBillingEnabled(live), true);
+  const { env, sqlite } = bindings();
+  Object.assign(env, live);
+  await grantSignupBonus(env, 'account-1');
+  await grantSignupBonus(env, 'account-1');
+  await chargeFileTransfer(env, 'account-1', 'artifact-small', 4_000_000);
+  await chargeFileTransfer(env, 'account-1', 'artifact-big', 1_200_000_000);
+  await chargeFileTransfer(env, 'account-1', 'artifact-big', 1_200_000_000);
+  const rows = sqlite.prepare('SELECT kind, amount_cents FROM credit_ledger ORDER BY kind').all().map((row) => ({ ...row }));
+  assert.deepEqual(rows, [{ kind: 'file_transfer', amount_cents: -10 }, { kind: 'signup_bonus', amount_cents: 100 }]);
 });

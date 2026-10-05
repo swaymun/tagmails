@@ -1,6 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { accountFor, sameOrigin, siteCors, siteOriginFor, siteOwnerFor, verifyGoogleCredential } from './account-auth.mjs';
-import { reservePendingTestEmails, testBillingEnabled, testWalletSnapshot } from './email-charges.mjs';
+import { billingLive, reservePendingTestEmails, testBillingEnabled, testWalletSnapshot } from './email-charges.mjs';
 
 const TOP_UP_CENTS = 1000;
 const MAX_WEBHOOK_BYTES = 128_000;
@@ -64,12 +64,12 @@ async function createCheckout(request, env, account, stripeFetch, site = false) 
     mode: 'payment',
     client_reference_id: id,
     customer_email: account.owner_email,
-    success_url: `${origin}/${site ? 'setup' : 'account'}?topup=returned`,
-    cancel_url: `${origin}/${site ? 'setup' : 'account'}?topup=canceled`,
+    success_url: `${origin}/${site ? '?topup=returned#credits' : 'account?topup=returned'}`,
+    cancel_url: `${origin}/${site ? '?topup=canceled#credits' : 'account?topup=canceled'}`,
     'payment_method_types[0]': 'card',
     'line_items[0][price_data][currency]': 'usd',
     'line_items[0][price_data][unit_amount]': String(TOP_UP_CENTS),
-    'line_items[0][price_data][product_data][name]': 'TagMails test credits',
+    'line_items[0][price_data][product_data][name]': billingLive(env) ? 'TagMails credits (200)' : 'TagMails test credits (200)',
     'line_items[0][quantity]': '1',
   });
   const response = await stripeFetch('https://api.stripe.com/v1/checkout/sessions', {
@@ -200,7 +200,9 @@ async function stripeWebhook(request, env, now, stripeFetch) {
   }
   let event;
   try { event = JSON.parse(raw); } catch { return json({ error: 'Invalid Stripe event' }, 400); }
-  if (!event.id?.startsWith('evt_') || event.livemode !== false) return json({ error: 'A Stripe test event is required' }, 400);
+  if (!event.id?.startsWith('evt_') || event.livemode !== billingLive(env)) {
+    return json({ error: billingLive(env) ? 'A Stripe live event is required' : 'A Stripe test event is required' }, 400);
+  }
   if (['checkout.session.completed', 'checkout.session.async_payment_succeeded'].includes(event.type)) {
     if (event.data?.object?.payment_status !== 'paid') return json({ received: true, pending: true });
     return paidCheckout(env, event.data.object, stripeFetch);
@@ -234,7 +236,7 @@ export async function handleTestWalletRequest(request, env, { stripeFetch = fetc
     if (pathname === '/api/site/billing' && request.method === 'GET') {
       const snapshot = await testWalletSnapshot(env, owner.account.id);
       return json({ ...snapshot, waitingEmails: testBillingEnabled(env) ? snapshot.waitingEmails : 0,
-        currency: 'usd', testMode: true, checkoutEnabled: Boolean(testBillingEnabled(env)) }, 200, headers);
+        currency: 'usd', testMode: !billingLive(env), checkoutEnabled: Boolean(testBillingEnabled(env)) }, 200, headers);
     }
     if (pathname === '/api/site/billing/checkout' && request.method === 'POST') {
       return createCheckout(request, env, owner.account, stripeFetch, true);
@@ -249,7 +251,7 @@ export async function handleTestWalletRequest(request, env, { stripeFetch = fetc
   if (pathname === '/api/billing' && request.method === 'GET') {
     const snapshot = await testWalletSnapshot(env, account.id);
     return json({ ...snapshot, waitingEmails: testBillingEnabled(env) ? snapshot.waitingEmails : 0,
-      currency: 'usd', testMode: true, checkoutEnabled: Boolean(testBillingEnabled(env) && originFor(request, env)) });
+      currency: 'usd', testMode: !billingLive(env), checkoutEnabled: Boolean(testBillingEnabled(env) && originFor(request, env)) });
   }
   if (pathname === '/api/billing/checkout' && request.method === 'POST') return createCheckout(request, env, account, stripeFetch);
   return new Response('Not found', { status: 404 });

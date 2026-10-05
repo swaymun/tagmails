@@ -4,6 +4,7 @@ import { runReceiptPage } from './account-page.mjs';
 import { selectedModelDetail, selectedModelStatus } from './model-route.mjs';
 import { addressDomain, checkAddress, chooseAddress } from './agent-username.mjs';
 import { openText } from './storage-crypto.mjs';
+import { grantSignupBonus } from './email-charges.mjs';
 import { artifactForDownload, selectedRunArtifacts } from './run-artifacts.mjs';
 import { knownAgentAddresses } from './agent-addresses.mjs';
 import { accountPreferences, saveAccountPreferences } from './account-preferences.mjs';
@@ -146,9 +147,11 @@ async function signIn(request, env, verifyIdentity, exchangeCode) {
     } catch { return json({ error: 'Gmail address is already assigned' }, 409, headers); }
   } else {
     const agent = `u-${randomUUID().replaceAll('-', '').slice(0, 20)}@${env.AGENT_DOMAIN}`;
+    const accountId = randomUUID();
     try {
       await env.DB.prepare('INSERT INTO accounts (id, google_sub, owner_email, agent_email) VALUES (?, ?, ?, ?)')
-        .bind(randomUUID(), identity.sub, identity.email, agent).run();
+        .bind(accountId, identity.sub, identity.email, agent).run();
+      await grantSignupBonus(env, accountId);
     } catch {
       // A concurrent sign-in for the same Google account may have won.
       const raced = await env.DB.prepare('SELECT id FROM accounts WHERE google_sub = ?')

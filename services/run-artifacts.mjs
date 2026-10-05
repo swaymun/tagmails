@@ -1,3 +1,4 @@
+import { chargeFileTransfer } from './email-charges.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 
 export const ARTIFACT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -106,6 +107,7 @@ export async function uploadRunArtifact(request, env, device) {
     }
     throw error;
   }
+  await chargeFileTransfer(env, device.account_id, id, bytes.length);
   return json({ id, name: info.name, mimeType: info.mimeType, size: bytes.length,
     expiresInDays: 7 }, 201);
 }
