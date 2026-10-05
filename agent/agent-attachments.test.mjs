@@ -81,7 +81,7 @@ test('relay attachments use the device token and reject redirects and mismatched
 });
 
 test('staged text PDFs expose bounded untrusted text and invalid PDFs stay unread', async () => {
-  const pdf = await fs.readFile(new URL('./fixtures/vision-maple-83.pdf', import.meta.url));
+  const pdf = await fs.readFile(new URL('../apps/mock-inbox/fixtures/vision-maple-83.pdf', import.meta.url));
   const staged = await stageAgentAttachments([{ data: pdf.toString('base64'), size: pdf.length,
     mimeType: 'application/pdf' }]);
   try {

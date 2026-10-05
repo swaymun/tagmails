@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { promptFor } from '../apps/mock-inbox/codex-runner.mjs';
+import { promptFor } from '../agent/codex-runner.mjs';
 
 const live = process.argv.includes('--run');
 const rescoreIndex = process.argv.indexOf('--rescore');

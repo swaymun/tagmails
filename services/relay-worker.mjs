@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Resend } from 'resend';
-import { routeModel } from './jev-route.mjs';
+import { currentText, routeModel } from './jev-route.mjs';
+import { accountProjectCatalog, routeProject } from './project-route.mjs';
 import { inspectResendInbound } from './resend-inbound.mjs';
 import { knownAgentAddresses } from './agent-addresses.mjs';
 import { handleDeviceRequest } from './device-jobs.mjs';
@@ -215,12 +216,37 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
     WHERE j.thread_id = ? AND json_extract(j.model_json, '$.id') IS NOT NULL
     ORDER BY m.rowid DESC LIMIT 1`).bind(threadId).first() : null;
   const priorModel = previousJob?.model_json ? JSON.parse(previousJob.model_json) : null;
-  let model = threadUnavailable ? null : await routeModel(message.body, account.default_model, {
-    apiKey: env.TYPESAFE_API_KEY, fetcher: fetchModel, priorModel, subject: message.subject,
-    pilotCodexModel: env.PILOT_CODEX_MODEL,
-    defaultEffort: account.default_effort, defaultSpeed: account.default_speed,
-    availableModels: catalog.models,
-  });
+  // Project routing: replies stay in the thread's folder. A reply to "which
+  // project?" is routed together with the request that prompted the question.
+  const previousWorkspace = threadId && !threadUnavailable ? await env.DB.prepare(`SELECT j.workspace_json FROM jobs j
+    JOIN messages m ON m.id = j.message_id
+    WHERE j.thread_id = ? AND j.workspace_json IS NOT NULL
+    ORDER BY m.rowid DESC LIMIT 1`).bind(threadId).first() : null;
+  const priorWorkspace = previousWorkspace ? JSON.parse(previousWorkspace.workspace_json) : null;
+  const projects = threadUnavailable || priorWorkspace?.kind ? [] : await accountProjectCatalog(env.DB, account.id, threadId);
+  const subjectLine = String(message.subject ?? '').replace(/[\r\n]+/g, ' ').slice(0, 300).trim();
+  const requestText = `${subjectLine ? `Subject: ${subjectLine}\n` : ''}${currentText(message.body)}`.slice(0, 4000);
+  const projectState = priorWorkspace?.pending
+    ? `${priorWorkspace.pending}\n\nThe agent asked which project to use. The sender replied:\n${currentText(message.body)}`
+    : requestText;
+  const [routedModel, workspace] = await Promise.all([
+    threadUnavailable ? null : routeModel(message.body, account.default_model, {
+      apiKey: env.TYPESAFE_API_KEY, fetcher: fetchModel, priorModel, subject: message.subject,
+      pilotCodexModel: env.PILOT_CODEX_MODEL,
+      defaultEffort: account.default_effort, defaultSpeed: account.default_speed,
+      availableModels: catalog.models,
+    }),
+    priorWorkspace?.kind ? priorWorkspace
+      : projects.length && env.TYPESAFE_API_KEY
+        ? routeProject(projectState, projects, { apiKey: env.TYPESAFE_API_KEY, fetcher: fetchModel })
+        : projects.length ? { kind: 'scratch' } : null,
+  ]);
+  let model = routedModel;
+  let workspaceJson = workspace?.kind ? JSON.stringify(workspace) : null;
+  if (workspace?.ask && model && !model.error) {
+    model = { error: workspace.ask };
+    workspaceJson = JSON.stringify({ pending: projectState.slice(0, 2000) });
+  }
   if (model?.id === 'claude-sonnet-5-5' && env.CLAUDE_ROUTE_ENABLED !== 'true') {
     model = { error: 'Claude models are not enabled in this pilot. Ask for an available OpenAI model or omit the model to use your default.' };
   }
@@ -235,8 +261,8 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
   if (unavailableResult) await env.MAIL.put(resultKey, JSON.stringify(unavailableResult), {
     httpMetadata: { contentType: 'application/json' },
   });
-  statements.push(env.DB.prepare('INSERT INTO jobs (id, thread_id, message_id, state, model_json, result_key) VALUES (?, ?, ?, ?, ?, ?)')
-    .bind(jobId, newThreadId, id, threadUnavailable ? 'failed' : 'queued', model && JSON.stringify(model), resultKey));
+  statements.push(env.DB.prepare('INSERT INTO jobs (id, thread_id, message_id, state, model_json, result_key, workspace_json) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .bind(jobId, newThreadId, id, threadUnavailable ? 'failed' : 'queued', model && JSON.stringify(model), resultKey, workspaceJson));
   if (!threadUnavailable && !model?.error && env.STATUS_REACTIONS_ENABLED === 'true' &&
       !env.RESEND_TEST_FROM && message.from.endsWith('@gmail.com')) {
     statements.push(env.DB.prepare("INSERT INTO status_reactions (job_id, status) VALUES (?, 'received')").bind(jobId));

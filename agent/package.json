@@ -1,0 +1,11 @@
+{
+  "name": "tagmails-agent",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Codex and Claude Code adapters run by the tagmails binary",
+  "type": "module",
+  "license": "MIT",
+  "dependencies": {
+    "pdfjs-dist": "5.4.624"
+  }
+}

@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CODEX_CONFIG, PROFILE, WRITE_CODEX_CONFIG, WRITE_PROFILE } from '../apps/mock-inbox/codex-profile.mjs';
+import { CODEX_CONFIG, PROFILE, WRITE_CODEX_CONFIG, WRITE_PROFILE } from '../agent/codex-profile.mjs';
 
 const write = process.argv.includes('--write');
 const profile = write ? WRITE_PROFILE : PROFILE;

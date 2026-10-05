@@ -3,7 +3,8 @@ import { DatabaseSync } from 'node:sqlite';
 
 export function bindings() {
   const sqlite = new DatabaseSync(':memory:');
-  for (const file of ['0001_inbound.sql', '0002_devices_and_leases.sql', '0003_outbound_and_reactions.sql', '0004_accounts_and_pairing.sql', '0005_test_wallet.sql', '0006_test_email_charges.sql', '0007_run_artifacts.sql', '0008_inbound_retention.sql', '0009_idempotent_artifacts.sql', '0010_account_model.sql', '0011_delivery_recipients.sql', '0012_device_last_seen.sql', '0013_thread_device.sql', '0014_message_agent_address.sql', '0015_agent_aliases.sql', '0016_status_reactions.sql', '0017_account_preferences.sql', '0018_device_model_catalog.sql', '0019_flexible_account_preferences.sql']) {
+  const migrations = fs.readdirSync(new URL('./migrations/', import.meta.url)).filter((file) => file.endsWith('.sql')).sort();
+  for (const file of migrations) {
     sqlite.exec(fs.readFileSync(new URL(`./migrations/${file}`, import.meta.url), 'utf8'));
   }
   sqlite.prepare('INSERT INTO accounts (id, google_sub, owner_email, agent_email) VALUES (?, ?, ?, ?)')

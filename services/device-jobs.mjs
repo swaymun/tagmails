@@ -4,6 +4,7 @@ import { chooseModel } from '../apps/mock-inbox/model.mjs';
 import { testBillingEnabled } from './email-charges.mjs';
 import { ARTIFACT_ID, selectedRunArtifacts, uploadRunArtifact } from './run-artifacts.mjs';
 import { cleanCodexCatalog } from './model-catalog.mjs';
+import { cleanProjectCatalog } from './project-route.mjs';
 
 const TOKEN = /^tm_dev_[A-Za-z0-9_-]{43}$/;
 const LEASE_SECONDS = 90;
@@ -76,7 +77,7 @@ async function claim(env, device) {
       JOIN messages m ON m.id = j.message_id JOIN accounts a ON a.id = t.account_id
       WHERE t.account_id = ? AND t.device_id = ? AND ${eligible}
       ORDER BY j.created_at, j.rowid LIMIT 1
-    ) RETURNING id, thread_id, message_id, lease_until, model_json`)
+    ) RETURNING id, thread_id, message_id, lease_until, model_json, workspace_json`)
     .bind(device.id, leaseId, device.account_id, device.id).first();
   if (!row) return json({ claimed: false });
   const message = await env.DB.prepare(`SELECT m.object_key, m.message_id, m.agent_email, t.subject
@@ -90,9 +91,12 @@ async function claim(env, device) {
     verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false,
   });
   if (parsed.messageId !== message.message_id) throw new Error('Stored MIME no longer matches the claimed job');
+  const workspace = row.workspace_json ? JSON.parse(row.workspace_json) : null;
   const envelope = {
     jobId: row.id, threadId: row.thread_id, leaseId, leaseUntil: row.lease_until,
     model: row.model_json ? JSON.parse(row.model_json) : chooseModel(parsed.body, account.default_model),
+    ...(workspace?.kind === 'project' ? { workspace: { kind: 'project', path: workspace.path } }
+      : workspace?.kind === 'scratch' ? { workspace: { kind: 'scratch' } } : {}),
     request: { from: parsed.from, fromOwner: parsed.from === account.owner_email,
       subject: parsed.subject, body: parsed.body,
       attachments: parsed.attachments.map((attachment, index) => ({
@@ -258,7 +262,7 @@ async function complete(env, device, body) {
 export async function handleDeviceRequest(request, env) {
   const url = new URL(request.url);
   if (!((request.method === 'GET' && ['/api/device/attachment', '/api/device/status'].includes(url.pathname)) ||
-    (request.method === 'POST' && ['/api/device/claim', '/api/device/renew', '/api/device/started', '/api/device/complete', '/api/device/artifacts', '/api/device/models'].includes(url.pathname)))) {
+    (request.method === 'POST' && ['/api/device/claim', '/api/device/renew', '/api/device/started', '/api/device/complete', '/api/device/artifacts', '/api/device/models', '/api/device/projects'].includes(url.pathname)))) {
     return new Response('Not found', { status: 404 });
   }
   if (url.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(url.hostname)) return json({ error: 'HTTPS required' }, 403);
@@ -282,6 +286,15 @@ export async function handleDeviceRequest(request, env) {
       WHERE id = ? AND account_id = ? AND revoked_at IS NULL`)
       .bind(JSON.stringify(models), device.id, device.account_id).run();
     return json({ saved: true, count: models.length });
+  }
+  if (url.pathname === '/api/device/projects') {
+    let projects;
+    try { projects = cleanProjectCatalog(body?.projects); }
+    catch { return json({ error: 'Invalid project list' }, 400); }
+    await env.DB.prepare(`UPDATE devices SET project_catalog_json = ?, project_catalog_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND account_id = ? AND revoked_at IS NULL`)
+      .bind(projects.length ? JSON.stringify(projects) : null, device.id, device.account_id).run();
+    return json({ saved: true, count: projects.length });
   }
   if (url.pathname === '/api/device/renew') return renew(env, device, body);
   return url.pathname === '/api/device/started' ? started(env, device, body) : complete(env, device, body);

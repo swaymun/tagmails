@@ -9,7 +9,7 @@ function confidentChoice(answer, threshold = 0.65) {
     answer.probabilities[answer.choice] >= threshold ? answer.choice : null;
 }
 
-function currentText(body) {
+export function currentText(body) {
   const lines = [];
   for (const line of String(body ?? '').split(/\r?\n/)) {
     if (/^\s*>/.test(line) || /^On .{1,200} wrote:\s*$/i.test(line) ||
