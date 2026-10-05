@@ -2,7 +2,9 @@ export const TEST_EMAIL_CENTS = 5;
 
 export const SIGNUP_BONUS_CENTS = 100;
 export const FILE_TRANSFER_CENTS_PER_GB = 5;
-export const ATTACHABLE_BYTES = 5_000_000;
+// Cloudflare Email Sending caps a whole message at 5 MiB. Base64 adds a third,
+// so 3.5 MB of files plus a 32k-character answer stays under it.
+export const ATTACHABLE_BYTES = 3_500_000;
 
 // Live billing needs both the explicit flag and a live Stripe key; test
 // billing needs a test key. The two never mix.

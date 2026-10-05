@@ -781,7 +781,7 @@ test('large, expired, and different-job files are never attached to an email', a
   await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
   await queuedTurn(fixture, { number: 2, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
   const rows = [
-    ['large-file', 'job-1', 5_000_001, '2099-01-01'],
+    ['large-file', 'job-1', 3_500_001, '2099-01-01'],
     ['expired-file', 'job-1', 10, '2000-01-01'],
     ['different-job', 'job-2', 10, '2099-01-01'],
   ];

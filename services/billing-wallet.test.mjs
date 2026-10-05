@@ -234,7 +234,7 @@ test('live billing needs the flag and a live key, accepts only live events, and 
   Object.assign(env, live);
   await grantSignupBonus(env, 'account-1');
   await grantSignupBonus(env, 'account-1');
-  await chargeFileTransfer(env, 'account-1', 'artifact-small', 4_000_000);
+  await chargeFileTransfer(env, 'account-1', 'artifact-small', 3_000_000);
   await chargeFileTransfer(env, 'account-1', 'artifact-big', 1_200_000_000);
   await chargeFileTransfer(env, 'account-1', 'artifact-big', 1_200_000_000);
   const rows = sqlite.prepare('SELECT kind, amount_cents FROM credit_ledger ORDER BY kind').all().map((row) => ({ ...row }));

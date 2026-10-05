@@ -7,12 +7,9 @@ import { testSenderFor } from './agent-username.mjs';
 import { cloudflareMessageId, sendWithCloudflare } from './cloudflare-mail.mjs';
 import { openText, sealText } from './storage-crypto.mjs';
 import { renderResult } from '../apps/mock-inbox/mail.mjs';
-import { releaseFailedPrimaryTestEmail, releaseTestEmail, settleTestEmail, testBillingEnabled, testWalletSnapshot } from './email-charges.mjs';
+import { ATTACHABLE_BYTES, releaseFailedPrimaryTestEmail, releaseTestEmail, settleTestEmail, testBillingEnabled, testWalletSnapshot } from './email-charges.mjs';
 import { selectedModelStatus } from './model-route.mjs';
 import { artifactForDownload, selectedRunArtifacts } from './run-artifacts.mjs';
-
-// Keep direct attachments bounded; larger files remain owner-only downloads.
-const MAX_EMAIL_ATTACHMENT_BYTES = 5_000_000;
 
 const MESSAGE_ID = /^<[^<>\s]+@[^<>\s]+>$/;
 
@@ -241,7 +238,7 @@ async function prepare(env, row) {
     ? await selectedRunArtifacts(env, row.account_id, row.job_id, result.artifactIds) : [];
   let attachedBytes = 0;
   for (const file of files) {
-    if (attachedBytes + file.byte_size > MAX_EMAIL_ATTACHMENT_BYTES) continue;
+    if (attachedBytes + file.byte_size > ATTACHABLE_BYTES) continue;
     const source = await artifactForDownload(env, row.account_id, row.job_id, file.id);
     if (!source) continue;
     const stored = await env.MAIL.get(source.object_key);
