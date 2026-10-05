@@ -82,3 +82,50 @@ export async function prepareCodexProfile(workspace, access = false) {
   if (await fs.realpath(authLink) !== auth) throw new Error('Codex runtime authentication link was changed');
   return home;
 }
+
+// Owner turns run like Wonder does: a TagMails-only Codex home (its own
+// sessions and history) that links the owner's Codex config, sign-in,
+// plugins, skills and rules, so their connectors (Google Drive, Gmail, ...)
+// work. The permission profile arrives as -c overrides on each run instead of
+// a config file, and desktop control stays off.
+const SHARED = ['config.toml', 'auth.json', '.credentials.json', 'plugins', 'skills', 'rules'];
+
+function profileOverride(profile, access) {
+  return `permissions.${profile}={extends=":read-only",filesystem={":root"="deny",":minimal"="read",":tmpdir"="deny",":slash_tmp"="deny",":workspace_roots"={"."="${access}"}},network={enabled=false}}`;
+}
+
+export function ownerOverrides(access) {
+  // Inline table: Codex ignores dotted -c keys with quoted plugin names, and
+  // session flags merge into the owner's plugin table rather than replace it.
+  const values = ['notify=[]',
+    'plugins={"unified-computer-use@openai-bundled"={enabled=false},"computer-use@openai-bundled"={enabled=false}}'];
+  if (access !== 'full') {
+    const write = access === true || access === 'write';
+    values.push(profileOverride(write ? WRITE_PROFILE : PROFILE, write ? 'write' : 'read'));
+  }
+  return values.flatMap((value) => ['-c', value]);
+}
+
+export async function prepareOwnerCodexHome(workspace, access = false) {
+  const full = access === 'full';
+  const write = access === true || access === 'write';
+  const desktop = process.env.TAGMAILS_CODEX_DESKTOP_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+  const destination = process.env.TAGMAILS_CODEX_OWNER_HOME ||
+    path.join(os.homedir(), '.tagmails', full ? 'codex-owner-full' : write ? 'codex-owner-write' : 'codex-owner-readonly');
+  if (!path.isAbsolute(desktop) || !path.isAbsolute(destination)) throw new Error('Codex homes must be absolute paths');
+  await fs.mkdir(destination, { recursive: true, mode: 0o700 });
+  const home = await fs.realpath(destination);
+  const source = await fs.realpath(desktop);
+  for (const root of [home, source]) {
+    if (overlaps(workspace, root) || overlaps(root, workspace)) {
+      throw new Error('Codex homes must be outside the selected workspace');
+    }
+  }
+  for (const name of SHARED) {
+    const from = path.join(source, name);
+    const to = path.join(home, name);
+    try { await fs.access(from); } catch { continue; }
+    try { await fs.lstat(to); } catch { await fs.symlink(from, to); }
+  }
+  return { home, args: ownerOverrides(full ? 'full' : write) };
+}

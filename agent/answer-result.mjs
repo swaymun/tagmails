@@ -15,7 +15,24 @@ function take(text, limit, preferParagraph = false) {
   return [text.slice(0, end).trim(), text.slice(end).trimStart()];
 }
 
-export function formatAgentAnswer(answer) {
+// The agent names workspace files to send with lines like
+// "TagMails-Attach: reports/summary.pdf". They are removed from the answer;
+// the daemon checks each path before uploading it.
+const ATTACH_LINE = /^[ \t]*`?TagMails-Attach:[ \t]*([^`\n]+?)`?[ \t]*$/gim;
+export const MAX_ATTACHMENTS = 5;
+
+export function attachmentsFrom(answer) {
+  const paths = [];
+  const text = String(answer ?? '').replace(ATTACH_LINE, (_line, file) => {
+    const name = file.trim();
+    if (name && !paths.includes(name) && paths.length < MAX_ATTACHMENTS) paths.push(name);
+    return '';
+  }).replace(/\n{3,}/g, '\n\n');
+  return { text, paths };
+}
+
+export function formatAgentAnswer(rawAnswer) {
+  const { text: answer, paths: attach } = attachmentsFrom(rawAnswer);
   let remaining = answer.trim().replace(/\r\n/g, '\n');
   if (!remaining) return null;
   let summary;
@@ -28,5 +45,6 @@ export function formatAgentAnswer(answer) {
   }
   const full = answer.trim().replace(/\r\n/g, '\n');
   return { summary, details, truncated: Boolean(remaining),
-    answer: full.slice(0, ANSWER_LIMIT), answerTruncated: full.length > ANSWER_LIMIT };
+    answer: full.slice(0, ANSWER_LIMIT), answerTruncated: full.length > ANSWER_LIMIT,
+    ...(attach.length ? { attach } : {}) };
 }

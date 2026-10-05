@@ -6,6 +6,9 @@ import path from 'node:path';
 import test from 'node:test';
 import { runClaim } from './codex-runner.mjs';
 
+// These cover the locked-down setup; owner tools are tested in codex-profile.test.mjs.
+process.env.TAGMAILS_OWNER_TOOLS = 'off';
+
 function claim(jobId, threadId, body = 'Summarize this workspace.') {
   return {
     claimed: true, jobId, claimId: `claim-${jobId}`, threadId,
@@ -417,7 +420,7 @@ test('a timed-out full-access turn keeps visible steps and does not rerun the sa
   job.request.fromOwner = true;
   const result = await runClaim(job, { full: true });
   assert.equal(result.state, 'failed');
-  assert.match(result.summary, /pilot time limit/);
+  assert.match(result.summary, /configured time limit/);
   assert.equal(result.transcript.truncated, true);
   assert.equal(result.transcript.events.some((event) => event.kind === 'tool'), true);
   assert.equal(result.transcript.events.some((event) => event.phase === 'final_answer'), false);

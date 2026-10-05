@@ -33,3 +33,33 @@ test('a second run in a project Codex already trusted still prepares the profile
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test('an owner run links the owner Codex setup and passes its permission profile as overrides', async () => {
+  const { prepareOwnerCodexHome } = await import('./codex-profile.mjs');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tagmails-owner-'));
+  const desktop = path.join(root, 'desktop');
+  const workspace = path.join(root, 'project');
+  await fs.mkdir(path.join(desktop, 'plugins'), { recursive: true });
+  await fs.mkdir(path.join(desktop, 'sessions'), { recursive: true });
+  await fs.mkdir(workspace);
+  await fs.writeFile(path.join(desktop, 'config.toml'), '[plugins."google-drive@openai-curated"]\nenabled = true\n');
+  await fs.writeFile(path.join(desktop, 'auth.json'), '{}');
+  process.env.TAGMAILS_CODEX_DESKTOP_HOME = desktop;
+  process.env.TAGMAILS_CODEX_OWNER_HOME = path.join(root, 'owner');
+  try {
+    const { home, args } = await prepareOwnerCodexHome(workspace, 'write');
+    assert.equal((await fs.lstat(path.join(home, 'config.toml'))).isSymbolicLink(), true);
+    assert.equal((await fs.lstat(path.join(home, 'plugins'))).isSymbolicLink(), true);
+    await assert.rejects(fs.lstat(path.join(home, 'sessions')), /ENOENT/);
+    const overrides = args.filter((_, index) => index % 2 === 1);
+    assert.ok(overrides.some((value) => value.startsWith('permissions.tagmails-write={') && value.includes('"."="write"') && value.includes('network={enabled=false}')));
+    assert.ok(overrides.some((value) => value.startsWith('plugins={') && value.includes('"computer-use@openai-bundled"={enabled=false}')));
+    assert.ok(overrides.includes('notify=[]'));
+    assert.equal((await prepareOwnerCodexHome(workspace, 'write')).home, home);
+    await assert.rejects(prepareOwnerCodexHome(await fs.realpath(desktop), 'write'), /outside the selected workspace/);
+  } finally {
+    delete process.env.TAGMAILS_CODEX_DESKTOP_HOME;
+    delete process.env.TAGMAILS_CODEX_OWNER_HOME;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

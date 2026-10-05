@@ -549,6 +549,14 @@ fn requested_workspace_file(claim: &Value) -> Result<Option<String>, &'static st
         return Ok(None);
     };
     let name = name.trim();
+    if !valid_workspace_name(name) {
+        return Err("TagMails-File needs a relative workspace path with a simple filename.");
+    }
+    Ok(Some(name.to_owned()))
+}
+
+/// A relative path inside the workspace whose filename is plain ASCII.
+fn valid_workspace_name(name: &str) -> bool {
     let path = Path::new(name);
     let valid_path = !name.is_empty()
         && !path.is_absolute()
@@ -566,10 +574,17 @@ fn requested_workspace_file(claim: &Value) -> Result<Option<String>, &'static st
                     byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b' ')
                 })
         });
-    if !valid_path || !valid_name {
-        return Err("TagMails-File needs a relative workspace path with a simple filename.");
+    valid_path && valid_name
+}
+
+/// Upload IDs must be UUIDs and stable across retries: the first file reuses
+/// the lease ID, later ones flip its last byte by their index.
+fn upload_id(lease_id: &str, index: usize) -> String {
+    if index == 0 || lease_id.len() != 36 {
+        return lease_id.to_owned();
     }
-    Ok(Some(name.to_owned()))
+    let last = u8::from_str_radix(&lease_id[34..], 16).unwrap_or(0) ^ (index as u8);
+    format!("{}{last:02x}", &lease_id[..34])
 }
 
 fn workspace_file_bytes(workspace: &Path, name: &str) -> Result<Vec<u8>, Box<dyn Error>> {
@@ -627,6 +642,7 @@ fn upload_file(
     token: &str,
     job_id: &str,
     lease_id: &str,
+    upload_id: &str,
     filename: &str,
     mime_type: &str,
     bytes: Vec<u8>,
@@ -640,12 +656,12 @@ fn upload_file(
         .header("Content-Type", mime_type)
         .header("Content-Length", bytes.len().to_string())
         .header("X-TagMails-Filename", filename)
-        .header("X-TagMails-Upload-Id", lease_id)
+        .header("X-TagMails-Upload-Id", upload_id)
         .body(bytes)
         .send()?
         .error_for_status()?
         .json()?;
-    if response["id"] != lease_id {
+    if response["id"] != upload_id {
         return Err("Relay returned a different file ID".into());
     }
     Ok(())
@@ -700,40 +716,66 @@ fn relay_iteration(client: &Client, settings: &Settings) -> Result<bool, Box<dyn
             token,
             &job_id,
             &lease_id,
+            &lease_id,
             "answer.txt",
             "text/plain",
             answer_file(&result),
         )?;
         result["artifactIds"] = json!([lease_id]);
     } else if result["state"] == "completed" {
-        if let (Ok(Some(name)), Ok(workspace)) = (file_request, &workspace) {
-            match workspace_file_bytes(workspace, &name) {
-                Ok(bytes) => {
-                    let filename = Path::new(&name)
-                        .file_name()
-                        .and_then(|value| value.to_str())
-                        .ok_or("Requested file has no filename")?;
-                    upload_file(
-                        client,
-                        base,
-                        token,
-                        &job_id,
-                        &lease_id,
-                        filename,
-                        workspace_file_type(filename),
-                        bytes,
-                    )?;
-                    result["artifactIds"] = json!([lease_id]);
+        if let Ok(workspace) = &workspace {
+            // Files the owner asked for (TagMails-File:) must arrive; files the
+            // agent chose to attach (TagMails-Attach:) are best effort.
+            let mut names: Vec<(String, bool)> = Vec::new();
+            if let Ok(Some(name)) = &file_request {
+                names.push((name.clone(), true));
+            }
+            for name in result["attach"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                if names.len() < 5 && !names.iter().any(|(existing, _)| existing == name) {
+                    names.push((name.to_owned(), false));
                 }
-                Err(error) => {
-                    eprintln!("Requested file could not be exported: {error}");
-                    result["state"] = json!("failed");
-                    result["summary"] = json!("The requested file was missing, empty, outside the selected workspace, or over 24 MB.");
-                    result["checks"] =
-                        json!(["No file was uploaded. Local edits from this turn may remain."]);
+            }
+            let mut ids = Vec::new();
+            let mut skipped = Vec::new();
+            for (name, required) in names {
+                let bytes = if valid_workspace_name(&name) {
+                    workspace_file_bytes(workspace, &name)
+                } else {
+                    Err("not a simple relative path".into())
+                };
+                let filename = Path::new(&name).file_name().and_then(|value| value.to_str()).unwrap_or("file");
+                let id = upload_id(&lease_id, ids.len());
+                let uploaded = bytes.and_then(|bytes| {
+                    upload_file(client, base, token, &job_id, &lease_id, &id, filename, workspace_file_type(filename), bytes)
+                });
+                match uploaded {
+                    Ok(()) => ids.push(id),
+                    Err(error) if required => {
+                        eprintln!("Requested file could not be exported: {error}");
+                        result["state"] = json!("failed");
+                        result["summary"] = json!("The requested file was missing, empty, outside the selected workspace, or over 24 MB.");
+                        result["checks"] = json!(["No file was uploaded. Local edits from this turn may remain."]);
+                        ids.clear();
+                        break;
+                    }
+                    Err(error) => {
+                        eprintln!("{name} could not be attached: {error}");
+                        skipped.push(name);
+                    }
+                }
+            }
+            if !ids.is_empty() {
+                result["artifactIds"] = json!(ids);
+            }
+            if !skipped.is_empty() {
+                if let Some(checks) = result["checks"].as_array_mut() {
+                    checks.push(json!(format!("Could not attach: {}", skipped.join(", "))));
                 }
             }
         }
+    }
+    if let Some(object) = result.as_object_mut() {
+        object.remove("attach");
     }
     let completion = relay_post(
         client,
@@ -858,6 +900,19 @@ fn run_relay(settings: &Settings, once: bool) -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn attached_files_get_distinct_stable_upload_ids() {
+        let lease = "11111111-2222-4333-8444-5555555555a0";
+        let ids: Vec<String> = (0..5).map(|index| upload_id(lease, index)).collect();
+        assert_eq!(ids[0], lease);
+        assert_eq!(ids[1], "11111111-2222-4333-8444-5555555555a1");
+        assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), 5);
+        assert_eq!(upload_id(lease, 3), ids[3]);
+        assert!(valid_workspace_name("scripts/madrid.md"));
+        assert!(!valid_workspace_name("../secret.txt"));
+        assert!(!valid_workspace_name("/etc/passwd"));
+    }
+
     use super::*;
     use std::net::TcpListener;
 

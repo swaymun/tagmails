@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { formatAgentAnswer } from './answer-result.mjs';
+import { attachmentsFrom, formatAgentAnswer } from './answer-result.mjs';
 
 test('a long first paragraph continues in email details without splitting words', () => {
   const words = Array.from({ length: 100 }, (_, index) => `item${index}`);
@@ -24,4 +24,13 @@ test('the first short paragraph remains the summary', () => {
     summary: 'Done.', details: ['Checked the source.', 'One caveat.'], truncated: false,
     answer: 'Done.\n\nChecked the source.\n\nOne caveat.', answerTruncated: false,
   });
+});
+
+test('the agent names files to attach and those lines leave the email', () => {
+  const answer = 'The four scripts are ready.\n\nTagMails-Attach: scripts/madrid.docx\n`TagMails-Attach: scripts/paris.docx`\nTagMails-Attach: scripts/madrid.docx\n';
+  const formatted = formatAgentAnswer(answer);
+  assert.equal(formatted.answer, 'The four scripts are ready.');
+  assert.deepEqual(formatted.attach, ['scripts/madrid.docx', 'scripts/paris.docx']);
+  assert.equal(formatAgentAnswer('No files here.').attach, undefined);
+  assert.equal(attachmentsFrom(Array.from({ length: 8 }, (_, i) => `TagMails-Attach: f${i}.md`).join('\n')).paths.length, 5);
 });
