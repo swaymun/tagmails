@@ -408,7 +408,7 @@ test('a timed-out full-access turn keeps visible steps and does not rerun the sa
   const { root, calls } = setup(t, 'turn-timeout');
   const previous = process.env.TAGMAILS_CODEX_TIMEOUT_MS;
   // Long enough for the fake app-server to start and report a step under load.
-  process.env.TAGMAILS_CODEX_TIMEOUT_MS = '1500';
+  process.env.TAGMAILS_CODEX_TIMEOUT_MS = '5000';
   t.after(() => {
     if (previous === undefined) delete process.env.TAGMAILS_CODEX_TIMEOUT_MS;
     else process.env.TAGMAILS_CODEX_TIMEOUT_MS = previous;
