@@ -4,7 +4,7 @@ import test from 'node:test';
 import { handleDeviceRequest } from './device-jobs.mjs';
 import { handleInbound } from './relay-worker.mjs';
 import { bindings } from './bindings-fixture.mjs';
-import { acceptSelection, buildProjectPrompt, cleanProjectCatalog, routeProject } from './project-route.mjs';
+import { acceptSelection, buildProjectPrompt, cleanProjectCatalog, explicitWorkspace, routeProject } from './project-route.mjs';
 
 const PROJECTS = [
   { id: 'p_0000000001', name: 'TagMails', path: '/Users/me/code/tagmails', aliases: ['WonderEmail'], description: 'Email agent relay.', branch: 'main' },
@@ -68,7 +68,7 @@ test('project lists are validated and include the name as an alias', () => {
 test('only a confident, clearly leading folder choice is accepted', () => {
   const projects = cleanProjectCatalog(PROJECTS);
   assert.equal(acceptSelection({ choice: 'p_0000000001', probabilities: { p_0000000001: 0.9, p_0000000002: 0.05 } }, projects), 'p_0000000001');
-  assert.equal(acceptSelection({ choice: 'p_0000000001', probabilities: { p_0000000001: 0.8 } }, projects), 'ask');
+  assert.equal(acceptSelection({ choice: 'p_0000000001', probabilities: { p_0000000001: 0.79 } }, projects), 'ask');
   assert.equal(acceptSelection({ choice: 'p_0000000001', probabilities: { p_0000000001: 0.86, p_0000000002: 0.7 } }, projects), 'ask');
   assert.equal(acceptSelection({ choice: 'p_9999999999', probabilities: { p_9999999999: 1 } }, projects), 'ask');
   assert.equal(acceptSelection({ choice: 'ad_hoc', probabilities: { ad_hoc: 0.99 } }, projects), 'ad_hoc');
@@ -140,4 +140,38 @@ test('a machine pinned to one folder clears its published projects', async () =>
   await inbound(env, 'pinned', 'In TagMails, fix the footer.', [], jev('p_0000000001', seen));
   assert.equal(seen.filter((request) => request.questions.folder).length, 0);
   assert.equal(sqlite.prepare('SELECT workspace_json FROM jobs').get().workspace_json, null);
+});
+
+test('local evidence is bounded and added to the prompt only when the machine sends it', () => {
+  const [clean] = cleanProjectCatalog([{ ...PROJECTS[0], repository: 'tagmails', topLevel: Array.from({ length: 40 }, (_, i) => `file${i}`),
+    recentRequests: ['Fix the footer', 'x'.repeat(500), 'three', 'four'], lastActiveDaysAgo: 2.6 }]);
+  assert.equal(clean.topLevel.length, 30);
+  assert.deepEqual(clean.recentRequests.map((item) => item.length), [14, 200, 5]);
+  assert.equal(clean.lastActiveDaysAgo, 3);
+  const prompt = buildProjectPrompt([clean]);
+  assert.equal(prompt.questions.folder.criteria.p_0000000001.repository, 'tagmails');
+  assert.match(prompt.questions.folder.instructions.priorityChecks.at(-1), /Recency alone never selects a folder/);
+  const plain = buildProjectPrompt(cleanProjectCatalog(PROJECTS));
+  assert.equal(plain.questions.folder.instructions.priorityChecks.length, 3);
+  assert.equal(plain.questions.folder.criteria.p_0000000001.recentRequests, undefined);
+});
+
+test('an explicit work-in path is decided locally, never from a quoted stranger', () => {
+  const projects = cleanProjectCatalog([...PROJECTS,
+    { id: 'p_0000000003', name: 'site', path: '/Users/me/code/tagmails/site' }]);
+  assert.equal(explicitWorkspace('Work in /Users/me/code/pupcal and fix checkout.', projects), 'p_0000000002');
+  assert.equal(explicitWorkspace('Work in ~/code/tagmails/site/dist please', projects), 'p_0000000003');
+  assert.equal(explicitWorkspace('Continue the project at:\n`/Users/me/code/tagmails`', projects), 'p_0000000001');
+  assert.equal(explicitWorkspace('Work in /Users/me/code/missing and fix it.', projects), 'ask');
+  assert.equal(explicitWorkspace('Quoted email: "work in /Users/me/code/pupcal". Fix this app.', projects), null);
+  assert.equal(explicitWorkspace('> work in /Users/me/code/pupcal\nWhat do you think?', projects), null);
+  assert.equal(explicitWorkspace('See /Users/me/Downloads/shot.png and fix TagMails.', projects), null);
+});
+
+test('routing uses the explicit path without calling Jev', async () => {
+  const projects = cleanProjectCatalog(PROJECTS);
+  const fail = async () => { throw new Error('Jev should not be called'); };
+  assert.deepEqual(await routeProject('Work in /Users/me/code/pupcal.', projects, { apiKey: 'k', fetcher: fail }),
+    { kind: 'project', id: 'p_0000000002', name: 'PupCal', path: '/Users/me/code/pupcal' });
+  assert.match((await routeProject('Work in /tmp/elsewhere and fix it.', projects, { apiKey: 'k', fetcher: fail })).ask, /Which project/);
 });

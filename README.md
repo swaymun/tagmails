@@ -44,7 +44,7 @@ npm run eval:email                        # render every reply state and check t
 npm run eval:model-routing                # Jev model-routing cases (needs a TypeSafe key)
 ```
 
-The project-routing prompt in `services/project-route.mjs` is the frozen "v3" prompt from the October 4 benchmark (368 synthetic cases; 139/142 on the held-out set with no wrong folders). Rerun that benchmark before changing its wording; the benchmark lives in `.local/jev-synthetic-benchmark-2026-10-04/`.
+Project routing is documented in [docs/project-routing.md](docs/project-routing.md). Rerun its studies before changing the prompt, fields or threshold.
 
 ## Releasing the agent
 
@@ -66,6 +66,7 @@ See [docs/runbook.md](docs/runbook.md). In short: apply D1 migrations, deploy th
 - [docs/provider-paths.md](docs/provider-paths.md): OpenAI/Anthropic terms questions for a paid beta
 - [docs/pricing.md](docs/pricing.md): pricing model inputs
 - [docs/email-format.md](docs/email-format.md): reply email and status reaction contract
+- [docs/project-routing.md](docs/project-routing.md): how a folder is chosen, what the machine shares, and the context study
 - [docs/self-hosting.md](docs/self-hosting.md): run your own relay
 
 Licensed MIT.

@@ -30,6 +30,8 @@ struct Settings {
     token: String,
     access: String,
     workspace: Option<PathBuf>,
+    /// "full" shares recent session requests to help routing; "files" does not.
+    routing_context: String,
 }
 
 fn post(client: &Client, base: &str, path: &str, body: Value) -> Result<Value, Box<dyn Error>> {
@@ -186,10 +188,15 @@ fn relay_post(
     Ok(response.json()?)
 }
 
-fn run_adapter_json(script: &str, workspace: &Path) -> Result<Value, Box<dyn Error>> {
+fn run_adapter_json(
+    script: &str,
+    workspace: &Path,
+    routing_context: &str,
+) -> Result<Value, Box<dyn Error>> {
     let output = Command::new("node")
         .arg(paths::adapters_dir()?.join(script))
         .env("TAGMAILS_WORKSPACE", workspace)
+        .env("TAGMAILS_ROUTING_CONTEXT", routing_context)
         .current_dir(workspace)
         .output()?;
     if !output.status.success() {
@@ -208,7 +215,7 @@ fn publish_model_catalog(
     token: &str,
     workspace: &Path,
 ) -> Result<(), Box<dyn Error>> {
-    let catalog = run_adapter_json("codex-models.mjs", workspace)?;
+    let catalog = run_adapter_json("codex-models.mjs", workspace, "files")?;
     let response = relay_post(client, base, "/api/device/models", token, catalog)?;
     if response["saved"] != true {
         return Err("Relay did not save the model catalog".into());
@@ -223,10 +230,11 @@ fn publish_project_inventory(
     client: &Client,
     base: &str,
     token: &str,
+    routing_context: &str,
 ) -> Result<usize, Box<dyn Error>> {
     let scratch = paths::scratch_dir();
     create_private_dir(&scratch)?;
-    let inventory = run_adapter_json("project-inventory.mjs", &scratch)?;
+    let inventory = run_adapter_json("project-inventory.mjs", &scratch, routing_context)?;
     let count = inventory["projects"].as_array().map_or(0, Vec::len);
     let file = paths::projects_file();
     create_private_dir(file.parent().ok_or("Projects file has no folder")?)?;
@@ -772,7 +780,12 @@ fn run_relay(settings: &Settings, once: bool) -> Result<(), Box<dyn Error>> {
         }
         if settings.workspace.is_none() && Instant::now() >= next_project_probe {
             next_project_probe = Instant::now() + Duration::from_secs(120);
-            match publish_project_inventory(&client, &settings.relay, &settings.token) {
+            match publish_project_inventory(
+                &client,
+                &settings.relay,
+                &settings.token,
+                &settings.routing_context,
+            ) {
                 Ok(count) => {
                     if !once {
                         println!("Published {count} project folders.");
@@ -997,6 +1010,7 @@ mod tests {
             token: "tm_dev_x".into(),
             access: "read".into(),
             workspace: None,
+            routing_context: "full".into(),
         };
         let claim = |workspace: Value| json!({"threadId":"thread-1","workspace":workspace});
         assert_eq!(
@@ -1108,7 +1122,7 @@ const HELP: &str = "TagMails: email your coding agent.
 Usage:
   tagmails pair <code> [--name NAME] [--relay URL]   Connect this machine to your account
   tagmails start [--access read|write|full] [--workspace PATH | --projects]
-                                                   Save settings and run in the background
+                 [--routing-context full|files]    Save settings and run in the background
   tagmails status                                  Show settings, connection and service state
   tagmails stop                                    Stop the background service
   tagmails logs                                    Follow the service log
@@ -1119,7 +1133,9 @@ Usage:
 
 Pairing codes come from https://tagmails.com/setup. By default TagMails picks one of
 your recent Codex or Claude project folders for each new email (--projects). Use
---workspace to pin every email to one folder instead.";
+--workspace to pin every email to one folder instead. To pick the folder, TagMails
+shares each project's name, README excerpt, top-level files and, with the default
+--routing-context full, the first line of your last few sessions there.";
 
 fn option(args: &[String], name: &str) -> Result<Option<String>, Box<dyn Error>> {
     match args.iter().position(|arg| arg == name) {
@@ -1169,6 +1185,7 @@ fn settings_from_config() -> Result<Settings, Box<dyn Error>> {
         token: read_token(&paths::token_file())?,
         access: config["access"].as_str().unwrap_or("read").to_owned(),
         workspace: config["workspace"].as_str().map(PathBuf::from),
+        routing_context: config["routingContext"].as_str().unwrap_or("full").to_owned(),
     })
 }
 
@@ -1215,6 +1232,12 @@ fn command_start(args: &[String]) -> Result<(), Box<dyn Error>> {
     }
     if config["access"].is_null() {
         config["access"] = json!("read");
+    }
+    if let Some(context) = option(args, "--routing-context")? {
+        if !["full", "files"].contains(&context.as_str()) {
+            return Err("--routing-context must be full or files".into());
+        }
+        config["routingContext"] = json!(context);
     }
     if args.iter().any(|arg| arg == "--projects") {
         config["workspace"] = Value::Null;
@@ -1278,6 +1301,9 @@ fn command_status() -> Result<(), Box<dyn Error>> {
     println!("  Relay       {relay}");
     println!("  Service     {}", service::status());
     println!("  Access      {}", config["access"].as_str().unwrap_or("read"));
+    if config["workspace"].is_null() {
+        println!("  Routing     {} context", config["routingContext"].as_str().unwrap_or("full"));
+    }
     match config["workspace"].as_str() {
         Some(workspace) => println!("  Workspace   {workspace}"),
         None => println!(
@@ -1419,6 +1445,7 @@ fn legacy_relay(args: &[String]) -> Result<(), Box<dyn Error>> {
         token: read_token(&token_file)?,
         access: env::var("TAGMAILS_WORKSPACE_ACCESS").unwrap_or_else(|_| "read".into()),
         workspace: Some(PathBuf::from(env::var("TAGMAILS_WORKSPACE")?)),
+        routing_context: "files".into(),
     };
     run_relay(&settings, once)
 }
