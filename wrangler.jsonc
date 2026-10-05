@@ -10,7 +10,7 @@
   "env": {
     "dev": {
       "name": "tagmails-relay-dev",
-      "vars": { "SITE_ALLOWED_ORIGINS": "https://tagmails.com,https://www.tagmails.com", "BILLING_LIVE": "true", "PILOT_OWNER_EMAIL": "owner@example.com", "PILOT_CODEX_MODEL": "gpt-6-sol", "ADDRESS_DOMAIN": "tagmails.com", "MAIL_DELIVERY_READY": "true", "STATUS_REACTIONS_ENABLED": "true", "CLAUDE_ROUTE_ENABLED": "true" },
+      "vars": { "SITE_ALLOWED_ORIGINS": "https://tagmails.com,https://www.tagmails.com", "BILLING_LIVE": "true", "PUBLIC_SIGNUP_ENABLED": "true", "PILOT_OWNER_EMAIL": "owner@example.com", "PILOT_CODEX_MODEL": "gpt-6-sol", "ADDRESS_DOMAIN": "tagmails.com", "MAIL_DELIVERY_READY": "true", "STATUS_REACTIONS_ENABLED": "true", "CLAUDE_ROUTE_ENABLED": "true" },
       "d1_databases": [{ "binding": "DB", "database_name": "tagmails-relay-dev", "database_id": "792cbd68-83f3-4b64-b050-b62aebcb6801", "migrations_dir": "services/migrations" }],
       "r2_buckets": [{ "binding": "MAIL", "bucket_name": "tagmails-relay-mail-dev" }],
       "send_email": [{ "name": "EMAIL" }],

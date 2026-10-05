@@ -1,6 +1,5 @@
 export const TEST_EMAIL_CENTS = 5;
 
-export const SIGNUP_BONUS_CENTS = 100;
 export const FILE_TRANSFER_CENTS_PER_GB = 5;
 // Cloudflare Email Sending caps a whole message at 5 MiB. Base64 adds a third,
 // so 3.5 MB of files plus a 32k-character answer stays under it.
@@ -18,12 +17,6 @@ export function testBillingEnabled(env) {
   return env.BILLING_TEST_MODE === 'true' &&
     /^(?:sk|rk)_test_/.test(env.STRIPE_SECRET_KEY ?? '') &&
     env.STRIPE_WEBHOOK_SECRET?.startsWith('whsec_');
-}
-
-export async function grantSignupBonus(env, accountId) {
-  if (!testBillingEnabled(env)) return;
-  await env.DB.prepare(`INSERT OR IGNORE INTO credit_ledger (id, account_id, amount_cents, kind, source_id)
-    VALUES (?, ?, ?, 'signup_bonus', ?)`).bind(crypto.randomUUID(), accountId, SIGNUP_BONUS_CENTS, accountId).run();
 }
 
 // Files too big to attach become download links: $0.05 per started GB.
