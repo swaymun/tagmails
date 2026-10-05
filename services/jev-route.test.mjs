@@ -173,3 +173,17 @@ test('uncertain effort uses medium and an explicit ultra-fast request reaches ru
   });
   assert.deepEqual(selected, { id: 'gpt-6-luna', effort: 'medium', speed: 'ultrafast', source: 'classified' });
 });
+
+test('no effort request is not a request for none reasoning', async () => {
+  const catalog = [{ id: 'gpt-6-sol', name: 'GPT-6 Sol', efforts: ['low', 'medium', 'high'], speeds: ['standard'] }];
+  const answers = (requested) => async () => Response.json({ answers: {
+    route: { type: 'choice', choice: 'none', probabilities: { none: 0.95 } },
+    requestedEffort: { type: 'choice', choice: requested, probabilities: { [requested]: 0.95 } },
+    effort: { type: 'choice', choice: 'high', probabilities: { high: 0.8 } } } });
+  assert.deepEqual(await routeModel('Write travel guide scripts for four cities.', 'gpt-6-sol', {
+    apiKey: 'test-key', fetcher: answers('unrequested'), availableModels: catalog,
+  }), { id: 'gpt-6-sol', effort: 'high', source: 'default' });
+  assert.match((await routeModel('Use no reasoning for this.', 'gpt-6-sol', {
+    apiKey: 'test-key', fetcher: answers('none'), availableModels: catalog,
+  })).error, /does not offer none reasoning/);
+});

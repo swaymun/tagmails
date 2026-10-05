@@ -17,6 +17,7 @@ import { deleteExpiredRunArtifacts } from './run-artifacts.mjs';
 import { deleteSettledInboundMime } from './inbound-retention.mjs';
 import { sendNextStatusReaction } from './status-reactions.mjs';
 import { accountModelCatalog } from './model-catalog.mjs';
+import { accountPreferences } from './account-preferences.mjs';
 
 const MAX_WEBHOOK_BYTES = 128_000;
 
@@ -178,15 +179,13 @@ export async function handleEmail(emailMessage, env, { fetchModel = fetch, resol
 
 async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
   const agent = (message.agentAddress ?? '').trim().toLowerCase();
-  const account = await env.DB.prepare(`SELECT a.id, a.owner_email,
-    COALESCE(p.default_model, a.default_model) AS default_model,
-    COALESCE(p.default_effort, 'medium') AS default_effort,
-    COALESCE(p.default_speed, 'standard') AS default_speed
+  const account = await env.DB.prepare(`SELECT a.id, a.owner_email, a.default_model
     FROM account_agent_addresses aa JOIN accounts a ON a.id = aa.account_id
-    LEFT JOIN account_preferences p ON p.account_id = a.id
     WHERE aa.email = ? AND a.active = 1`)
     .bind(agent).first();
   if (!account) return Response.json({ accepted: false });
+  const defaults = await accountPreferences(env, account);
+  Object.assign(account, { default_model: defaults.model, default_effort: defaults.effort, default_speed: defaults.speed });
   const duplicate = await env.DB.prepare('SELECT id FROM messages WHERE account_id = ? AND (provider_email_id = ? OR message_id = ?) LIMIT 1')
     .bind(account.id, message.providerEmailId, message.messageId).first();
   if (duplicate) {

@@ -95,9 +95,10 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
           },
           requestedEffort: {
             type: 'choice',
-            instructions: 'Did the sender explicitly request a reasoning effort for this task? Choose none unless they name an effort, for example high reasoning, Luna Low, Sonnet High, or xhigh. Ignore quoted earlier messages.',
+            instructions: 'Did the sender explicitly request a reasoning effort for this task? Choose unrequested unless they name an effort, for example high reasoning, Luna Low, Sonnet High, or xhigh. Ignore quoted earlier messages.',
             criteria: {
-              none: 'No explicit reasoning effort request.',
+              unrequested: 'No explicit reasoning effort request.',
+              none: 'The sender explicitly asks for no reasoning, or none reasoning effort.',
               minimal: 'The sender explicitly requests minimal reasoning effort.',
               low: 'The sender explicitly requests low reasoning effort.',
               medium: 'The sender explicitly requests medium reasoning effort.',

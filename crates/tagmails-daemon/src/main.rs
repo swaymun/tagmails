@@ -225,10 +225,16 @@ fn publish_model_catalog(
     if let (Err(codex_error), Err(claude_error)) = (&codex, &claude) {
         return Err(format!("no models found (Codex: {codex_error}; Claude: {claude_error})").into());
     }
-    let catalog = json!({
+    let mut catalog = json!({
         "models": codex.ok().map(|value| value["models"].clone()).unwrap_or(json!([])),
         "claudeModels": claude.ok().map(|value| value["models"].clone()).unwrap_or(json!([])),
     });
+    // Defaults set with `tagmails start --model/--effort/--speed`. A default
+    // saved on the website overrides them.
+    let defaults = &load_config()["defaults"];
+    if defaults.is_object() {
+        catalog["defaults"] = defaults.clone();
+    }
     let response = relay_post(client, base, "/api/device/models", token, catalog)?;
     if response["saved"] != true {
         return Err("Relay did not save the model catalog".into());
@@ -1139,7 +1145,9 @@ Usage:
   tagmails pair <code> [--name NAME] [--relay URL]   Connect this machine to your account
   tagmails start [--access read|write|full] [--workspace PATH | --projects]
                  [--claude-permission manual|accept-edits|auto|bypass]
-                 [--routing-context full|files]    Save settings and run in the background
+                 [--routing-context full|files]
+                 [--model ID] [--effort LEVEL] [--speed standard|fast]
+                 [--clear-defaults]                Save settings and run in the background
   tagmails status                                  Show settings, connection and service state
   tagmails stop                                    Stop the background service
   tagmails logs                                    Follow the service log
@@ -1147,6 +1155,9 @@ Usage:
   tagmails run [--once]                            Run in the foreground (what the service runs)
   tagmails uninstall                               Remove the background service
   tagmails --version
+
+--model, --effort and --speed set this machine's default for emails that don't ask for
+one; a default saved on tagmails.com overrides them.
 
 Pairing codes come from https://tagmails.com/setup. By default TagMails picks one of
 your recent Codex or Claude project folders for each new email (--projects). Use
@@ -1267,6 +1278,32 @@ fn command_start(args: &[String]) -> Result<(), Box<dyn Error>> {
         }
         config["routingContext"] = json!(context);
     }
+    let mut defaults = config["defaults"].as_object().cloned().unwrap_or_default();
+    if let Some(model) = option(args, "--model")? {
+        let valid = !model.is_empty()
+            && model.len() <= 80
+            && model.chars().all(|c| c.is_ascii_alphanumeric() || "-._".contains(c));
+        if !valid {
+            return Err("--model must be a model id such as gpt-6-sol or claude-sonnet-5-5".into());
+        }
+        defaults.insert("model".into(), json!(model));
+    }
+    if let Some(effort) = option(args, "--effort")? {
+        if !["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].contains(&effort.as_str()) {
+            return Err("--effort must be none, minimal, low, medium, high, xhigh, max or ultra".into());
+        }
+        defaults.insert("effort".into(), json!(effort));
+    }
+    if let Some(speed) = option(args, "--speed")? {
+        if !["standard", "fast", "ultrafast"].contains(&speed.as_str()) {
+            return Err("--speed must be standard, fast or ultrafast".into());
+        }
+        defaults.insert("speed".into(), json!(speed));
+    }
+    if args.iter().any(|arg| arg == "--clear-defaults") {
+        defaults.clear();
+    }
+    config["defaults"] = if defaults.is_empty() { Value::Null } else { json!(defaults) };
     if args.iter().any(|arg| arg == "--projects") {
         config["workspace"] = Value::Null;
     } else if let Some(workspace) = option(args, "--workspace")? {
@@ -1339,6 +1376,11 @@ fn command_status() -> Result<(), Box<dyn Error>> {
             "  Workspace   chosen per email from {} project folders",
             projects.map_or("(not yet listed)".into(), |count| count.to_string())
         ),
+    }
+    let defaults = &config["defaults"];
+    if defaults.is_object() {
+        let part = |key: &str| defaults[key].as_str().unwrap_or("-").to_owned();
+        println!("  Default     {} {} {} (tagmails.com overrides)", part("model"), part("effort"), part("speed"));
     }
     println!("  Config      {}", paths::config_file().display());
     println!(

@@ -3,7 +3,7 @@ import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.m
 import { chooseModel } from '../apps/mock-inbox/model.mjs';
 import { testBillingEnabled } from './email-charges.mjs';
 import { ARTIFACT_ID, selectedRunArtifacts, uploadRunArtifact } from './run-artifacts.mjs';
-import { catalogFromDevice } from './model-catalog.mjs';
+import { catalogFromDevice, deviceDefaults } from './model-catalog.mjs';
 import { cleanProjectCatalog } from './project-route.mjs';
 
 const TOKEN = /^tm_dev_[A-Za-z0-9_-]{43}$/;
@@ -285,9 +285,10 @@ export async function handleDeviceRequest(request, env) {
     let models;
     try { models = catalogFromDevice(body); }
     catch { return json({ error: 'Invalid model catalog' }, 400); }
-    await env.DB.prepare(`UPDATE devices SET model_catalog_json = ?, model_catalog_at = CURRENT_TIMESTAMP
+    const defaults = deviceDefaults(body?.defaults, models);
+    await env.DB.prepare(`UPDATE devices SET model_catalog_json = ?, model_catalog_at = CURRENT_TIMESTAMP, defaults_json = ?
       WHERE id = ? AND account_id = ? AND revoked_at IS NULL`)
-      .bind(JSON.stringify(models), device.id, device.account_id).run();
+      .bind(JSON.stringify(models), defaults ? JSON.stringify(defaults) : null, device.id, device.account_id).run();
     return json({ saved: true, count: models.length });
   }
   if (url.pathname === '/api/device/projects') {

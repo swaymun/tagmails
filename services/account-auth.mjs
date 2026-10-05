@@ -6,7 +6,7 @@ import { addressDomain, checkAddress, chooseAddress } from './agent-username.mjs
 import { openText } from './storage-crypto.mjs';
 import { artifactForDownload, selectedRunArtifacts } from './run-artifacts.mjs';
 import { knownAgentAddresses } from './agent-addresses.mjs';
-import { accountPreferences, saveAccountPreferences } from './account-preferences.mjs';
+import { accountPreferences, clearAccountPreferences, saveAccountPreferences } from './account-preferences.mjs';
 import { accountModelCatalog } from './model-catalog.mjs';
 
 const googleKeys = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
@@ -354,6 +354,9 @@ async function siteAccountRequest(request, env, pathname, verifyIdentity) {
   }
   if (pathname === '/api/site/models' && request.method === 'GET') {
     return json(await accountModelCatalog(env.DB, account.id), 200, headers);
+  }
+  if (pathname === '/api/site/preferences' && request.method === 'DELETE') {
+    return json(await clearAccountPreferences(env, account), 200, headers);
   }
   if (pathname === '/api/site/preferences' && request.method === 'POST') {
     try { return json(await saveAccountPreferences(env, account, await bodyJson(request)), 200, headers); }

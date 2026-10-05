@@ -57,17 +57,30 @@ export function catalogFromDevice(body) {
   return [...codex, ...claude];
 }
 
+// The computer's own defaults, kept only where its catalog supports them.
+export function deviceDefaults(input, models) {
+  if (!input || typeof input !== 'object') return null;
+  const model = models.find((item) => item.id === input.model);
+  if (!model) return null;
+  const out = { model: model.id };
+  if (model.efforts.includes(input.effort)) out.effort = input.effort;
+  if (model.speeds.includes(input.speed)) out.speed = input.speed;
+  return out;
+}
+
 export async function accountModelCatalog(db, accountId, threadId = null) {
-  const row = await db.prepare(`SELECT d.id AS device_id, d.model_catalog_json, d.model_catalog_at FROM devices d
+  const row = await db.prepare(`SELECT d.id AS device_id, d.model_catalog_json, d.model_catalog_at, d.defaults_json FROM devices d
     WHERE d.account_id = ? AND d.revoked_at IS NULL AND d.model_catalog_json IS NOT NULL
       AND d.model_catalog_at >= datetime('now', '-24 hours')
       AND (? IS NULL OR (SELECT device_id FROM threads WHERE id = ? AND account_id = ?) IS NULL
         OR d.id = (SELECT device_id FROM threads WHERE id = ? AND account_id = ?))
     ORDER BY d.model_catalog_at DESC LIMIT 1`).bind(accountId, threadId, threadId, accountId, threadId, accountId).first();
-  if (!row) return { models: [], observedAt: null, deviceId: null };
+  if (!row) return { models: [], observedAt: null, deviceId: null, defaults: null };
   try {
     const models = JSON.parse(row.model_catalog_json);
     if (!Array.isArray(models)) throw new Error('Invalid saved catalog');
-    return { models, observedAt: row.model_catalog_at, deviceId: row.device_id };
-  } catch { return { models: [], observedAt: null, deviceId: null }; }
+    let defaults = null;
+    try { defaults = deviceDefaults(JSON.parse(row.defaults_json ?? 'null'), models); } catch { /* Ignore. */ }
+    return { models, observedAt: row.model_catalog_at, deviceId: row.device_id, defaults };
+  } catch { return { models: [], observedAt: null, deviceId: null, defaults: null }; }
 }

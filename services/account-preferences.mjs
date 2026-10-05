@@ -4,14 +4,28 @@ const LEGACY_MODELS = new Set(['gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'claude
 const EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 const SPEEDS = new Set(['standard', 'fast', 'ultrafast']);
 
+// A default saved on the website wins, then the computer's own default
+// (`tagmails start --model ...`), then the account's original model.
 export async function accountPreferences(env, account) {
   const saved = await env.DB.prepare('SELECT default_model, default_effort, default_speed FROM account_preferences WHERE account_id = ?')
     .bind(account.id).first();
+  if (saved) {
+    return { model: saved.default_model, effort: saved.default_effort, speed: saved.default_speed, source: 'site' };
+  }
+  const computer = (await accountModelCatalog(env.DB, account.id)).defaults;
+  const original = account.default_model ?? (await env.DB.prepare('SELECT default_model FROM accounts WHERE id = ?')
+    .bind(account.id).first())?.default_model;
   return {
-    model: saved?.default_model ?? account.default_model,
-    effort: saved?.default_effort ?? 'medium',
-    speed: saved?.default_speed ?? 'standard',
+    model: computer?.model ?? original,
+    effort: computer?.effort ?? 'medium',
+    speed: computer?.speed ?? 'standard',
+    source: computer ? 'computer' : 'default',
   };
+}
+
+export async function clearAccountPreferences(env, account) {
+  await env.DB.prepare('DELETE FROM account_preferences WHERE account_id = ?').bind(account.id).run();
+  return accountPreferences(env, account);
 }
 
 export async function saveAccountPreferences(env, account, input) {
@@ -35,5 +49,5 @@ export async function saveAccountPreferences(env, account, input) {
     VALUES (?, ?, ?, ?) ON CONFLICT(account_id) DO UPDATE SET
     default_model = excluded.default_model, default_effort = excluded.default_effort,
     default_speed = excluded.default_speed`).bind(account.id, model, effort, speed).run();
-  return { model, effort, speed };
+  return { model, effort, speed, source: 'site' };
 }

@@ -4,7 +4,7 @@ import test from 'node:test';
 import { bindings } from './bindings-fixture.mjs';
 import { handleDeviceRequest } from './device-jobs.mjs';
 import { accountModelCatalog, cleanCodexCatalog } from './model-catalog.mjs';
-import { saveAccountPreferences } from './account-preferences.mjs';
+import { accountPreferences, clearAccountPreferences, saveAccountPreferences } from './account-preferences.mjs';
 import { routeModel } from './jev-route.mjs';
 
 const token = `tm_dev_${'a'.repeat(43)}`;
@@ -37,7 +37,7 @@ test('a paired Mac publishes a bounded model list that is scoped to its owner', 
   }), /does not offer/);
   assert.deepEqual(await saveAccountPreferences(env, { id: 'account-1' }, {
     model: 'gpt-6-astra', effort: 'high', speed: 'fast',
-  }), { model: 'gpt-6-astra', effort: 'high', speed: 'fast' });
+  }), { model: 'gpt-6-astra', effort: 'high', speed: 'fast', source: 'site' });
   sqlite.prepare("UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE id = 'device-1'").run();
   assert.deepEqual((await accountModelCatalog(env.DB, 'account-1')).models, []);
 });
@@ -89,4 +89,26 @@ test('"use Claude" routes to the machine\'s Claude model', async () => {
   };
   assert.deepEqual(await routeModel('Use Claude at max effort to review this.', 'gpt-6-sol', { apiKey: 'k', fetcher: jev, availableModels }),
     { id: 'claude-opus-5-5', effort: 'max', source: 'classified' });
+});
+
+test('a site default overrides the computer default, which overrides the account model', async () => {
+  const { env, sqlite } = bindings();
+  sqlite.prepare('INSERT INTO devices (id, account_id, token_hash) VALUES (?, ?, ?)')
+    .run('device-1', 'account-1', createHash('sha256').update(token).digest('hex'));
+  const publish = (defaults) => handleDeviceRequest(new Request('https://relay.test/api/device/models', {
+    method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ models: reported, defaults }),
+  }), env);
+  const account = { id: 'account-1', default_model: 'gpt-6-sol' };
+  assert.equal((await publish({ model: 'gpt-6-astra', effort: 'xhigh', speed: 'fast' })).status, 200);
+  // An effort the model lacks is dropped rather than trusted.
+  assert.deepEqual(await accountPreferences(env, account),
+    { model: 'gpt-6-astra', effort: 'medium', speed: 'fast', source: 'computer' });
+  await publish({ model: 'gpt-6-astra', effort: 'high' });
+  assert.equal((await accountPreferences(env, account)).effort, 'high');
+  await saveAccountPreferences(env, account, { model: 'gpt-6-sol', effort: 'medium', speed: 'standard' });
+  assert.deepEqual(await accountPreferences(env, account),
+    { model: 'gpt-6-sol', effort: 'medium', speed: 'standard', source: 'site' });
+  assert.equal((await clearAccountPreferences(env, account)).source, 'computer');
+  await publish({ model: 'not-on-this-mac' });
+  assert.equal((await accountPreferences(env, account)).source, 'default');
 });

@@ -136,13 +136,13 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   assert.deepEqual(await (await handleAccountRequest(preferencesRequest(customOrigin), env, options)).json(), {
-    model: 'gpt-6.1-sol', effort: 'medium', speed: 'standard',
+    model: 'gpt-6.1-sol', effort: 'medium', speed: 'standard', source: 'default',
   });
   const changedPreferences = await handleAccountRequest(preferencesRequest(customOrigin, 'POST', {
     model: 'gpt-6-luna', effort: 'low', speed: 'fast',
   }), env, options);
   assert.equal(changedPreferences.status, 200);
-  assert.deepEqual(await changedPreferences.json(), { model: 'gpt-6-luna', effort: 'low', speed: 'fast' });
+  assert.deepEqual(await changedPreferences.json(), { model: 'gpt-6-luna', effort: 'low', speed: 'fast', source: 'site' });
   assert.equal((await handleAccountRequest(preferencesRequest('https://attacker.test', 'POST', {
     model: 'gpt-6-sol', effort: 'medium', speed: 'standard',
   }), env, options)).status, 403);
