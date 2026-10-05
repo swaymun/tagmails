@@ -124,12 +124,9 @@ async function unrunEarlierRequests(env, device, row, agentEmail) {
     WHERE j.thread_id = ? AND t.account_id = ? AND j.id != ?
       AND json_type(j.model_json, '$.error') = 'text'
       AND (j.created_at, j.rowid) < (SELECT created_at, rowid FROM jobs WHERE id = ?)
-      AND NOT EXISTS (SELECT 1 FROM jobs ran WHERE ran.thread_id = j.thread_id
-        AND (ran.created_at, ran.rowid) > (j.created_at, j.rowid)
-        AND (ran.created_at, ran.rowid) < (SELECT created_at, rowid FROM jobs WHERE id = ?)
-        AND ran.model_json IS NOT NULL AND json_type(ran.model_json, '$.error') IS NULL)
+      AND j.handed_to_agent_at IS NULL
     ORDER BY j.created_at DESC, j.rowid DESC LIMIT 3`)
-    .bind(row.thread_id, device.account_id, row.id, row.id, row.id).all();
+    .bind(row.thread_id, device.account_id, row.id, row.id).all();
   const earlier = [];
   for (const item of results.reverse()) {
     const object = await env.MAIL.get(item.object_key);
@@ -273,6 +270,15 @@ async function complete(env, device, body) {
       WHERE id = ? AND device_id = ? AND lease_id = ? AND result_hash = ? AND state = ?`)
       .bind(body.jobId, device.id, body.leaseId, resultHash, state),
   ];
+  if (state === 'completed') {
+    // The agent finished a turn that carried the thread's earlier unrun
+    // requests; later turns no longer need them.
+    statements.push(env.DB.prepare(`UPDATE jobs SET handed_to_agent_at = CURRENT_TIMESTAMP
+      WHERE thread_id = (SELECT thread_id FROM jobs WHERE id = ? AND device_id = ? AND lease_id = ? AND result_hash = ? AND state = 'completed')
+        AND handed_to_agent_at IS NULL AND json_type(model_json, '$.error') = 'text'
+        AND (created_at, rowid) < (SELECT created_at, rowid FROM jobs WHERE id = ?)`)
+      .bind(body.jobId, device.id, body.leaseId, resultHash, body.jobId));
+  }
   if (testBillingEnabled(env) && body.result.state !== 'completed') {
     statements.push(env.DB.prepare(`UPDATE test_email_charges
       SET state = 'released', updated_at = CURRENT_TIMESTAMP

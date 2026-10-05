@@ -470,4 +470,10 @@ test('a reply after a relay-only answer also hands the agent the original reques
   const claim = envelope((await call(env, paired.token, 'claim')).body);
   assert.match(claim.request.body, /owner@gmail\.com wrote \(the relay replied without running an agent\):\nModel: Gemini Ultra\nWrite travel guide scripts for Madrid and Paris\./);
   assert.match(claim.request.body, /The current message:\ntry now\?/);
+  // Once a completed turn carried it, later turns don't repeat it.
+  const lease = { jobId: claim.jobId, leaseId: claim.leaseId };
+  await call(env, paired.token, 'complete', { ...lease, result: { runtime: 'codex-app-server-readonly', state: 'completed', summary: 'Done.' } });
+  await inbound(env, 'unrun-3', 'Now do Tokyo too.', ['<unrun-1@gmail.com>', '<unrun-2@gmail.com>']);
+  const next = envelope((await call(env, paired.token, 'claim')).body);
+  assert.equal(next.request.body, 'Now do Tokyo too.');
 });
