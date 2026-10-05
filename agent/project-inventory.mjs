@@ -47,7 +47,7 @@ async function codexProjects({ withHistory = true, home = process.env.CODEX_HOME
   });
   const timer = setTimeout(() => { fail(new Error('Codex project list timed out')); child.kill(); }, 10_000);
   try {
-    await request('initialize', { clientInfo: { name: 'tagmails', title: 'TagMails', version: '0.2.0' },
+    await request('initialize', { clientInfo: { name: 'tagmails', title: 'TagMails', version: '0.2.2' },
       capabilities: { experimentalApi: true } });
     child.stdin.write(`${JSON.stringify({ method: 'initialized', params: {} })}\n`);
     const list = await request('project/list', { limit: 100 });
