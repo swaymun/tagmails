@@ -26,7 +26,7 @@ Owner-only completed replies attach output files directly when their combined si
 
 ## Status reactions
 
-For a verified, authorized task email, react to its `Message-ID`: 👀 after intake, 📝 when a computer starts work, ✅ only after a completed result is saved, ⚠️ for a known terminal failure. Each (message, state) is sent once; reaction failures never lose or duplicate the task, and reactions are free. Gmail needs a separate MIME message with a `text/vnd.google.email-reaction+json` part, so reactions only work from a verified sending domain without a Reply-To override. `STATUS_REACTIONS_ENABLED` stays off until that is verified. [Gmail reaction format](https://developers.google.com/workspace/gmail/reactions/format)
+For a verified, authorized task email, react to its `Message-ID`: 👀 after intake, ✅ only after a completed result is saved, ⚠️ for a known terminal failure. Each (message, state) is sent once. Gmail can't remove a reaction, so there is no in-progress reaction; at most two emoji stack. reaction failures never lose or duplicate the task, and reactions are free. Gmail needs a separate MIME message with a `text/vnd.google.email-reaction+json` part, so reactions only work from a verified sending domain without a Reply-To override. `STATUS_REACTIONS_ENABLED` stays off until that is verified. [Gmail reaction format](https://developers.google.com/workspace/gmail/reactions/format)
 
 ## Balance and allowance
 
