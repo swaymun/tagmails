@@ -774,27 +774,28 @@ test('small output files attach only to an owner-only reply, with exact saved by
   assert.equal(sent.attachments, undefined);
 });
 
-test('large, expired, and different-job files are never attached to an email', async () => {
+test('archives, large, expired, and different-job files are never attached to an email', async () => {
   const fixture = bindings();
   const { env, sqlite } = fixture;
   env.SITE_ORIGIN = 'https://tagmails.example';
   await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
   await queuedTurn(fixture, { number: 2, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
   const rows = [
+    ['archive-file', 'job-1', 182_014, '2099-01-01', 'scripts.zip'],
     ['large-file', 'job-1', 3_500_001, '2099-01-01'],
     ['expired-file', 'job-1', 10, '2000-01-01'],
     ['different-job', 'job-2', 10, '2099-01-01'],
   ];
-  for (const [id, job, size, expiry] of rows) sqlite.prepare(`INSERT INTO run_artifacts
+  for (const [id, job, size, expiry, name = 'file.txt'] of rows) sqlite.prepare(`INSERT INTO run_artifacts
     (id, account_id, job_id, lease_id, object_key, name, mime_type, byte_size, expires_at)
-    VALUES (?, 'account-1', ?, 'lease-1', ?, 'file.txt', 'text/plain', ?, ?)`)
-    .run(id, job, `files/${id}`, size, expiry);
+    VALUES (?, 'account-1', ?, 'lease-1', ?, ?, 'text/plain', ?, ?)`)
+    .run(id, job, `files/${id}`, name, size, expiry);
   await env.MAIL.put('results/1.json', JSON.stringify({ state: 'completed', summary: 'Files ready.', artifactIds: rows.map(([id]) => id) }));
   let sent;
   assert.equal((await sendNextOutbox(env, { sendEmail: async (payload) => { sent = payload; return { data: { id: 'large-1' } }; },
     getSentEmail: async () => ({ data: { message_id: '<large-1@tagmails.test>' } }) })).state, 'sent');
   assert.equal(sent.attachments, undefined);
-  assert.match(sent.text, /1 file · 7 days/);
+  assert.match(sent.text, /2 files · 7 days/);
   assert.match(sent.text, /Transcript/);
 });
 

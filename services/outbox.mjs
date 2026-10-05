@@ -11,6 +11,10 @@ import { ATTACHABLE_BYTES, releaseFailedPrimaryTestEmail, releaseTestEmail, sett
 import { selectedModelStatus } from './model-route.mjs';
 import { artifactForDownload, selectedRunArtifacts } from './run-artifacts.mjs';
 
+// Gmail rejects whole messages (552 5.7.0) for archives and executables, so
+// only documents, media and text ride along; anything else becomes a link.
+const EMAIL_SAFE_FILE = /\.(pdf|txt|md|csv|tsv|json|html?|rtf|docx|xlsx|pptx|odt|ods|odp|png|jpe?g|gif|webp|heic|svg|mp3|m4a|wav|mp4|mov|ics)$/i;
+
 const MESSAGE_ID = /^<[^<>\s]+@[^<>\s]+>$/;
 
 class InvalidOutboxSource extends Error {}
@@ -238,7 +242,7 @@ async function prepare(env, row) {
     ? await selectedRunArtifacts(env, row.account_id, row.job_id, result.artifactIds) : [];
   let attachedBytes = 0;
   for (const file of files) {
-    if (attachedBytes + file.byte_size > ATTACHABLE_BYTES) continue;
+    if (attachedBytes + file.byte_size > ATTACHABLE_BYTES || !EMAIL_SAFE_FILE.test(file.name ?? '')) continue;
     const source = await artifactForDownload(env, row.account_id, row.job_id, file.id);
     if (!source) continue;
     const stored = await env.MAIL.get(source.object_key);
