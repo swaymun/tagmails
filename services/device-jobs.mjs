@@ -161,7 +161,7 @@ async function started(env, device, body) {
       AND j.lease_until > CURRENT_TIMESTAMP AND t.account_id = ? LIMIT 1`)
     .bind(body.jobId, device.id, body.leaseId, device.account_id).first();
   if (!row) return json({ error: 'Lease expired or replaced' }, 409);
-  if (env.STATUS_REACTIONS_ENABLED === 'true' && !env.RESEND_TEST_FROM &&
+  if (env.STATUS_REACTIONS_ENABLED === 'true' &&
       row.sender_email.toLowerCase().endsWith('@gmail.com')) {
     await env.DB.prepare("INSERT OR IGNORE INTO status_reactions (job_id, status) VALUES (?, 'working')")
       .bind(body.jobId).run();
@@ -250,7 +250,7 @@ async function complete(env, device, body) {
           AND result_hash = ? AND state = ?)`)
       .bind(body.jobId, body.jobId, device.id, body.leaseId, resultHash, state));
   }
-  if (reactionStatus && env.STATUS_REACTIONS_ENABLED === 'true' && !env.RESEND_TEST_FROM) {
+  if (reactionStatus && env.STATUS_REACTIONS_ENABLED === 'true') {
     statements.push(env.DB.prepare(`INSERT OR IGNORE INTO status_reactions (job_id, status)
       SELECT j.id, ? FROM jobs j JOIN messages m ON m.id = j.message_id
       WHERE j.id = ? AND j.device_id = ? AND j.lease_id = ? AND j.result_hash = ?

@@ -263,8 +263,7 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
   });
   statements.push(env.DB.prepare('INSERT INTO jobs (id, thread_id, message_id, state, model_json, result_key, workspace_json) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .bind(jobId, newThreadId, id, threadUnavailable ? 'failed' : 'queued', model && JSON.stringify(model), resultKey, workspaceJson));
-  if (!threadUnavailable && !model?.error && env.STATUS_REACTIONS_ENABLED === 'true' &&
-      !env.RESEND_TEST_FROM && message.from.endsWith('@gmail.com')) {
+  if (!threadUnavailable && !model?.error && env.STATUS_REACTIONS_ENABLED === 'true' &&  message.from.endsWith('@gmail.com')) {
     statements.push(env.DB.prepare("INSERT INTO status_reactions (job_id, status) VALUES (?, 'received')").bind(jobId));
   }
   if (threadUnavailable) statements.push(env.DB.prepare('INSERT INTO outbox (job_id) VALUES (?)').bind(jobId));

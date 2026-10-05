@@ -3,6 +3,7 @@ import { Resend } from 'resend';
 import { addressParser } from 'postal-mime';
 import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.mjs';
 import { knownAgentAddresses } from './agent-addresses.mjs';
+import { testSenderFor } from './agent-username.mjs';
 import { renderResult } from '../apps/mock-inbox/mail.mjs';
 import { releaseFailedPrimaryTestEmail, releaseTestEmail, settleTestEmail, testBillingEnabled, testWalletSnapshot } from './email-charges.mjs';
 import { selectedModelStatus } from './model-route.mjs';
@@ -212,7 +213,7 @@ async function prepare(env, row) {
   // cannot bring a new address into the conversation by copying it.
   const to = [request.from];
   const cc = visible;
-  const testSender = env.RESEND_TEST_FROM;
+  const testSender = testSenderFor(env, agent);
   if (testSender) {
     if (testSender !== 'onboarding@resend.dev') throw new Error('Unsupported Resend test sender');
     // Resend's test sender is for a single account-owned delivery. Keep
@@ -440,7 +441,7 @@ export async function sendNextOutbox(env, {
     await releaseTestEmail(env, row.job_id);
     return { state: 'blocked', jobId: row.job_id };
   }
-  if (payload.from !== (env.RESEND_TEST_FROM ?? row.agent_email.toLowerCase())) {
+  if (payload.from !== (testSenderFor(env, row.agent_email) ?? row.agent_email.toLowerCase())) {
     throw new Error('Outbox sender does not match its account');
   }
   // Attachment bytes stay in R2, avoiding D1's row-size limit and extra plaintext copies.

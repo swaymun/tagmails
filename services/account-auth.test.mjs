@@ -380,7 +380,7 @@ test('the private Site can show the owner account and manage only its paired dev
   const account = await handleAccountRequest(site('/api/site/account'), env, options);
   assert.equal(account.headers.get('access-control-allow-origin'), env.SITE_ORIGIN);
   assert.deepEqual(await account.json(), { ownerEmail: 'owner@gmail.com',
-    agentEmail: 'agent@wonder.test', defaultModel: 'gpt-6.1-sol', deliveryReady: false });
+    agentEmail: 'agent@wonder.test', defaultModel: 'gpt-6.1-sol', deliveryReady: false, addressDomain: null });
   assert.equal((await handleAccountRequest(site('/api/site/devices'), env, options)).status, 200);
   const code = await (await handleAccountRequest(site('/api/site/pairing-code', 'POST'), env, options)).json();
   assert.match(code.code, /^tm_pair_[A-Za-z0-9_-]{27}$/);

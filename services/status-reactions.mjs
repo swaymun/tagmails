@@ -1,10 +1,11 @@
 import { buildStatusReaction } from './status-reaction-mime.mjs';
 import { sendRawResendEmail } from './resend-smtp.mjs';
+import { testSenderFor } from './agent-username.mjs';
 
 const rank = (alias) => `CASE ${alias}.status WHEN 'received' THEN 0 WHEN 'working' THEN 1 ELSE 2 END`;
 
 export async function sendNextStatusReaction(env, { send = sendRawResendEmail } = {}) {
-  if (env.STATUS_REACTIONS_ENABLED !== 'true' || env.RESEND_TEST_FROM) return { state: 'disabled' };
+  if (env.STATUS_REACTIONS_ENABLED !== 'true') return { state: 'disabled' };
   if (!env.DB || !env.RESEND_API_KEY) throw new Error('Status reaction bindings are incomplete');
   const stale = await env.DB.prepare(`UPDATE status_reactions SET state = 'uncertain', updated_at = CURRENT_TIMESTAMP
     WHERE (job_id, status) = (SELECT job_id, status FROM status_reactions
@@ -26,7 +27,8 @@ export async function sendNextStatusReaction(env, { send = sendRawResendEmail } 
   const participant = sender === row.owner_email.toLowerCase() ? true : await env.DB.prepare(
     'SELECT 1 FROM participants WHERE thread_id = ? AND email = ? AND revoked_at IS NULL')
     .bind(row.thread_id, sender).first();
-  if (!participant || !sender.endsWith('@gmail.com')) {
+  // A reaction must come from the agent's own address, so test-sender accounts can't react.
+  if (!participant || !sender.endsWith('@gmail.com') || testSenderFor(env, row.agent_email)) {
     await env.DB.prepare("UPDATE status_reactions SET state = 'blocked', updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND status = ? AND state = 'queued'")
       .bind(row.job_id, row.status).run();
     return { state: 'blocked', jobId: row.job_id, status: row.status };

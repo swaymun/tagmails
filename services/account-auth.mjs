@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { runReceiptPage } from './account-page.mjs';
 import { selectedModelDetail, selectedModelStatus } from './model-route.mjs';
+import { addressDomain, checkAddress, chooseAddress } from './agent-username.mjs';
 import { artifactForDownload, selectedRunArtifacts } from './run-artifacts.mjs';
 import { knownAgentAddresses } from './agent-addresses.mjs';
 import { accountPreferences, saveAccountPreferences } from './account-preferences.mjs';
@@ -291,7 +292,17 @@ async function siteAccountRequest(request, env, pathname, verifyIdentity) {
   const { account } = owner;
   if (pathname === '/api/site/account' && request.method === 'GET') {
     return json({ ownerEmail: account.owner_email, agentEmail: account.agent_email,
-      defaultModel: account.default_model, deliveryReady: env.MAIL_DELIVERY_READY === 'true' }, 200, headers);
+      defaultModel: account.default_model, deliveryReady: env.MAIL_DELIVERY_READY === 'true',
+      addressDomain: addressDomain(env) }, 200, headers);
+  }
+  if (pathname === '/api/site/address' && request.method === 'GET') {
+    return json(await checkAddress(env, account, new URL(request.url).searchParams.get('name')), 200, headers);
+  }
+  if (pathname === '/api/site/address' && request.method === 'POST') {
+    let body;
+    try { body = await bodyJson(request); } catch { return json({ error: 'Invalid request' }, 400, headers); }
+    const result = await chooseAddress(env, account, body?.name);
+    return result.error ? json({ error: result.error }, result.status, headers) : json(result, 200, headers);
   }
   if (pathname === '/api/site/default-model' && request.method === 'POST') {
     return changeDefaultModel(request, env, account.id, headers);
