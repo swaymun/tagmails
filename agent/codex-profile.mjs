@@ -38,6 +38,17 @@ function overlaps(a, b) {
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
+// Codex records a trust decision for each project it runs in by appending
+// `[projects."<path>"] trust_level = ...` to this config. Accept exactly
+// those additions; any other change still stops the run.
+const TRUST_BLOCK = /\n*\[projects\.("(?:[^"\\\n]|\\.)*")\]\ntrust_level = "(?:trusted|untrusted)"\n?/g;
+
+export function sameConfig(actual, expected) {
+  if (actual === expected) return true;
+  const base = (text) => text.replace(TRUST_BLOCK, '\n').replace(/\n+$/, '\n');
+  return base(actual) === base(expected);
+}
+
 export async function prepareCodexProfile(workspace, access = false) {
   const full = access === 'full';
   const write = access === true || access === 'write';
@@ -64,7 +75,7 @@ export async function prepareCodexProfile(workspace, access = false) {
   const configFile = path.join(home, 'config.toml');
   try { await fs.writeFile(configFile, config, { flag: 'wx', mode: 0o600 }); }
   catch (error) { if (error.code !== 'EEXIST') throw error; }
-  if (await fs.readFile(configFile, 'utf8') !== config) throw new Error('Codex runtime configuration was changed');
+  if (!sameConfig(await fs.readFile(configFile, 'utf8'), config)) throw new Error('Codex runtime configuration was changed');
   const authLink = path.join(home, 'auth.json');
   try { await fs.symlink(auth, authLink); }
   catch (error) { if (error.code !== 'EEXIST') throw error; }

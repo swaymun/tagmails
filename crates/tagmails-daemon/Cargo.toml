@@ -1,6 +1,6 @@
 [package]
 name = "tagmails-daemon"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 description = "TagMails local agent: runs Codex or Claude Code for emails sent to your agent address"
 license = "MIT"
