@@ -265,9 +265,9 @@ async function prepare(env, row) {
     ? await env.DB.prepare('SELECT state FROM test_email_charges WHERE job_id = ?').bind(row.job_id).first()
     : null;
   const noChargeDetail = charge?.state === 'released'
-    ? 'No credit used' : null;
-  const creditDetail = balance
-    ? `Credits $${(balance.balanceCents / 100).toFixed(2)}` : null;
+    ? 'No charge' : null;
+  const balanceDetail = balance
+    ? `Balance $${(balance.balanceCents / 100).toFixed(2)}` : null;
   const allowance = ownerOnly && result.codexAllowance;
   const allowanceFresh = allowance && Number.isSafeInteger(allowance.observedAt) &&
     Date.now() >= allowance.observedAt && Date.now() - allowance.observedAt <= 15 * 60_000;
@@ -288,7 +288,7 @@ async function prepare(env, row) {
     details: result.details, answer: result.answer,
     meta: [...(selectedModel && result.state !== 'needs_clarification'
       ? selectedModel.split(' · ') : []), ...(projectName ? [`in ${projectName}`] : []), ...fileNote, ...(noChargeDetail ? [noChargeDetail] : []),
-      ...(creditDetail ? [creditDetail] : []), ...allowanceDetail],
+      ...(balanceDetail ? [balanceDetail] : []), ...allowanceDetail],
     checks: result.checks,
     links: transcriptUrl && result.runtime !== 'relay' && (ownerCanOpen || participantTranscriptReady)
       ? [{ label: sharedWithParticipant && !participantTranscriptReady ? `${runLinkLabel} (owner only)` : runLinkLabel,

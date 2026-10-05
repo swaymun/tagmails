@@ -202,8 +202,8 @@ test('failed and approval-waiting agent turns return test credit before their no
     assert.deepEqual(await testWalletSnapshot(env, 'account-1'), { balanceCents: 5, waitingEmails: 0 });
     assert.equal((await sendNextOutbox(env, {
       sendEmail: async (payload) => {
-        assert.match(payload.text, /No credit used/);
-        assert.match(payload.text, /Credits \$0\.05/);
+        assert.match(payload.text, /No charge/);
+        assert.match(payload.text, /Balance \$0\.05/);
         return { data: { id: `sent-${state}` } };
       },
       getSentEmail: async () => ({ data: { message_id: `<sent-${state}@tagmails.test>` } }),

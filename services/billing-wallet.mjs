@@ -64,12 +64,12 @@ async function createCheckout(request, env, account, stripeFetch, site = false) 
     mode: 'payment',
     client_reference_id: id,
     customer_email: account.owner_email,
-    success_url: `${origin}/${site ? '?topup=returned#credits' : 'account?topup=returned'}`,
-    cancel_url: `${origin}/${site ? '?topup=canceled#credits' : 'account?topup=canceled'}`,
+    success_url: `${origin}/${site ? '?topup=returned#billing' : 'account?topup=returned'}`,
+    cancel_url: `${origin}/${site ? '?topup=canceled#billing' : 'account?topup=canceled'}`,
     'payment_method_types[0]': 'card',
     'line_items[0][price_data][currency]': 'usd',
     'line_items[0][price_data][unit_amount]': String(TOP_UP_CENTS),
-    'line_items[0][price_data][product_data][name]': billingLive(env) ? 'TagMails credits (200)' : 'TagMails test credits (200)',
+    'line_items[0][price_data][product_data][name]': billingLive(env) ? 'TagMails balance ($10)' : 'TagMails test balance ($10)',
     'line_items[0][quantity]': '1',
   });
   const response = await stripeFetch('https://api.stripe.com/v1/checkout/sessions', {

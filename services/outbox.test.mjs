@@ -709,8 +709,8 @@ test('owner-only replies show remaining test credits without exposing them to gu
     getSentEmail: async (id) => ({ data: { message_id: `<${id}@tagmails.test>` } }),
   };
   assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
-  assert.match(payloads[0].text, /Credits \$9\.95/);
-  assert.match(payloads[0].html, /Credits \$9\.95/);
+  assert.match(payloads[0].text, /Balance \$9\.95/);
+  assert.match(payloads[0].html, /Balance \$9\.95/);
   assert.match(payloads[0].text, /Codex 66% \(7-day\)/);
 
   sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)').run('thread-1', 'reviewer@gmail.com');

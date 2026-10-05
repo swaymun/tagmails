@@ -144,14 +144,14 @@ test('the private Site shows only its Gmail owner test credits and returns from 
   const response = await call(site('/api/site/billing/checkout', 'POST'));
   assert.equal(response.status, 200);
   assert.equal((await response.json()).testMode, true);
-  assert.equal(checkout.get('success_url'), `${env.SITE_ORIGIN}/?topup=returned#credits`);
-  assert.equal(checkout.get('cancel_url'), `${env.SITE_ORIGIN}/?topup=canceled#credits`);
+  assert.equal(checkout.get('success_url'), `${env.SITE_ORIGIN}/?topup=returned#billing`);
+  assert.equal(checkout.get('cancel_url'), `${env.SITE_ORIGIN}/?topup=canceled#billing`);
   assert.equal(checkout.get('customer_email'), 'owner@gmail.com');
   assert.equal(sqlite.prepare('SELECT count(*) n FROM billing_checkouts').get().n, 1);
   assert.equal((await call(site('/api/site/billing/checkout', 'POST', 'owner-token',
     'https://tagmails.com'))).status, 200);
-  assert.equal(checkout.get('success_url'), 'https://tagmails.com/?topup=returned#credits');
-  assert.equal(checkout.get('cancel_url'), 'https://tagmails.com/?topup=canceled#credits');
+  assert.equal(checkout.get('success_url'), 'https://tagmails.com/?topup=returned#billing');
+  assert.equal(checkout.get('cancel_url'), 'https://tagmails.com/?topup=canceled#billing');
   assert.equal(sqlite.prepare('SELECT count(*) n FROM billing_checkouts').get().n, 2);
   env.BILLING_TEST_MODE = 'false';
   assert.equal((await (await call(site('/api/site/billing'))).json()).checkoutEnabled, false);

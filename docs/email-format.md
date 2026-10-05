@@ -16,7 +16,7 @@ The agent returns a structured result; the relay, not the model, builds the emai
 
 - The answer comes first. No heading, card or "Agent reply" label.
 - Markdown renders to inline-styled HTML: paragraphs, bold/italic, lists (nested), code spans and blocks, tables, quotes. Everything is escaped first; only `https` links survive. Local file links (`/Users/...`) keep their label as plain text.
-- One quiet footer line: `Transcript · GPT-6 Luna Medium · in <project> · Credits $8.85 · tagmails.` Failed and approval replies add "Stopped" / "Needs approval". Relay-only replies (clarifications, a revoked computer) have no run link.
+- One quiet footer line: `Transcript · GPT-6 Luna Medium · in <project> · Balance $8.85 · tagmails.` Failed and approval replies add "Stopped" / "Needs approval". Relay-only replies (clarifications, a revoked computer) have no run link.
 - The plain-text part carries the same answer and footer.
 - Mail is sent as `TagMails <agent address>`.
 
@@ -26,8 +26,8 @@ Owner-only completed replies attach output files directly when their combined si
 
 ## Status reactions
 
-For a verified, authorized task email, react to its `Message-ID`: 👀 after intake, 📝 when a computer starts work, ✅ only after a completed result is saved, ⚠️ for a known terminal failure. Each (message, state) is sent once; reaction failures never lose or duplicate the task, and reactions cost no credits. Gmail needs a separate MIME message with a `text/vnd.google.email-reaction+json` part, so reactions only work from a verified sending domain without a Reply-To override. `STATUS_REACTIONS_ENABLED` stays off until that is verified. [Gmail reaction format](https://developers.google.com/workspace/gmail/reactions/format)
+For a verified, authorized task email, react to its `Message-ID`: 👀 after intake, 📝 when a computer starts work, ✅ only after a completed result is saved, ⚠️ for a known terminal failure. Each (message, state) is sent once; reaction failures never lose or duplicate the task, and reactions are free. Gmail needs a separate MIME message with a `text/vnd.google.email-reaction+json` part, so reactions only work from a verified sending domain without a Reply-To override. `STATUS_REACTIONS_ENABLED` stays off until that is verified. [Gmail reaction format](https://developers.google.com/workspace/gmail/reactions/format)
 
-## Credits and allowance
+## Balance and allowance
 
-With test billing on, owner-only replies show the remaining test-credit balance; failed, approval and clarification results return their reserved credit first. Shared replies never show the owner's balance. When the Codex sign-in matches the owner, the reply can show plan allowance windows from a snapshot under 15 minutes old; never estimate allowance from token counts.
+With test billing on, owner-only replies show the remaining dollar balance; failed, approval and clarification results refund their reserved charge first. Shared replies never show the owner's balance. When the Codex sign-in matches the owner, the reply can show plan allowance windows from a snapshot under 15 minutes old; never estimate allowance from token counts.

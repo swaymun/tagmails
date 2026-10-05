@@ -2,6 +2,10 @@
 
 Internal decision memo, checked October 3, 2026. These are current public list prices and illustrative calculations, not measured TagMails unit economics or a customer offer.
 
+## Launch pricing (October 5, 2026)
+
+Billing is in dollars, with no credits or points. Customers keep a prepaid USD balance: top-ups are $10 through Stripe Checkout, and new accounts start with a $1.00 signup grant. Each accepted task email costs $0.05. Files up to 5 MB are attached for free, and larger files become 7-day links at $0.05 per started GB. Clarifications, reactions and duplicate mail are free, and failed or approval-waiting runs are refunded. The site, the Stripe line item and the email footer (`Balance $9.95`) all show dollars. The ledger stays in integer cents (`credit_ledger.amount_cents`).
+
 ## What one charge buys
 
 The billable unit should be **one accepted task turn**: one authorized inbound message that starts or resumes an agent run, plus its result email and retained receipt. A second substantive reply is another turn, including when an authorized participant sends it. A duplicate delivery, Gmail reaction, invalid `Model:` request, or rejected sender is not a billable turn. The account owner funds participant turns; the owner alone can grant participants. Show the expected debit before enabling a model route, and state the refund rule for failed or bounced replies before live payments.

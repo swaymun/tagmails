@@ -24,7 +24,7 @@ export async function grantSignupBonus(env, accountId) {
     VALUES (?, ?, ?, 'signup_bonus', ?)`).bind(crypto.randomUUID(), accountId, SIGNUP_BONUS_CENTS, accountId).run();
 }
 
-// Files too big to attach become download links: one credit per started GB.
+// Files too big to attach become download links: $0.05 per started GB.
 export async function chargeFileTransfer(env, accountId, artifactId, bytes) {
   if (!testBillingEnabled(env) || bytes <= ATTACHABLE_BYTES) return;
   const cents = Math.ceil(bytes / 1e9) * FILE_TRANSFER_CENTS_PER_GB;
