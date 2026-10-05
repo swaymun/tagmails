@@ -7,7 +7,7 @@ This is an **unverified deployment guide** for the current TagMails relay source
 - Node.js 20.19+, a Cloudflare account with Workers, D1, and R2, and the [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/commands/) installed by `npm ci`.
 - A domain you control for both Resend receiving and sending. The Resend-provided `.resend.app` domain is useful for receiving tests, but plan a verified sending domain before expecting normal replies. Configure Resend to receive mail for the exact domain in `AGENT_DOMAIN`.
 - A Google Cloud project with a Google Identity Services **Web application** client. Add the Worker's exact HTTPS origin (scheme and host, no path) to Authorized JavaScript origins. Google sign-in here requests identity, not Gmail or Drive access. If the OAuth app is in testing mode, add the Gmail account you will use as a test user. [Google setup](https://developers.google.com/identity/gsi/web/guides/get-google-api-clientid)
-- A local Mac with the TagMails Rust daemon and a signed-in Codex or Claude Code CLI for actual tasks.
+- A Mac or Linux machine with the `tagmails` agent (`brew install swaymun/tagmails/tagmails` or `install.sh`) and a signed-in Codex or Claude Code CLI for actual tasks.
 
 ## Create the relay
 
@@ -51,17 +51,15 @@ Do not set `BILLING_TEST_MODE`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `R
 
 ## Check before live mail
 
-Open `<PUBLIC_ORIGIN>/account` and sign in using the Gmail account listed as an OAuth test user. Check that it shows an agent address under `AGENT_DOMAIN`. Create a one-time pairing code on that page. On your Mac, pair a **disposable** workspace, keeping the device token outside it:
+Open `<PUBLIC_ORIGIN>/account` and sign in using the Gmail account listed as an OAuth test user. Check that it shows an agent address under `AGENT_DOMAIN`. Create a one-time pairing code on that page, then on your computer pair it with your relay and start it pinned to a **disposable** folder:
 
 ```sh
-mkdir -p "$HOME/.config/tagmails"
-chmod 700 "$HOME/.config/tagmails"
-TAGMAILS_RELAY_URL=https://tagmails-selfhost.your-subdomain.workers.dev \
-TAGMAILS_DEVICE_TOKEN_FILE="$HOME/.config/tagmails/device-token" \
-cargo run -p tagmails-daemon -- --pair 'tm_pair_CODE_FROM_ACCOUNT_PAGE'
+tagmails pair 'tm_pair_CODE_FROM_ACCOUNT_PAGE' --relay https://tagmails-selfhost.your-subdomain.workers.dev
+tagmails start --access read --workspace ~/tagmails-scratch
+tagmails status
 ```
 
-Use the actual one-time code from the account page and your exact relay origin. Start the daemon in read-only mode using the [relay command in README.md](README.md#local-relay-proof), or preview its macOS LaunchAgent first. The token file is created with owner-only access; do not place it in the agent workspace.
+The device token is saved owner-only in `~/.config/tagmails/`, outside any workspace.
 
 Only after the Worker, webhook, domain, and paired daemon are ready, send one small message from that Gmail address to its generated agent address. Confirm a signed webhook reached the Worker, one job was claimed and completed, one reply was accepted by Resend, and the reply's `/runs/<job-id>` link opens only for the owner. Check the Resend dashboard and Worker logs if any step fails. If a send has an uncertain outcome, do not repeat it until provider acceptance has been checked; the relay will not retry it automatically. A successful local bundle or synthetic test alone does not prove delivery.
 

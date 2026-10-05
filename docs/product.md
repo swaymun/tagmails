@@ -45,7 +45,7 @@ Claude Tag is a reference for the use cases and collaborative feel: delegate fro
 
 ## Evidence on Hand
 
-PLAN.md records the product plan, provider pricing research, domain shortlist, and references to Wonder and T3 Code. There are no verified customer testimonials, live task outcomes, or published product metrics yet.
+The original product plan (domain shortlist, pricing research, Wonder and T3 Code references) is in git history before October 5, 2026. There are no verified customer testimonials, live task outcomes, or published product metrics yet.
 
 ## Product Principles
 

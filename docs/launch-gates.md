@@ -1,4 +1,4 @@
-# TagMails launch plan
+# Launch gates and plan
 
 Status: internal working plan, 2026-10-03. No public launch date is set. An owner-only, two-turn Gmail-to-Codex-to-Gmail exchange is verified. Customer subscription use and Claude customer routing are gated on provider terms.
 
@@ -6,7 +6,7 @@ Status: internal working plan, 2026-10-03. No public launch date is set. An owne
 
 **Give your agent an email address.** Send a task to TagMails from Gmail and get the result back in the same conversation. The connected Mac runs the work. The verified development pilot is owner-only with Codex; a later reply continues its session. The first public examples should focus on a catch-up from a messy thread, a concrete analysis task, and a follow-up decision. Show the agent's actual output, check results, and limitations.
 
-The initial audience is developers already using Codex on a Mac. Keep the pilot to the owner's verified Gmail address and one selected local workspace. A customer beta using a personal Codex plan requires the provider's supported commercial path or confirmation; Claude Code customer execution requires API authentication or Anthropic approval. Keep the email and storage price separate from any later API-funded model cost. The [internal pricing model](PRICING_MODEL.md) uses current public rate cards to define what to measure; do not publish a task price until provider terms, live usage, and refunds are resolved.
+The initial audience is developers already using Codex on a Mac. Keep the pilot to the owner's verified Gmail address and one selected local workspace. A customer beta using a personal Codex plan requires the provider's supported commercial path or confirmation; Claude Code customer execution requires API authentication or Anthropic approval. Keep the email and storage price separate from any later API-funded model cost. The [internal pricing model](pricing.md) uses current public rate cards to define what to measure; do not publish a task price until provider terms, live usage, and refunds are resolved.
 
 ## Release gates
 
@@ -16,7 +16,7 @@ The initial audience is developers already using Codex on a Mac. Keep the pilot 
 | Email loop | From an owned Gmail account, send a task to the agent address and receive a correctly threaded, readable result in Gmail desktop and mobile. Repeat with a reply and a second agent turn. Preserve the raw MIME and screenshots. |
 | Participants (deferred) | Do not enable live guest turns for this beta. Before a later release, verify To/Cc grants, guest denials, Bcc handling, and the provider-plan implications. |
 | Execution | Continue bounded owner-only Codex tasks in the selected workspace; test offline queue recovery, interrupted work, approvals, and truthful failure mail. Record actual model, usage, and outcome. Keep live Claude subscription routing paused. |
-| Provider terms | Confirm a supported path for paid or remotely hosted Codex plan usage. Use Claude API authentication or obtain Anthropic approval before offering Claude to customers. The product facts and unsent provider questions are in [Provider paths](PROVIDER_PATHS.md). [OpenAI plan-usage overview](https://developers.openai.com/siwc/token-sharing-open-source) · [Anthropic account guidance](https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account) |
+| Provider terms | Confirm a supported path for paid or remotely hosted Codex plan usage. Use Claude API authentication or obtain Anthropic approval before offering Claude to customers. The product facts and unsent provider questions are in [Provider paths](provider-paths.md). [OpenAI plan-usage overview](https://developers.openai.com/siwc/token-sharing-open-source) · [Anthropic account guidance](https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account) |
 | Customer controls | Show run status, a private owner receipt, device revocation, and clear retention/deletion behavior. Test cross-account isolation, duplicate provider events, and one delivered plus one bounced recipient in the same reply. Confirm that the receipt distinguishes provider acceptance from inbox delivery. A receipt is a summary until full trace capture is implemented. |
 | Pricing and payments | Decide the measured service price; validate the test-mode primary-recipient failure credit release against real delivery events, including a mixed To/Cc outcome; reconcile an idempotent Stripe test-mode top-up and a duplicate webhook before any paid signup. Display a maximum for API-funded work if offered. |
 | Open source and setup | MIT is selected; publish the exact deployable source, self-host instructions, security and limitation notes, and a tested copyable setup prompt for the permitted runtime. The license file alone is not a public source release. [GitHub licensing guide](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/licensing-a-repository) |
@@ -33,11 +33,11 @@ Go to public beta only when all release gates pass and the pilot has no unresolv
 
 ## Launch assets
 
-1. A text-forward landing page with one sentence, a real email thread, the actual supported Mac/Gmail scope, pricing, a copyable setup prompt, and a beta signup or working account link. The current local landing is a prototype.
+1. A text-forward landing page with the actual supported scope, install commands, a copyable setup prompt, and a working sign-in. The October 5 redesign covers this; add a real redacted email thread once one is approved for publishing.
 2. A short setup guide for Google sign-in, paired Mac, selected workspace, supported model selection, reactions, and revocation. Explain that reacting to an agent message is feedback; it does not start or bill a task.
 3. Three redacted, reproducible owner-only example threads with exact prompts, actual result email, outcome, and run receipt. Include a failed or waiting example so expectations are clear.
 4. An open-source repository with license, self-host steps, architecture, contribution path, security reporting, and a changelog. A public repository without a license is not an open-source release. [GitHub licensing guide](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/licensing-a-repository)
-5. The [motion video brief](LAUNCH_VIDEO_BRIEF.md) for Claude Code. Produce the final cut only from verified scenes. A labeled concept animatic is acceptable internally before the live flow exists.
+5. The [motion video brief](launch-video.md) for Claude Code. Produce the final cut only from verified scenes. A labeled concept animatic is acceptable internally before the live flow exists.
 
 ## Launch sequence
 
