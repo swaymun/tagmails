@@ -85,20 +85,23 @@ async function createCheckout(request, env, account, stripeFetch, site = false) 
   const session = await response.json();
   let url;
   try { url = new URL(session.url); } catch { /* Invalid Stripe response. */ }
-  if (!session.id?.startsWith('cs_test_') || url?.protocol !== 'https:' || url.hostname !== 'checkout.stripe.com') {
-    return json({ error: 'Stripe returned an invalid test checkout' }, 502, headers);
+  if (!session.id?.startsWith(sessionPrefix(env)) || url?.protocol !== 'https:' || url.hostname !== 'checkout.stripe.com') {
+    return json({ error: 'Stripe returned an invalid checkout' }, 502, headers);
   }
   await env.DB.prepare('UPDATE billing_checkouts SET stripe_session_id = ? WHERE id = ? AND stripe_session_id IS NULL')
     .bind(session.id, id).run();
-  return json({ checkoutUrl: url.href, testMode: true }, 200, headers);
+  return json({ checkoutUrl: url.href, testMode: !billingLive(env) }, 200, headers);
 }
 
+// Live and test Checkout Sessions never cross: the mode follows the key.
+const sessionPrefix = (env) => billingLive(env) ? 'cs_live_' : 'cs_test_';
+
 async function paidCheckout(env, session, stripeFetch) {
-  if (session?.object !== 'checkout.session' || !session.id?.startsWith('cs_test_') ||
+  if (session?.object !== 'checkout.session' || !session.id?.startsWith(sessionPrefix(env)) ||
       !UUID.test(session.client_reference_id ?? '') || session.mode !== 'payment' ||
       session.payment_status !== 'paid' || session.amount_total !== TOP_UP_CENTS ||
       session.currency !== 'usd' || !session.payment_intent?.startsWith('pi_')) {
-    return json({ error: 'Paid test session does not match a top-up' }, 422);
+    return json({ error: 'Paid session does not match a top-up' }, 422);
   }
   const row = await env.DB.prepare('SELECT id, account_id, amount_cents, stripe_session_id, stripe_payment_intent FROM billing_checkouts WHERE id = ?')
     .bind(session.client_reference_id).first();

@@ -240,3 +240,27 @@ test('live billing needs the flag and a live key, accepts only live events, and 
   const rows = sqlite.prepare('SELECT kind, amount_cents FROM credit_ledger ORDER BY kind').all().map((row) => ({ ...row }));
   assert.deepEqual(rows, [{ kind: 'file_transfer', amount_cents: -10 }, { kind: 'signup_bonus', amount_cents: 100 }]);
 });
+
+test('live Checkout accepts only live sessions and credits a signed live payment', async () => {
+  const { env, sqlite } = fixture();
+  Object.assign(env, { BILLING_LIVE: 'true', STRIPE_SECRET_KEY: 'rk_live_local' });
+  let checkoutId;
+  let sessionId = 'cs_test_wrong_mode';
+  const stripeFetch = async (url, options) => {
+    checkoutId = new URLSearchParams(options.body).get('client_reference_id');
+    return Response.json({ id: sessionId, url: `https://checkout.stripe.com/c/pay/${sessionId}` });
+  };
+  const call = (req) => handleTestWalletRequest(req, env, { stripeFetch });
+  assert.equal((await call(request('/api/billing/checkout', 'POST'))).status, 502);
+  sessionId = 'cs_live_topup_1';
+  const checkout = await call(request('/api/billing/checkout', 'POST'));
+  assert.equal(checkout.status, 200);
+  assert.equal((await checkout.json()).testMode, false);
+  const session = { object: 'checkout.session', id: sessionId, client_reference_id: checkoutId,
+    mode: 'payment', payment_status: 'paid', amount_total: 1000, currency: 'usd', payment_intent: 'pi_live_1' };
+  assert.equal((await call(signedEvent({ id: 'evt_test_mode', livemode: false,
+    type: 'checkout.session.completed', data: { object: session } }))).status, 400);
+  assert.equal((await call(signedEvent({ id: 'evt_live_1', livemode: true,
+    type: 'checkout.session.completed', data: { object: session } }))).status, 200);
+  assert.equal(sqlite.prepare("SELECT SUM(amount_cents) n FROM credit_ledger WHERE kind = 'test_top_up'").get().n, 1000);
+});
