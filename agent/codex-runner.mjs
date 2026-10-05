@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { stageAgentAttachments } from './agent-attachments.mjs';
 import { formatAgentAnswer } from './answer-result.mjs';
 import { prepareCodexProfile, PROFILE, WRITE_PROFILE, FULL_PROFILE } from './codex-profile.mjs';
-import { renewClaim } from './claim-renew.mjs';
+import { keepClaim } from './claim-renew.mjs';
 import { addRunEvent, codexRunEvent, finishRunTranscript, runTranscript } from './run-transcript.mjs';
 
 const CODEX_MODEL_ID = /^[a-z][a-z0-9][a-z0-9._-]{0,62}$/;
@@ -278,11 +278,7 @@ async function runCodex(claim, workspace, home, sessionId, staged, write, full =
   child.once('close', (code) => stop(new Error(`Codex app-server exited with ${code}`)));
   let leaseLost = false;
   let timedOut = false;
-  let renewFailures = 0;
-  const renew = setInterval(async () => {
-    try { await renewClaim(claim); renewFailures = 0; }
-    catch { if (++renewFailures >= 3) { leaseLost = true; child.kill(); } }
-  }, Number(process.env.TAGMAILS_CLAIM_RENEW_MS || 15_000));
+  const stopRenewing = keepClaim(claim, () => { leaseLost = true; child.kill(); });
   const timeout = setTimeout(() => { timedOut = true; stop(new Error('Codex exceeded the configured pilot time limit')); child.kill(); },
     Number(process.env.TAGMAILS_CODEX_TIMEOUT_MS || 180_000));
   try {
@@ -367,7 +363,7 @@ async function runCodex(claim, workspace, home, sessionId, staged, write, full =
       ...(codexAllowance ? { codexAllowance } : {}),
       transcript: finishRunTranscript(completedTranscript, finalAnswer) }, threadId };
   } finally {
-    clearInterval(renew);
+    stopRenewing();
     clearTimeout(timeout);
     child.kill();
     lines.close();

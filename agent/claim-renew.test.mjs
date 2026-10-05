@@ -4,7 +4,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { renewClaim } from './claim-renew.mjs';
+import { keepClaim, renewClaim } from './claim-renew.mjs';
 
 test('a relay-backed runtime renews with its device credential and lease ID', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tagmails-relay-renew-'));
@@ -36,4 +36,31 @@ test('a relay-backed runtime renews with its device credential and lease ID', as
     path: '/api/device/renew', authorization: 'Bearer tm_dev_fake_test_token',
     body: { jobId: 'job-1', leaseId: 'lease-1' },
   });
+});
+
+test('a lease survives network blips and stops only when gone or truly expired', async () => {
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  let clock = 0;
+  let outcome = 'network';
+  const renew = async () => {
+    if (outcome === 'ok') return;
+    if (outcome === 'gone') throw Object.assign(new Error('gone'), { leaseGone: true });
+    throw new Error('network');
+  };
+  let lost = 0;
+  const stop = keepClaim({}, () => { lost += 1; }, { every: 5, leaseMs: 80_000, renew, now: () => clock });
+  clock = 60_000; await wait(30);
+  assert.equal(lost, 0, 'three failed renewals inside the lease no longer stop the run');
+  outcome = 'ok'; await wait(20);
+  outcome = 'network'; clock = 120_000; await wait(20);
+  assert.equal(lost, 0, 'the clock restarts after a successful renewal');
+  clock = 200_000; await wait(20);
+  assert.equal(lost, 1, 'a lease past its expiry is lost once');
+  stop();
+  let gone = 0;
+  outcome = 'gone';
+  const stopGone = keepClaim({}, () => { gone += 1; }, { every: 5, renew, now: () => 0 });
+  await wait(30);
+  stopGone();
+  assert.equal(gone, 1, 'a replaced lease stops the run right away');
 });

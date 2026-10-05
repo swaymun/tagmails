@@ -6,7 +6,7 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { stageAgentAttachments } from './agent-attachments.mjs';
 import { formatAgentAnswer } from './answer-result.mjs';
-import { renewClaim } from './claim-renew.mjs';
+import { keepClaim } from './claim-renew.mjs';
 import { addRunEvent, claudeRunEvents, finishRunTranscript, runTranscript } from './run-transcript.mjs';
 
 const SESSION_ID = /^[0-9a-f-]{36}$/i;
@@ -189,15 +189,7 @@ async function runClaude(claim, workspace, sessionId, staged, write) {
   child.stderr.resume();
   let leaseLost = false;
   let timedOut = false;
-  let renewFailures = 0;
-  const renew = setInterval(async () => {
-    try {
-      await renewClaim(claim);
-      renewFailures = 0;
-    } catch {
-      if (++renewFailures >= 3) { leaseLost = true; child.kill(); }
-    }
-  }, Number(process.env.TAGMAILS_CLAIM_RENEW_MS || 15_000));
+  const stopRenewing = keepClaim(claim, () => { leaseLost = true; child.kill(); });
   const timeout = setTimeout(() => { timedOut = true; child.kill(); }, Number(process.env.TAGMAILS_CLAUDE_TIMEOUT_MS || 30 * 60_000));
   try {
     const code = await new Promise((resolve, reject) => {
@@ -222,7 +214,7 @@ async function runClaude(claim, workspace, sessionId, staged, write) {
     return { result: { ...resultFromAnswer(event.result || '', write), ...reportedUsage(event),
       transcript: finishRunTranscript(transcript, event.result || '') }, sessionId: event.session_id };
   } finally {
-    clearInterval(renew);
+    stopRenewing();
     clearTimeout(timeout);
     lines.close();
   }
