@@ -133,6 +133,7 @@ fn agent_result(
     runtime: &str,
     workspace: &Path,
     claude_permission: &str,
+    relay_token_file: Option<&Path>,
 ) -> Result<Value, Box<dyn Error>> {
     let file = match runtime {
         "codex-readonly" | "codex-write" | "codex-full" => "codex-runner.mjs",
@@ -140,9 +141,16 @@ fn agent_result(
         _ => return Err("Unsupported local agent runtime".into()),
     };
     let runner = paths::adapters_dir()?.join(file);
-    let mut child = Command::new("node")
-        .arg(runner)
-        .env("TAGMAILS_LAB_URL", base)
+    let mut command = Command::new("node");
+    command.arg(runner).env("TAGMAILS_LAB_URL", base);
+    // Relay runs renew their lease and fetch attachments from the relay with
+    // the device token; without these the adapter talks to the local lab.
+    if let Some(token_file) = relay_token_file {
+        command
+            .env("TAGMAILS_RELAY_URL", base)
+            .env("TAGMAILS_DEVICE_TOKEN_FILE", token_file);
+    }
+    let mut child = command
         .env("TAGMAILS_RUNTIME", runtime)
         .env("TAGMAILS_WORKSPACE", workspace)
         .env("TAGMAILS_CLAUDE_PERMISSION", claude_permission)
@@ -506,7 +514,10 @@ fn relay_result(
     }
     let model = claim["model"]["id"].as_str().unwrap_or("");
     let runtime = relay_runtime(model, access, claude_permission)?;
-    Ok(match agent_result(claim, base, runtime, workspace, claude_permission) {
+    let token_file = env::var("TAGMAILS_DEVICE_TOKEN_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| paths::token_file());
+    Ok(match agent_result(claim, base, runtime, workspace, claude_permission, Some(&token_file)) {
         Ok(result) => result,
         Err(error) => {
             eprintln!("Local agent adapter failed: {error}");
@@ -1095,7 +1106,7 @@ fn run_lab() -> Result<(), Box<dyn Error>> {
                 let result = if runtime != "mock" {
                     let workspace = PathBuf::from(env::var("TAGMAILS_WORKSPACE")?);
                     let permission = if runtime == "claude-write" { "acceptEdits" } else { "readonly" };
-                    match agent_result(&claim, &base, &runtime, &workspace, permission) {
+                    match agent_result(&claim, &base, &runtime, &workspace, permission, None) {
                         Ok(result) => result,
                         Err(error) => {
                             eprintln!("Local agent adapter failed: {error}");
