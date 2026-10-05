@@ -122,9 +122,28 @@ pub fn start(binary: &Path) -> Result<String, Box<dyn Error>> {
         let file = launchd_file();
         let domain = format!("gui/{}", uid()?);
         // Replacing our own agent is safe: it only reloads the same label.
+        // bootout returns before launchd finishes unloading, and an early
+        // bootstrap then fails with EIO, so wait for the label to disappear.
         let _ = quiet(Command::new("launchctl").args(["bootout", &format!("{domain}/{LABEL}")]));
+        for _ in 0..50 {
+            let loaded = Command::new("launchctl")
+                .args(["print", &format!("{domain}/{LABEL}")])
+                .output()
+                .is_ok_and(|output| output.status.success());
+            if !loaded {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
         write_private(&file, &launchd_plist(binary, &logs, &path_env))?;
-        let output = quiet(Command::new("launchctl").args(["bootstrap", &domain]).arg(&file))?;
+        let mut output = quiet(Command::new("launchctl").args(["bootstrap", &domain]).arg(&file))?;
+        for _ in 0..3 {
+            if output.status.success() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            output = quiet(Command::new("launchctl").args(["bootstrap", &domain]).arg(&file))?;
+        }
         if !output.status.success() {
             return Err(format!(
                 "launchd did not start TagMails: {}",

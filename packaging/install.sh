@@ -9,7 +9,7 @@
 # With Homebrew, prefer: brew install swaymun/tagmails/tagmails
 set -eu
 
-VERSION="${TAGMAILS_VERSION:-0.2.0}"
+VERSION="${TAGMAILS_VERSION:-0.2.1}"
 RELEASE_BASE="${TAGMAILS_RELEASE_BASE:-https://github.com/swaymun/homebrew-tagmails/releases/download/v${VERSION}}"
 PREFIX="${TAGMAILS_PREFIX:-$HOME/.local/lib/tagmails}"
 BIN_DIR="${TAGMAILS_BIN_DIR:-$HOME/.local/bin}"
