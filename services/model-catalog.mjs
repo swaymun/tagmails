@@ -29,6 +29,34 @@ export function cleanCodexCatalog(input) {
   });
 }
 
+const CLAUDE_ID = /^claude-[a-z0-9.-]{1,60}$/;
+const CLAUDE_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+
+// Claude models arrive already shaped by agent/claude-models.mjs.
+export function cleanClaudeCatalog(input) {
+  if (!Array.isArray(input) || input.length > 20) throw new Error('Invalid Claude catalog');
+  const seen = new Set();
+  return input.map((model) => {
+    if (!CLAUDE_ID.test(model?.id ?? '') || seen.has(model.id) || !Array.isArray(model.efforts) ||
+        !model.efforts.length || model.efforts.some((effort) => !CLAUDE_EFFORTS.has(effort)) ||
+        !Array.isArray(model.speeds) || model.speeds.some((speed) => !['standard', 'fast'].includes(speed))) {
+      throw new Error('Invalid Claude catalog');
+    }
+    seen.add(model.id);
+    const name = typeof model.name === 'string' && model.name.trim() && model.name.length <= 80 ? model.name.trim() : model.id;
+    return { id: model.id, name, harness: 'claude', efforts: [...new Set(model.efforts)],
+      speeds: [...new Set(['standard', ...model.speeds])] };
+  });
+}
+
+export function catalogFromDevice(body) {
+  const codex = Array.isArray(body?.models) && body.models.length
+    ? cleanCodexCatalog(body.models).map((model) => ({ ...model, harness: 'codex' })) : [];
+  const claude = body?.claudeModels ? cleanClaudeCatalog(body.claudeModels) : [];
+  if (!codex.length && !claude.length) throw new Error('Invalid model catalog');
+  return [...codex, ...claude];
+}
+
 export async function accountModelCatalog(db, accountId, threadId = null) {
   const row = await db.prepare(`SELECT d.id AS device_id, d.model_catalog_json, d.model_catalog_at FROM devices d
     WHERE d.account_id = ? AND d.revoked_at IS NULL AND d.model_catalog_json IS NOT NULL

@@ -32,6 +32,8 @@ struct Settings {
     workspace: Option<PathBuf>,
     /// "full" shares recent session requests to help routing; "files" does not.
     routing_context: String,
+    /// Claude Code permission mode: manual, acceptEdits, auto or bypassPermissions.
+    claude_permission: String,
 }
 
 fn post(client: &Client, base: &str, path: &str, body: Value) -> Result<Value, Box<dyn Error>> {
@@ -130,6 +132,7 @@ fn agent_result(
     base: &str,
     runtime: &str,
     workspace: &Path,
+    claude_permission: &str,
 ) -> Result<Value, Box<dyn Error>> {
     let file = match runtime {
         "codex-readonly" | "codex-write" | "codex-full" => "codex-runner.mjs",
@@ -142,6 +145,7 @@ fn agent_result(
         .env("TAGMAILS_LAB_URL", base)
         .env("TAGMAILS_RUNTIME", runtime)
         .env("TAGMAILS_WORKSPACE", workspace)
+        .env("TAGMAILS_CLAUDE_PERMISSION", claude_permission)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -215,7 +219,16 @@ fn publish_model_catalog(
     token: &str,
     workspace: &Path,
 ) -> Result<(), Box<dyn Error>> {
-    let catalog = run_adapter_json("codex-models.mjs", workspace, "files")?;
+    // Either CLI may be missing; publish whatever this machine has.
+    let codex = run_adapter_json("codex-models.mjs", workspace, "files");
+    let claude = run_adapter_json("claude-models.mjs", workspace, "files");
+    if let (Err(codex_error), Err(claude_error)) = (&codex, &claude) {
+        return Err(format!("no models found (Codex: {codex_error}; Claude: {claude_error})").into());
+    }
+    let catalog = json!({
+        "models": codex.ok().map(|value| value["models"].clone()).unwrap_or(json!([])),
+        "claudeModels": claude.ok().map(|value| value["models"].clone()).unwrap_or(json!([])),
+    });
     let response = relay_post(client, base, "/api/device/models", token, catalog)?;
     if response["saved"] != true {
         return Err("Relay did not save the model catalog".into());
@@ -448,19 +461,28 @@ fn pair_relay(base: &str, code: &str, path: &Path, name: &str) -> Result<(), Box
     Ok(())
 }
 
-fn relay_runtime(model: &str, access: &str) -> Result<&'static str, Box<dyn Error>> {
-    match (
-        model.starts_with("gpt-"),
-        model.starts_with("claude-"),
-        access,
-    ) {
-        (true, false, "read") => Ok("codex-readonly"),
-        (true, false, "write") => Ok("codex-write"),
-        (true, false, "full") => Ok("codex-full"),
-        (false, true, "read") => Ok("claude-readonly"),
-        (false, true, "write") => Ok("claude-write"),
-        (_, _, "read" | "write" | "full") => Err("Relay claim has an unsupported model or access mode".into()),
-        _ => Err("TAGMAILS_WORKSPACE_ACCESS must be read, write, or full".into()),
+/// Codex runs with the machine's access setting; Claude Code with its own
+/// permission mode (the runner reads TAGMAILS_CLAUDE_PERMISSION).
+fn relay_runtime(
+    model: &str,
+    access: &str,
+    claude_permission: &str,
+) -> Result<&'static str, Box<dyn Error>> {
+    if !["read", "write", "full"].contains(&access) {
+        return Err("TAGMAILS_WORKSPACE_ACCESS must be read, write, or full".into());
+    }
+    if model.starts_with("claude-") {
+        return match claude_permission {
+            "readonly" | "manual" => Ok("claude-readonly"),
+            "acceptEdits" | "auto" | "bypassPermissions" => Ok("claude-write"),
+            _ => Err("Claude permission must be manual, acceptEdits, auto or bypassPermissions".into()),
+        };
+    }
+    match (model.starts_with("gpt-"), access) {
+        (true, "read") => Ok("codex-readonly"),
+        (true, "write") => Ok("codex-write"),
+        (true, "full") => Ok("codex-full"),
+        _ => Err("Relay claim has an unsupported model or access mode".into()),
     }
 }
 
@@ -468,6 +490,7 @@ fn relay_result(
     claim: &Value,
     base: &str,
     access: &str,
+    claude_permission: &str,
     workspace: &Path,
 ) -> Result<Value, Box<dyn Error>> {
     if let Some(error) = claim["model"]["error"].as_str() {
@@ -476,8 +499,8 @@ fn relay_result(
         );
     }
     let model = claim["model"]["id"].as_str().unwrap_or("");
-    let runtime = relay_runtime(model, access)?;
-    Ok(match agent_result(claim, base, runtime, workspace) {
+    let runtime = relay_runtime(model, access, claude_permission)?;
+    Ok(match agent_result(claim, base, runtime, workspace, claude_permission) {
         Ok(result) => result,
         Err(error) => {
             eprintln!("Local agent adapter failed: {error}");
@@ -650,7 +673,7 @@ fn relay_iteration(client: &Client, settings: &Settings) -> Result<bool, Box<dyn
             ) {
                 eprintln!("Status reaction could not be queued: {error}");
             }
-            relay_result(&claim, base, access, workspace)?
+            relay_result(&claim, base, access, &settings.claude_permission, workspace)?
         }
     };
     if result["state"] == "completed" && wants_answer_file(&claim) {
@@ -878,6 +901,7 @@ mod tests {
             &json!({"model":{"error":"Use Codex, Claude, or Luna."}}),
             "unused",
             "read",
+            "manual",
             Path::new("/unused"),
         )
         .unwrap();
@@ -887,26 +911,16 @@ mod tests {
 
     #[test]
     fn relay_write_access_is_explicit_and_model_specific() {
-        assert_eq!(
-            relay_runtime("gpt-6-luna", "read").unwrap(),
-            "codex-readonly"
-        );
-        assert_eq!(
-            relay_runtime("claude-sonnet-5-5", "read").unwrap(),
-            "claude-readonly"
-        );
-        assert_eq!(
-            relay_runtime("gpt-6.1-sol", "write").unwrap(),
-            "codex-write"
-        );
-        assert_eq!(relay_runtime("gpt-6-sol", "full").unwrap(), "codex-full");
-        assert!(relay_runtime("claude-sonnet-5-5", "full").is_err());
-        assert_eq!(
-            relay_runtime("claude-sonnet-5-5", "write").unwrap(),
-            "claude-write"
-        );
-        assert!(relay_runtime("unknown", "write").is_err());
-        assert!(relay_runtime("gpt-6-luna", "broad").is_err());
+        assert_eq!(relay_runtime("gpt-6-luna", "read", "manual").unwrap(), "codex-readonly");
+        assert_eq!(relay_runtime("gpt-6.1-sol", "write", "manual").unwrap(), "codex-write");
+        assert_eq!(relay_runtime("gpt-6-sol", "full", "manual").unwrap(), "codex-full");
+        // Claude follows its own permission mode, whatever the Codex access is.
+        assert_eq!(relay_runtime("claude-opus-5-5", "read", "manual").unwrap(), "claude-readonly");
+        assert_eq!(relay_runtime("claude-opus-5-5", "read", "auto").unwrap(), "claude-write");
+        assert_eq!(relay_runtime("claude-opus-5-5", "full", "acceptEdits").unwrap(), "claude-write");
+        assert!(relay_runtime("claude-opus-5-5", "read", "plan").is_err());
+        assert!(relay_runtime("unknown", "write", "manual").is_err());
+        assert!(relay_runtime("gpt-6-luna", "broad", "manual").is_err());
     }
 
     #[test]
@@ -1011,6 +1025,7 @@ mod tests {
             access: "read".into(),
             workspace: None,
             routing_context: "full".into(),
+            claude_permission: "acceptEdits".into(),
         };
         let claim = |workspace: Value| json!({"threadId":"thread-1","workspace":workspace});
         assert_eq!(
@@ -1073,7 +1088,8 @@ fn run_lab() -> Result<(), Box<dyn Error>> {
             Ok(claim) if claim["claimed"] == true => {
                 let result = if runtime != "mock" {
                     let workspace = PathBuf::from(env::var("TAGMAILS_WORKSPACE")?);
-                    match agent_result(&claim, &base, &runtime, &workspace) {
+                    let permission = if runtime == "claude-write" { "acceptEdits" } else { "readonly" };
+                    match agent_result(&claim, &base, &runtime, &workspace, permission) {
                         Ok(result) => result,
                         Err(error) => {
                             eprintln!("Local agent adapter failed: {error}");
@@ -1122,6 +1138,7 @@ const HELP: &str = "TagMails: email your coding agent.
 Usage:
   tagmails pair <code> [--name NAME] [--relay URL]   Connect this machine to your account
   tagmails start [--access read|write|full] [--workspace PATH | --projects]
+                 [--claude-permission manual|accept-edits|auto|bypass]
                  [--routing-context full|files]    Save settings and run in the background
   tagmails status                                  Show settings, connection and service state
   tagmails stop                                    Stop the background service
@@ -1186,6 +1203,7 @@ fn settings_from_config() -> Result<Settings, Box<dyn Error>> {
         access: config["access"].as_str().unwrap_or("read").to_owned(),
         workspace: config["workspace"].as_str().map(PathBuf::from),
         routing_context: config["routingContext"].as_str().unwrap_or("full").to_owned(),
+        claude_permission: config["claudePermission"].as_str().unwrap_or("acceptEdits").to_owned(),
     })
 }
 
@@ -1232,6 +1250,16 @@ fn command_start(args: &[String]) -> Result<(), Box<dyn Error>> {
     }
     if config["access"].is_null() {
         config["access"] = json!("read");
+    }
+    if let Some(permission) = option(args, "--claude-permission")? {
+        let mode = match permission.as_str() {
+            "manual" => "manual",
+            "accept-edits" | "acceptEdits" => "acceptEdits",
+            "auto" => "auto",
+            "bypass" | "bypassPermissions" => "bypassPermissions",
+            _ => return Err("--claude-permission must be manual, accept-edits, auto or bypass".into()),
+        };
+        config["claudePermission"] = json!(mode);
     }
     if let Some(context) = option(args, "--routing-context")? {
         if !["full", "files"].contains(&context.as_str()) {
@@ -1300,7 +1328,8 @@ fn command_status() -> Result<(), Box<dyn Error>> {
     println!("  Connection  {connection}");
     println!("  Relay       {relay}");
     println!("  Service     {}", service::status());
-    println!("  Access      {}", config["access"].as_str().unwrap_or("read"));
+    println!("  Access      Codex {}, Claude {}", config["access"].as_str().unwrap_or("read"),
+        config["claudePermission"].as_str().unwrap_or("acceptEdits"));
     if config["workspace"].is_null() {
         println!("  Routing     {} context", config["routingContext"].as_str().unwrap_or("full"));
     }
@@ -1446,6 +1475,10 @@ fn legacy_relay(args: &[String]) -> Result<(), Box<dyn Error>> {
         access: env::var("TAGMAILS_WORKSPACE_ACCESS").unwrap_or_else(|_| "read".into()),
         workspace: Some(PathBuf::from(env::var("TAGMAILS_WORKSPACE")?)),
         routing_context: "files".into(),
+        claude_permission: match env::var("TAGMAILS_WORKSPACE_ACCESS").as_deref() {
+            Ok("write") => "acceptEdits".into(),
+            _ => "readonly".into(),
+        },
     };
     run_relay(&settings, once)
 }

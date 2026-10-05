@@ -52,6 +52,10 @@ export function chooseModel(body, defaultModel = 'gpt-6.1-sol', { codexModel = '
     luna: ['gpt-6-luna', 'medium'],
     'gpt-6-luna': ['gpt-6-luna', 'medium'],
   };
+  // With a live catalog, "claude" means the machine's first Claude model.
+  const firstClaude = availableModels?.find((model) => model.id.startsWith('claude-'))?.id;
+  if (firstClaude) { choices.claude = [firstClaude, 'medium']; choices['claude code'] = [firstClaude, 'medium']; }
+  for (const model of availableModels ?? []) choices[model.id] = [model.id, 'medium'];
   const match = requested.match(/^(.*?)(?:\s+(low|medium|high|xhigh|max|ultra))?$/);
   const choice = choices[match?.[1]];
   return choice && (!availableModels?.length || availableModels.some((model) => model.id === choice[0]))

@@ -9,11 +9,33 @@ import { formatAgentAnswer } from './answer-result.mjs';
 import { renewClaim } from './claim-renew.mjs';
 import { addRunEvent, claudeRunEvents, finishRunTranscript, runTranscript } from './run-transcript.mjs';
 
-const MODEL = 'claude-sonnet-5-5';
 const SESSION_ID = /^[0-9a-f-]{36}$/i;
 const MAX_CLAIM = 8 * 1024 * 1024;
+const MODEL_ID = /^claude-[a-z0-9.-]{1,60}$/;
 
-function runtime(write) { return write ? 'claude-cli-write' : 'claude-cli-readonly'; }
+// Claude Code permission modes offered by email. Nobody can answer a prompt
+// mid-run, so anything that would ask is declined (--permission-prompts none).
+// "readonly" is the original pilot mode, kept for existing installs.
+export const MODES = {
+  readonly: { tools: 'Read,Glob,Grep', permission: 'dontAsk', restricted: true, write: false, label: 'claude-cli-readonly' },
+  manual: { tools: 'Read,Glob,Grep,Edit,Write,Bash,WebFetch,WebSearch', permission: 'manual', restricted: true, write: false, label: 'claude-cli-manual' },
+  acceptEdits: { tools: 'Read,Glob,Grep,Edit,Write', permission: 'acceptEdits', restricted: true, write: true, label: 'claude-cli-write' },
+  auto: { tools: null, permission: 'auto', restricted: true, write: true, label: 'claude-cli-auto' },
+  bypassPermissions: { tools: null, permission: 'bypassPermissions', restricted: false, write: true, ownerOnly: true, label: 'claude-cli-bypass' },
+};
+
+export function selectedMode(env = process.env) {
+  const requested = env.TAGMAILS_CLAUDE_PERMISSION;
+  if (requested && Object.hasOwn(MODES, requested)) return requested;
+  return env.TAGMAILS_RUNTIME === 'claude-write' ? 'acceptEdits' : 'readonly';
+}
+
+const EFFORTS = { none: 'low', minimal: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max', ultra: 'max' };
+
+function runtime(write) {
+  const mode = selectedMode();
+  return MODES[mode].write === write ? MODES[mode].label : write ? 'claude-cli-write' : 'claude-cli-readonly';
+}
 
 function fail(summary, write) {
   return { runtime: runtime(write), state: 'failed', summary, checks: [write
@@ -86,8 +108,8 @@ function resultFromAnswer(answer, write) {
     summary: formatted.summary,
     details: formatted.details,
     answer: formatted.answer,
-    checks: [write ? `Claude ${MODEL} completed with file tools in the selected workspace; review its reported edits and checks.`
-      : `Claude ${MODEL} completed with read-only file tools; no write tool was available.`,
+    checks: [write ? `Claude completed in ${selectedMode()} mode in the selected workspace; review its reported edits and checks.`
+      : `Claude completed without changing files (${selectedMode()} mode).`,
     ...(formatted.answerTruncated ? ['The agent answer was shortened to fit this email. Reply to request the omitted portion.'] : [])],
   };
 }
@@ -114,17 +136,25 @@ function reportedUsage(event) {
   return { usage, ...cost };
 }
 
+const SYSTEM_PROMPTS = {
+  readonly: 'You are TagMails, an email agent. Read files only in the selected local workspace. Never write files, run commands, use the web, send messages, or take external actions. Reply in concise plain text.',
+  manual: 'You are TagMails, an email agent working from an email. Nobody can approve actions during this run, so any tool use that needs approval will be declined; work with what you can read and say what you would need approved. Never send messages, deploy, or purchase.',
+  acceptEdits: 'You are TagMails, an email agent. Read and edit files only in the selected local workspace. Never run commands, use the web, send messages, deploy, purchase, or take external actions. Report file changes and checks.',
+  auto: 'You are TagMails, an email agent working in the selected local workspace. Claude Code\'s auto mode decides which actions are safe; anything it would ask about is declined. Never send messages, deploy, or purchase unless the sender explicitly asked. Report changes and checks.',
+  bypassPermissions: 'You are TagMails, an email agent with full access on the owner\'s computer. Act carefully: never send messages, deploy, purchase, or delete data unless the owner explicitly asked in this email. Report every change and check.',
+};
+
 async function runClaude(claim, workspace, sessionId, staged, write) {
+  const mode = MODES[selectedMode()];
   const args = [
-    '--print', '--output-format', 'stream-json', '--verbose', '--safe-mode', '--restricted',
+    '--print', '--output-format', 'stream-json', '--verbose', '--safe-mode',
+    ...(mode.restricted ? ['--restricted'] : []),
     '--strict-mcp-config', '--disable-slash-commands', '--no-chrome',
-    '--tools', write ? 'Read,Glob,Grep,Edit,Write' : 'Read,Glob,Grep', '--disallowedTools', 'mcp__*',
-    '--permission-mode', write ? 'acceptEdits' : 'dontAsk',
-    '--permission-prompts', 'none', '--model', MODEL, '--effort', claim.model.effort,
-    '--system-prompt', write
-      ? 'You are TagMails, an email agent. Read and edit files only in the selected local workspace. Never run commands, use the web, send messages, deploy, purchase, or take external actions. Report file changes and checks in concise plain text.'
-      : 'You are TagMails, an email agent. Read files only in the selected local workspace. Never write files, run commands, use the web, send messages, or take external actions. Reply in concise plain text.',
-    '--system-prompt-snapshot', 'on', '--max-budget-usd', '0.25',
+    ...(mode.tools ? ['--tools', mode.tools] : []), '--disallowedTools', 'mcp__*',
+    '--permission-mode', mode.permission,
+    '--permission-prompts', 'none', '--model', claim.model.id, '--effort', EFFORTS[claim.model.effort],
+    '--system-prompt', SYSTEM_PROMPTS[selectedMode()],
+    '--system-prompt-snapshot', 'on', '--max-budget-usd', process.env.TAGMAILS_CLAUDE_MAX_BUDGET_USD || '5',
   ];
   if (sessionId) args.push('--resume', sessionId);
   const child = spawn(process.env.TAGMAILS_CLAUDE_BIN || 'claude', args, {
@@ -168,14 +198,14 @@ async function runClaude(claim, workspace, sessionId, staged, write) {
       if (++renewFailures >= 3) { leaseLost = true; child.kill(); }
     }
   }, Number(process.env.TAGMAILS_CLAIM_RENEW_MS || 15_000));
-  const timeout = setTimeout(() => { timedOut = true; child.kill(); }, 180_000);
+  const timeout = setTimeout(() => { timedOut = true; child.kill(); }, Number(process.env.TAGMAILS_CLAUDE_TIMEOUT_MS || 30 * 60_000));
   try {
     const code = await new Promise((resolve, reject) => {
       child.once('error', reject);
       child.once('close', resolve);
     });
     if (leaseLost) return failed('The local claim lease was lost while Claude was running.');
-    if (timedOut) return failed('Claude did not finish within the three-minute prototype limit.');
+    if (timedOut) return failed('Claude did not finish within the time limit for one email.');
     if (outputExceeded) return failed('Claude produced too much output for this prototype.');
     if (invalidOutput) return failed('Claude returned an unreadable event stream.');
     if (code !== 0) return failed(`Claude stopped without a completed turn (exit ${code}).`);
@@ -199,11 +229,16 @@ async function runClaude(claim, workspace, sessionId, staged, write) {
 }
 
 export async function runClaim(claim) {
-  const write = process.env.TAGMAILS_RUNTIME === 'claude-write';
+  const mode = MODES[selectedMode()];
+  const write = mode.write;
   if (!claim?.claimed || !/^[a-z0-9-]+$/.test(claim.jobId || '') || !/^[a-z0-9-]+$/.test(claim.threadId || '')) throw new Error('Invalid local claim');
   if (claim.model?.error) return { runtime: runtime(write), state: 'needs_clarification', summary: claim.model.error };
-  if (claim.model?.id !== MODEL || !['low', 'medium', 'high', 'xhigh', 'max'].includes(claim.model.effort) ||
-      !['standard', undefined].includes(claim.model.speed)) return fail('Claude Sonnet 5.5 does not offer this effort or speed in the pilot.', write);
+  if (mode.ownerOnly && claim.request?.fromOwner !== true) {
+    return { ...fail('Bypass permissions only runs emails from the account owner.', write), state: 'needs_clarification' };
+  }
+  if (!MODEL_ID.test(claim.model?.id ?? '') || !Object.hasOwn(EFFORTS, claim.model.effort)) {
+    return fail('The selected Claude model or effort is not available.', write);
+  }
   const selected = process.env.TAGMAILS_WORKSPACE;
   if (!selected || !path.isAbsolute(selected) || !(await fs.stat(selected)).isDirectory()) throw new Error('Select an absolute TAGMAILS_WORKSPACE directory');
   const workspace = await fs.realpath(selected);
@@ -249,6 +284,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     process.stdout.write(`${JSON.stringify(await runClaim(await readClaim()))}\n`);
   } catch (error) {
     process.stderr.write(`TagMails Claude adapter: ${error.message}\n`);
-    process.stdout.write(`${JSON.stringify(fail('The local Claude adapter could not complete this turn.', process.env.TAGMAILS_RUNTIME === 'claude-write'))}\n`);
+    process.stdout.write(`${JSON.stringify(fail('The local Claude adapter could not complete this turn.', MODES[selectedMode()].write))}\n`);
   }
 }

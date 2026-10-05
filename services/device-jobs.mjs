@@ -3,7 +3,7 @@ import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.m
 import { chooseModel } from '../apps/mock-inbox/model.mjs';
 import { testBillingEnabled } from './email-charges.mjs';
 import { ARTIFACT_ID, selectedRunArtifacts, uploadRunArtifact } from './run-artifacts.mjs';
-import { cleanCodexCatalog } from './model-catalog.mjs';
+import { catalogFromDevice } from './model-catalog.mjs';
 import { cleanProjectCatalog } from './project-route.mjs';
 
 const TOKEN = /^tm_dev_[A-Za-z0-9_-]{43}$/;
@@ -283,7 +283,7 @@ export async function handleDeviceRequest(request, env) {
   catch { return json({ error: 'Invalid or oversized JSON body' }, 400); }
   if (url.pathname === '/api/device/models') {
     let models;
-    try { models = cleanCodexCatalog(body?.models); }
+    try { models = catalogFromDevice(body); }
     catch { return json({ error: 'Invalid model catalog' }, 400); }
     await env.DB.prepare(`UPDATE devices SET model_catalog_json = ?, model_catalog_at = CURRENT_TIMESTAMP
       WHERE id = ? AND account_id = ? AND revoked_at IS NULL`)

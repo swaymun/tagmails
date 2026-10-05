@@ -62,3 +62,31 @@ test('Jev chooses a model from the Mac catalog and rejects unsupported settings'
   });
   assert.match(unsupported.error, /does not offer ultra reasoning/);
 });
+
+test('a machine can publish Codex and Claude models together, or either alone', async () => {
+  const { catalogFromDevice } = await import('./model-catalog.mjs');
+  const codex = [{ id: 'gpt-6-sol', name: 'GPT-6 Sol', supportedReasoningEfforts: [{ reasoningEffort: 'medium' }], serviceTiers: [] }];
+  const claude = [{ id: 'claude-opus-5-5', name: 'Opus 5.5', efforts: ['low', 'medium', 'max'], speeds: ['standard', 'fast'] }];
+  const both = catalogFromDevice({ models: codex, claudeModels: claude });
+  assert.deepEqual(both.map((model) => [model.id, model.harness]), [['gpt-6-sol', 'codex'], ['claude-opus-5-5', 'claude']]);
+  assert.deepEqual(catalogFromDevice({ claudeModels: claude }).map((model) => model.id), ['claude-opus-5-5']);
+  assert.throws(() => catalogFromDevice({}));
+  assert.throws(() => catalogFromDevice({ claudeModels: [{ ...claude[0], id: 'gpt-6-sol' }] }));
+  assert.throws(() => catalogFromDevice({ claudeModels: [{ ...claude[0], efforts: ['ultra'] }] }));
+});
+
+test('"use Claude" routes to the machine\'s Claude model', async () => {
+  const { routeModel } = await import('./jev-route.mjs');
+  const availableModels = [
+    { id: 'gpt-6-sol', name: 'GPT-6 Sol', efforts: ['low', 'medium', 'high'], speeds: ['standard'] },
+    { id: 'claude-opus-5-5', name: 'Opus 5.5', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], speeds: ['standard', 'fast'] },
+  ];
+  const jev = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    assert.match(body.questions.route.criteria.model1, /Opus 5\.5 \(claude-opus-5-5\)/);
+    return Response.json({ answers: { route: { type: 'choice', choice: 'claude', probabilities: { claude: 0.9 } },
+      requestedEffort: { type: 'choice', choice: 'max', probabilities: { max: 0.9 } } } });
+  };
+  assert.deepEqual(await routeModel('Use Claude at max effort to review this.', 'gpt-6-sol', { apiKey: 'k', fetcher: jev, availableModels }),
+    { id: 'claude-opus-5-5', effort: 'max', source: 'classified' });
+});

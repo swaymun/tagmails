@@ -25,7 +25,7 @@ export async function saveAccountPreferences(env, account, input) {
   if (available && (!available.efforts.includes(effort) || !available.speeds.includes(speed))) {
     throw new Error('That model does not offer the selected reasoning effort or speed on this Mac.');
   }
-  if (model === 'claude-sonnet-5-5' && speed !== 'standard') {
+  if (!available && model === 'claude-sonnet-5-5' && speed !== 'standard') {
     throw new Error('Claude Code does not offer this speed in the pilot.');
   }
   if (model === 'gpt-6-luna' && effort === 'ultra') {

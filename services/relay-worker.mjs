@@ -267,7 +267,7 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
     model = { error: workspace.ask };
     workspaceJson = JSON.stringify({ pending: await sealText(env, projectState.slice(0, 2000)) });
   }
-  if (model?.id === 'claude-sonnet-5-5' && env.CLAUDE_ROUTE_ENABLED !== 'true') {
+  if (model?.id?.startsWith('claude-') && env.CLAUDE_ROUTE_ENABLED !== 'true') {
     model = { error: 'Claude models are not enabled in this pilot. Ask for an available OpenAI model or omit the model to use your default.' };
   }
   const unavailableResult = threadUnavailable ? {

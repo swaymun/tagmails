@@ -511,3 +511,34 @@ test('only the signed-in owner grants and revokes a hidden participant on an exi
   assert.equal(sqlite.prepare("SELECT state FROM jobs j JOIN messages m ON m.id = j.message_id WHERE m.sender_email = 'hidden@gmail.com'").get().state, 'failed');
   assert.deepEqual(await deliver('hidden-revoked', 'hidden@gmail.com', ['<owner-first@gmail.com>']), { accepted: false });
 });
+
+test('the site trades a Google code for a 30-day session that later requests can use', async () => {
+  const { env } = bindings();
+  env.GOOGLE_CLIENT_ID = clientId;
+  env.AGENT_DOMAIN ??= 'wonder.test';
+  env.SITE_ORIGIN = 'https://tagmails.example';
+  env.GOOGLE_CLIENT_SECRET = 'secret';
+  env.PILOT_OWNER_EMAIL = 'owner@gmail.com';
+  const exchanged = [];
+  const options = {
+    verifyIdentity: async (credential) => {
+      if (credential !== 'id-token-from-code') throw new Error('bad');
+      return { sub: 'google-sub-1', email: 'owner@gmail.com' };
+    },
+    exchangeCode: async (url, init) => { exchanged.push(Object.fromEntries(new URLSearchParams(init.body)));
+      return Response.json({ id_token: 'id-token-from-code' }); },
+  };
+  const site = (path, method = 'GET', body, token) => new Request(`https://relay.test${path}`, { method,
+    headers: { Origin: env.SITE_ORIGIN, ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
+  const signIn = await (await handleAccountRequest(site('/api/auth/google', 'POST', { code: 'g-code' }), env, options)).json();
+  assert.equal(exchanged[0].redirect_uri, 'postmessage');
+  assert.equal(exchanged[0].code, 'g-code');
+  assert.match(signIn.sessionToken, /^tm_ses_[A-Za-z0-9_-]{43}$/);
+  assert.equal(signIn.ownerEmail, undefined);
+  const account = await handleAccountRequest(site('/api/site/account', 'GET', null, signIn.sessionToken), env, options);
+  assert.equal(account.status, 200);
+  assert.equal((await account.json()).ownerEmail, 'owner@gmail.com');
+  await handleAccountRequest(site('/api/site/logout', 'POST', null, signIn.sessionToken), env, options);
+  assert.equal((await handleAccountRequest(site('/api/site/account', 'GET', null, signIn.sessionToken), env, options)).status, 401);
+});

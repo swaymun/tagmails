@@ -88,7 +88,39 @@ export async function accountFor(request, env) {
       AND a.active = 1 LIMIT 1`).bind(hash(token)).first();
 }
 
-async function signIn(request, env, verifyIdentity) {
+const SITE_SESSION = /^tm_ses_[A-Za-z0-9_-]{43}$/;
+
+// Google's popup code flow: the browser never shows a personalized
+// "Continue as" button, and the relay trades the code for an ID token.
+export async function exchangeGoogleCode(env, code, fetcher = fetch) {
+  if (!env.GOOGLE_CLIENT_SECRET || code.length > 2000) throw new Error('Google code sign-in is not configured');
+  const response = await fetcher('https://oauth2.googleapis.com/token', {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ code, client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET,
+      redirect_uri: 'postmessage', grant_type: 'authorization_code' }),
+  });
+  if (!response.ok) throw new Error('Google code exchange failed');
+  const { id_token: idToken } = await response.json();
+  if (typeof idToken !== 'string') throw new Error('Google returned no ID token');
+  return idToken;
+}
+
+async function siteSessionAccount(env, token) {
+  if (!SITE_SESSION.test(token ?? '')) return null;
+  return env.DB.prepare(`SELECT a.id, a.google_sub, a.owner_email, a.agent_email, a.default_model FROM sessions s
+    JOIN accounts a ON a.id = s.account_id
+    WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > CURRENT_TIMESTAMP AND a.active = 1 LIMIT 1`)
+    .bind(hash(token)).first();
+}
+
+// A site request proves who it is with a TagMails session or a Google ID token.
+async function siteIdentity(env, credential, verifyIdentity) {
+  const account = await siteSessionAccount(env, credential);
+  if (account) return { sub: account.google_sub, email: account.owner_email };
+  return verifyIdentity(credential, env.GOOGLE_CLIENT_ID);
+}
+
+async function signIn(request, env, verifyIdentity, exchangeCode) {
   const fromSite = Boolean(siteOriginFor(request, env));
   const headers = siteCors(request, env);
   if (!sameOrigin(request) && !fromSite) return json({ error: 'Invalid origin' }, 403);
@@ -96,7 +128,9 @@ async function signIn(request, env, verifyIdentity) {
   let identity;
   try {
     const body = await bodyJson(request);
-    identity = await verifyIdentity(body.credential, env.GOOGLE_CLIENT_ID);
+    const credential = typeof body.code === 'string' && fromSite
+      ? await exchangeGoogleCode(env, body.code, exchangeCode) : body.credential;
+    identity = await verifyIdentity(credential, env.GOOGLE_CLIENT_ID);
   } catch { return json({ error: 'Google sign-in failed' }, 401, headers); }
   if (env.PUBLIC_SIGNUP_ENABLED !== 'true' &&
       identity.email !== String(env.PILOT_OWNER_EMAIL ?? '').trim().toLowerCase()) {
@@ -125,7 +159,13 @@ async function signIn(request, env, verifyIdentity) {
   const account = await env.DB.prepare('SELECT id, owner_email, agent_email, default_model FROM accounts WHERE google_sub = ? AND active = 1')
     .bind(identity.sub).first();
   if (!account || account.owner_email !== identity.email) return json({ error: 'Account could not be created' }, 409, headers);
-  if (fromSite) return json({ ownerEmail: account.owner_email, agentEmail: account.agent_email }, 200, headers);
+  if (fromSite) {
+    // The site keeps a 30-day session so people stay signed in between visits.
+    const sessionToken = `tm_ses_${randomBytes(32).toString('base64url')}`;
+    await env.DB.prepare("INSERT INTO sessions (token_hash, account_id, expires_at) VALUES (?, ?, datetime('now', '+30 days'))")
+      .bind(hash(sessionToken), account.id).run();
+    return json({ sessionToken, agentEmail: account.agent_email }, 200, headers);
+  }
   const token = randomBytes(32).toString('base64url');
   await env.DB.prepare("INSERT INTO sessions (token_hash, account_id, expires_at) VALUES (?, ?, datetime('now', '+30 days'))")
     .bind(hash(token), account.id).run();
@@ -171,7 +211,7 @@ export function siteCors(request, env) {
 export async function siteOwnerFor(request, env, verifyIdentity = verifyGoogleCredential) {
   const credential = request.headers.get('authorization')?.match(/^Bearer (\S+)$/)?.[1];
   let identity;
-  try { identity = await verifyIdentity(credential, env.GOOGLE_CLIENT_ID); }
+  try { identity = await siteIdentity(env, credential, verifyIdentity); }
   catch { return { error: 'Google sign-in required', status: 401 }; }
   const account = await env.DB.prepare('SELECT id, owner_email, agent_email, default_model FROM accounts WHERE google_sub = ? AND active = 1')
     .bind(identity.sub).first();
@@ -333,6 +373,14 @@ async function siteAccountRequest(request, env, pathname, verifyIdentity) {
   if (participantAction && request.method === 'POST') {
     return changeParticipant(request, env, account, participantAction[1], participantAction[2], headers);
   }
+  if (pathname === '/api/site/logout' && request.method === 'POST') {
+    const token = request.headers.get('authorization')?.match(/^Bearer (\S+)$/)?.[1];
+    if (SITE_SESSION.test(token ?? '')) {
+      await env.DB.prepare('UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP WHERE token_hash = ? AND account_id = ?')
+        .bind(hash(token), account.id).run();
+    }
+    return json({ signedOut: true }, 200, headers);
+  }
   if (pathname === '/api/site/pairing-code' && request.method === 'POST') {
     return json(await createPairingCode(env, account.id), 200, headers);
   }
@@ -461,7 +509,7 @@ async function artifactResponse(env, accountId, row, artifactId, headers = {}) {
   } });
 }
 
-export async function handleAccountRequest(request, env, { verifyIdentity = verifyGoogleCredential } = {}) {
+export async function handleAccountRequest(request, env, { verifyIdentity = verifyGoogleCredential, exchangeCode = fetch } = {}) {
   const { pathname } = new URL(request.url);
   if (pathname.startsWith('/api/site/')) {
     if (!env.DB) throw new Error('Account database is not configured');
@@ -485,7 +533,7 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
     const headers = siteCors(request, env);
     const credential = request.headers.get('authorization')?.match(/^Bearer (\S+)$/)?.[1];
     let identity;
-    try { identity = await verifyIdentity(credential, env.GOOGLE_CLIENT_ID); }
+    try { identity = await siteIdentity(env, credential, verifyIdentity); }
     catch { return json({ error: 'Google sign-in required' }, 401, headers); }
     const jobId = apiRunId ?? apiArtifact[1];
     const viewer = await runViewer(env, jobId, identity);
@@ -511,7 +559,7 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
       ? json({ clientId: env.GOOGLE_CLIENT_ID }, 200, siteCors(request, env))
       : json({ error: 'Google sign-in is not configured' }, 503, siteCors(request, env));
   }
-  if (pathname === '/api/auth/google' && request.method === 'POST') return signIn(request, env, verifyIdentity);
+  if (pathname === '/api/auth/google' && request.method === 'POST') return signIn(request, env, verifyIdentity, exchangeCode);
   if (pathname === '/api/device/pair' && request.method === 'POST') return pair(request, env);
   const account = await accountFor(request, env);
   if (receiptArtifact && request.method === 'GET') {

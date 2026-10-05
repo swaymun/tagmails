@@ -115,7 +115,8 @@ process.stdin.on('end', () => {
   assert.deepEqual(await runClaim(claim('job-3', '[budget-fail]')), budgetFailure);
   assert.equal(fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').length, 3);
 
-  assert.equal((await runClaim({ ...claim('job-4'), model: { id: 'claude-opus-5-5', effort: 'medium' } })).state, 'failed');
+  // Any Claude model the machine offers runs; a non-Claude model never reaches the CLI.
+  assert.equal((await runClaim({ ...claim('job-4'), model: { id: 'gpt-6-sol', effort: 'medium' } })).state, 'failed');
   assert.equal(fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').length, 3);
 
   process.env.TAGMAILS_RUNTIME = 'claude-write';
@@ -137,7 +138,7 @@ process.stdin.on('end', () => {
   assert.equal((await runClaim(claim('job-2', 'Continue.'))).runtime, 'claude-cli-write');
   const resumedWrite = fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).at(-1);
   assert.ok(resumedWrite.args.includes('33333333-3333-4333-8333-333333333333'));
-  const writeFailure = await runClaim({ ...claim('job-3'), model: { id: 'claude-opus-5-5', effort: 'medium' } });
+  const writeFailure = await runClaim({ ...claim('job-3'), model: { id: 'not-a-claude-model', effort: 'medium' } });
   assert.match(writeFailure.checks[0], /partial changes/);
   const denied = await runClaim(claim('job-4', '[outside-denied]'));
   assert.equal(denied.state, 'needs_approval');
@@ -169,4 +170,16 @@ test('Claude adapter keeps its session store outside the selected workspace', as
     else process.env.TAGMAILS_CLAUDE_SESSION_FILE = previous.store;
   });
   await assert.rejects(runClaim(claim('job-1')), /session store must be outside/);
+});
+
+test('each Claude permission mode maps to its CLI flags, and bypass is owner-only', async () => {
+  const { MODES, selectedMode } = await import('./claude-runner.mjs');
+  assert.equal(selectedMode({ TAGMAILS_CLAUDE_PERMISSION: 'auto' }), 'auto');
+  assert.equal(selectedMode({ TAGMAILS_CLAUDE_PERMISSION: 'plan' }), 'readonly');
+  assert.equal(selectedMode({ TAGMAILS_RUNTIME: 'claude-write' }), 'acceptEdits');
+  assert.deepEqual(Object.keys(MODES).sort(), ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'readonly']);
+  assert.equal(MODES.manual.write, false);
+  assert.equal(MODES.bypassPermissions.restricted, false);
+  assert.equal(MODES.bypassPermissions.ownerOnly, true);
+  assert.equal(MODES.acceptEdits.tools.includes('Bash'), false);
 });

@@ -22,12 +22,17 @@ export function currentText(body) {
 export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, priorModel, subject,
   pilotCodexModel, defaultEffort = 'medium', defaultSpeed = 'standard', availableModels } = {}) {
   const catalog = Array.isArray(availableModels) && availableModels.length ? availableModels : null;
-  const codexModel = catalog
-    ? [pilotCodexModel, defaultModel, 'gpt-6-sol', 'gpt-6.1-sol'].find((id) => catalog.some((model) => model.id === id)) ?? catalog[0].id
+  const codexModels = catalog?.filter((model) => !model.id.startsWith('claude-')) ?? [];
+  const claudeModels = catalog?.filter((model) => model.id.startsWith('claude-')) ?? [];
+  const codexModel = codexModels.length
+    ? [pilotCodexModel, defaultModel, 'gpt-6-sol', 'gpt-6.1-sol'].find((id) => codexModels.some((model) => model.id === id)) ?? codexModels[0].id
     : pilotCodexModel === 'gpt-6-sol' ? 'gpt-6-sol' : 'gpt-6.1-sol';
+  // "Use Claude" means the account's Claude default, or the machine's first Claude model.
+  const claudeModel = claudeModels.length
+    ? { id: (claudeModels.find((model) => model.id === defaultModel) ?? claudeModels[0]).id, effort: 'medium' } : CLAUDE;
   const routes = {
     codex: { id: codexModel, effort: 'medium' },
-    claude: CLAUDE,
+    claude: claudeModel,
     ...(catalog ? {} : { codex61: { id: 'gpt-6.1-sol', effort: 'medium' } }),
     ...(catalog ? {} : { luna: LUNA }),
   };
@@ -51,7 +56,7 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
   const subjectText = knownPrior ? '' : String(subject ?? '').replace(/[\r\n]+/g, ' ').slice(0, 300).trim();
   const state = subjectText ? `Subject: ${subjectText}\nBody:\n${text}` : text;
   function checked(selection, requested = false) {
-    if (!catalog || selection.error || selection.id === CLAUDE.id) return selection;
+    if (!catalog || selection.error || (selection.id === CLAUDE.id && !claudeModels.length)) return selection;
     const model = catalog.find((item) => item.id === selection.id);
     if (!model) return { error: UNAVAILABLE_MODEL };
     if (!model.efforts.includes(selection.effort)) {
@@ -80,7 +85,7 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
             criteria: {
               none: 'No clear request to use one of the listed models for this task.',
               codex: 'The sender asks to use Codex, Sol, or Seoul as a generic model name without specifying a model version.',
-              claude: 'The sender asks to use Claude without naming another variant, or specifically asks for Sonnet 5.5.',
+              claude: 'The sender asks to use Claude or Claude Code without naming a specific Claude model.',
               ...(catalog ? {} : { codex61: 'The sender explicitly asks to use GPT-6.1 Sol by version, rather than generic Codex or Sol.' }),
               ...(routes.luna ? { luna: 'The sender asks to use Luna without naming an exact version.' } : {}),
               ...Object.fromEntries((catalog ?? []).map((model, index) => [`model${index}`,
