@@ -164,8 +164,7 @@ async function refresh() {
 
 let pairCode = '';
 function pairCommand() {
-  return 'mkdir -p "$HOME/.config/tagmails" && TAGMAILS_RELAY_URL=' + location.origin +
-    ' TAGMAILS_DEVICE_TOKEN_FILE="$HOME/.config/tagmails/device-token" cargo run -p tagmails-daemon -- --pair ' + pairCode;
+  return 'tagmails pair ' + pairCode + ' --relay ' + location.origin;
 }
 function shellQuote(value) {
   const quote = String.fromCharCode(39);
@@ -179,10 +178,7 @@ function installCommand() {
     throw new Error('Enter an absolute workspace path on your Mac.');
   }
   if (access !== 'read' && access !== 'write') throw new Error('Choose read-only or edit access.');
-  return 'cargo build --release -p tagmails-daemon && node scripts/install-macos-launchagent.mjs' +
-    ' --relay ' + shellQuote(location.origin) + ' --workspace ' + shellQuote(workspace) +
-    ' --workspace-access ' + access +
-    ' --token-file "$HOME/.config/tagmails/device-token"';
+  return 'tagmails start --access ' + access + ' --workspace ' + shellQuote(workspace);
 }
 document.addEventListener('DOMContentLoaded', () => {
   $('pair').addEventListener('click', async () => {
@@ -198,7 +194,7 @@ document.addEventListener('DOMContentLoaded', () => {
     finally { $('pair').disabled = false; }
   });
   $('copyPair').addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(pairCommand()); status('Pairing command copied. Run it from your TagMails checkout.'); }
+    try { await navigator.clipboard.writeText(pairCommand()); status('Pairing command copied. Run it on the computer that will run the agent.'); }
     catch { status('Copy failed. Select the command above to copy it.'); }
   });
   const updateInstall = () => {
@@ -208,7 +204,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('workspace').addEventListener('input', updateInstall);
   $('workspaceAccess').addEventListener('change', updateInstall);
   $('copyInstall').addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(installCommand()); status('Start command copied. Run it from your TagMails checkout after pairing.'); }
+    try { await navigator.clipboard.writeText(installCommand()); status('Start command copied. Run it after pairing.'); }
     catch (error) { status(error.message === 'Enter an absolute workspace path on your Mac.' ? error.message : 'Copy failed. Select the command above to copy it.'); }
   });
   $('topup').addEventListener('click', async () => {
@@ -256,7 +252,7 @@ document.addEventListener('DOMContentLoaded', () => {
     <button id="saveDefaultModel" class="secondary">Save default model</button>
     <p class="muted">This private Mac pilot uses GPT-6 Sol while GPT-6.1 Sol is unavailable with its ChatGPT account. No model line is required. Ask naturally, such as “use Luna Medium for this” or “use Codex Fast,” to choose a model, effort, or available speed. When effort is unclear, TagMails uses Medium. Unsupported runtime choices receive a no-charge notice. Claude subscription requests are paused in this pilot.</p>
     <button id="signOut" class="secondary">Sign out</button></section>
-  <section class="card"><h2>Pair a Mac</h2><p>Create a one-time code, then run the setup command in your TagMails checkout. The device token stays in a file on your Mac.</p>
+  <section class="card"><h2>Pair a Mac</h2><p>Install the agent (<code>brew install swaymun/tagmails/tagmails</code> or <code>curl -fsSL https://tagmails.com/install.sh | sh</code>), create a one-time code, then run the pairing command. The device token stays on your computer.</p>
     <button id="pair">Create pairing code</button><p><code id="pairCode"></code></p><pre id="pairCommand"></pre>
     <button id="copyPair" class="secondary" hidden>Copy pairing command</button>
     <p class="muted">The command saves a device token under your home directory. It will not overwrite an existing token. Pairing does not start the agent or send email.</p></section>
@@ -266,7 +262,7 @@ document.addEventListener('DOMContentLoaded', () => {
     <p class="muted">If you allow edits, people you authorize on a thread can also request changes inside this folder.</p>
     <pre id="installCommand">Enter an absolute workspace path to prepare the command.</pre>
     <button id="copyInstall" class="secondary">Copy start command</button>
-    <p class="muted">The installer checks the path and token, then registers a macOS LaunchAgent. It refuses to overwrite an existing TagMails agent. The checkout and local CLI tools must remain available on this Mac.</p></section>
+    <p class="muted">This starts a launchd agent on macOS or a systemd user service on Linux. Run <code>tagmails status</code> to check it.</p></section>
   <section class="card"><h2>Devices</h2><div id="devices"></div></section>
   <section class="card"><h2>Shared threads</h2><p class="muted">Only you can grant or revoke reply access. To include someone hidden in Bcc, grant their address here after you send the thread. This does not send them an invitation or reveal them in a reply.</p><button id="refreshThreads" class="secondary">Refresh threads</button><div id="threads"></div></section>
   <section class="card"><h2>Test credits</h2><p id="balance">Loading balance…</p>

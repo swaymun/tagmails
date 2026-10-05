@@ -15,9 +15,7 @@ test('account setup generates a shell-quoted workspace command', async () => {
     location: { origin: 'https://relay.test' },
   });
   assert.ok(command.includes("--workspace '/tmp/O'\\''Neil;$(false)'"));
-  assert.ok(command.includes("--relay 'https://relay.test'"));
-  assert.match(command, /scripts\/install-macos-launchagent\.mjs/);
-  assert.match(command, /--workspace-access read/);
+  assert.match(command, /^tagmails start --access read --workspace /);
 });
 
 test('account setup makes write access an explicit command choice', async () => {
@@ -28,7 +26,7 @@ test('account setup makes write access an explicit command choice', async () => 
       addEventListener: () => {} },
     location: { origin: 'https://relay.test' },
   });
-  assert.match(command, /--workspace-access write/);
+  assert.match(command, /--access write/);
 });
 
 test('run receipt distinguishes provider acceptance from inbox delivery', async () => {

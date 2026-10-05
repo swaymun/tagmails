@@ -16,6 +16,11 @@ const STYLE = {
   a: 'color:#1f5c41;text-decoration:underline',
 };
 
+// Email needs inline styles; the website styles the same tags with its stylesheet.
+function css(name, styled) {
+  return styled ? ` style="${STYLE[name]}"` : '';
+}
+
 export function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -29,23 +34,23 @@ function httpsUrl(value) {
   } catch { return null; }
 }
 
-export function inline(source) {
+export function inline(source, styled = true) {
   const codes = [];
   let text = source.replace(/`([^`\n]+)`/g, (_, code) => {
-    codes.push(`<code style="${STYLE.code}">${escapeHtml(code)}</code>`);
+    codes.push(`<code${css('code', styled)}>${escapeHtml(code)}</code>`);
     return `\u0000${codes.length - 1}\u0000`;
   });
   const links = [];
   text = text.replace(/\[([^\]\n]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (_, label, href) => {
     const url = httpsUrl(href);
     // Local file links (common in agent answers) keep their label as plain text.
-    links.push(url ? `<a href="${escapeHtml(url)}" style="${STYLE.a}">${escapeHtml(label)}</a>` : escapeHtml(label));
+    links.push(url ? `<a href="${escapeHtml(url)}"${css('a', styled)}>${escapeHtml(label)}</a>` : escapeHtml(label));
     return `\u0001${links.length - 1}\u0001`;
   });
   text = text.replace(/(^|[\s(])(https:\/\/[^\s<>()\u0000\u0001]+[^\s<>().,;:!?'"\u0000\u0001])/g, (match, lead, href) => {
     const url = httpsUrl(href);
     if (!url) return match;
-    links.push(`<a href="${escapeHtml(url)}" style="${STYLE.a}">${escapeHtml(href)}</a>`);
+    links.push(`<a href="${escapeHtml(url)}"${css('a', styled)}>${escapeHtml(href)}</a>`);
     return `${lead}\u0001${links.length - 1}\u0001`;
   });
   text = escapeHtml(text)
@@ -60,13 +65,13 @@ export function inline(source) {
 }
 
 const LIST_ITEM = /^(\s*)([-*+]|\d{1,3}[.)])\s+(.*)$/;
-const TABLE_RULE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+const TABLE_RULE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 
 function cells(line) {
   return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
 }
 
-export function renderMarkdown(markdown) {
+export function renderMarkdown(markdown, { styled = true } = {}) {
   const lines = String(markdown ?? '').replace(/\r\n?/g, '\n').split('\n');
   const html = [];
   let index = 0;
@@ -79,17 +84,17 @@ export function renderMarkdown(markdown) {
       index += 1;
       while (index < lines.length && !lines[index].trim().startsWith(fence[1])) body.push(lines[index++]);
       index += 1;
-      html.push(`<pre style="${STYLE.pre}">${escapeHtml(body.join('\n'))}</pre>`);
+      html.push(`<pre${css('pre', styled)}>${escapeHtml(body.join('\n'))}</pre>`);
       continue;
     }
     const heading = line.match(/^\s*#{1,6}\s+(.*?)\s*#*\s*$/);
     if (heading) {
-      html.push(`<p style="${STYLE.h}">${inline(heading[1])}</p>`);
+      html.push(styled ? `<p${css('h', styled)}>${inline(heading[1], styled)}</p>` : `<h3>${inline(heading[1], styled)}</h3>`);
       index += 1;
       continue;
     }
     if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
-      html.push(`<hr style="${STYLE.hr}">`);
+      html.push(`<hr${css('hr', styled)}>`);
       index += 1;
       continue;
     }
@@ -98,15 +103,15 @@ export function renderMarkdown(markdown) {
       const rows = [];
       index += 2;
       while (index < lines.length && lines[index].includes('|') && lines[index].trim()) rows.push(cells(lines[index++]));
-      html.push(`<table style="${STYLE.table}"><thead><tr>${head.map((cell) =>
-        `<th style="${STYLE.cell}">${inline(cell)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) =>
-        `<tr>${head.map((_, column) => `<td style="${STYLE.cell}">${inline(row[column] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table>`);
+      html.push(`<table${css('table', styled)}><thead><tr>${head.map((cell) =>
+        `<th${css('cell', styled)}>${inline(cell, styled)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) =>
+        `<tr>${head.map((_, column) => `<td${css('cell', styled)}>${inline(row[column] ?? '', styled)}</td>`).join('')}</tr>`).join('')}</tbody></table>`);
       continue;
     }
     if (/^\s*>/.test(line)) {
       const quoted = [];
       while (index < lines.length && /^\s*>/.test(lines[index])) quoted.push(lines[index++].replace(/^\s*>\s?/, ''));
-      html.push(`<blockquote style="${STYLE.quote}">${renderMarkdown(quoted.join('\n'))}</blockquote>`);
+      html.push(`<blockquote${css('quote', styled)}>${renderMarkdown(quoted.join('\n'), { styled })}</blockquote>`);
       continue;
     }
     if (LIST_ITEM.test(line)) {
@@ -121,30 +126,30 @@ export function renderMarkdown(markdown) {
         } else break;
         index += 1;
       }
-      html.push(renderList(items, 0, 0).html);
+      html.push(renderList(items, 0, 0, styled).html);
       continue;
     }
     const paragraph = [];
     while (index < lines.length && lines[index].trim() && !LIST_ITEM.test(lines[index]) &&
       !/^\s*(```|~~~|#{1,6}\s|>)/.test(lines[index])) paragraph.push(lines[index++].trim());
-    html.push(`<p style="${STYLE.p}">${paragraph.map(inline).join('<br>')}</p>`);
+    html.push(`<p${css('p', styled)}>${paragraph.map((line) => inline(line, styled)).join('<br>')}</p>`);
   }
   return html.join('');
 }
 
-function renderList(items, start, depth) {
+function renderList(items, start, depth, styled) {
   const tag = items[start].ordered ? 'ol' : 'ul';
-  let html = `<${tag} style="${STYLE.list}">`;
+  let html = `<${tag}${css('list', styled)}>`;
   let index = start;
   while (index < items.length && items[index].depth >= depth) {
     const item = items[index];
     if (item.depth > depth) {
-      const nested = renderList(items, index, item.depth);
+      const nested = renderList(items, index, item.depth, styled);
       html = html.replace(/<\/li>$/, `${nested.html}</li>`);
       index = nested.next;
       continue;
     }
-    html += `<li style="${STYLE.li}">${inline(item.text)}</li>`;
+    html += `<li${css('li', styled)}>${inline(item.text, styled)}</li>`;
     index += 1;
   }
   return { html: `${html}</${tag}>`, next: index };

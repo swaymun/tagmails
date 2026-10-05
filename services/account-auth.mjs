@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { runReceiptPage } from './account-page.mjs';
-import { selectedModelDetail } from './model-route.mjs';
+import { selectedModelDetail, selectedModelStatus } from './model-route.mjs';
 import { artifactForDownload, selectedRunArtifacts } from './run-artifacts.mjs';
 import { knownAgentAddresses } from './agent-addresses.mjs';
 import { accountPreferences, saveAccountPreferences } from './account-preferences.mjs';
@@ -334,7 +334,7 @@ async function siteAccountRequest(request, env, pathname, verifyIdentity) {
 
 async function runRow(env, runId, accountId) {
   const row = await env.DB.prepare(`SELECT j.id, j.thread_id, j.state, j.attempts, j.created_at, j.result_key, j.model_json,
-    t.subject, m.sender_email, o.state AS delivery_state, o.provider_email_id
+    j.workspace_json, t.subject, m.sender_email, o.state AS delivery_state, o.provider_email_id
     FROM jobs j JOIN threads t ON t.id = j.thread_id JOIN messages m ON m.id = j.message_id
     LEFT JOIN outbox o ON o.job_id = j.id
     WHERE j.id = ? AND t.account_id = ? LIMIT 1`).bind(runId, accountId).first();
@@ -345,7 +345,10 @@ async function runRow(env, runId, accountId) {
   const deliveries = row.provider_email_id ? await env.DB.prepare(`SELECT recipient_email, status FROM delivery_recipients
     WHERE job_id = ? AND provider_email_id = ? ORDER BY recipient_email`)
     .bind(runId, row.provider_email_id).all() : { results: [] };
-  return { ...row, selectedModel: selectedModelDetail(row.model_json), result, artifacts,
+  let project = null;
+  try { project = JSON.parse(row.workspace_json ?? 'null')?.name ?? null; } catch { /* Older runs have no folder. */ }
+  return { ...row, selectedModel: selectedModelDetail(row.model_json), model: selectedModelStatus(row.model_json),
+    project, result, artifacts,
     deliveryRecipients: deliveries.results ?? deliveries };
 }
 
@@ -428,8 +431,8 @@ async function runViewer(env, runId, identity) {
 
 function participantResult(result) {
   if (!result) return null;
-  const { state, summary, details, checks, runtime, transcript } = result;
-  return { state, summary, details, checks, runtime, transcript };
+  const { state, summary, details, answer, checks, runtime, transcript } = result;
+  return { state, summary, details, answer, checks, runtime, transcript };
 }
 
 async function artifactResponse(env, accountId, row, artifactId, headers = {}) {
@@ -477,7 +480,8 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
     if (!row) return json({ error: 'Run not found' }, 404, headers);
     if (apiArtifact) return artifactResponse(env, viewer.accountId, row, apiArtifact[2], headers);
     return json({ id: row.id, state: row.state, subject: row.subject, sender: row.sender_email,
-      selectedModel: row.selectedModel,
+      selectedModel: row.selectedModel, model: row.model,
+      ...(viewer.owner ? { project: row.project } : {}),
       createdAt: row.created_at, attempts: viewer.owner ? row.attempts : undefined,
       ...(viewer.owner ? { threadId: row.thread_id } : {}),
       ...(viewer.owner ? { threadRuns: await recentThreadRuns(env, row.thread_id, viewer.accountId) } : {}),
