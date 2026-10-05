@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Resend } from 'resend';
+import { inspectCloudflareInbound } from './cloudflare-mail.mjs';
+import { openText, protectedEnv, sealText } from './storage-crypto.mjs';
 import { currentText, routeModel } from './jev-route.mjs';
 import { accountProjectCatalog, routeProject } from './project-route.mjs';
 import { inspectResendInbound } from './resend-inbound.mjs';
@@ -158,6 +160,23 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
   if (message.ignored) return Response.json({ accepted: false });
   if (message.sent) return Response.json(await reconcileSentEvent(env, message.sent));
   if (message.deliveryOutcome) return Response.json(await recordDeliveryOutcome(env, message.deliveryOutcome));
+  return acceptMessage(env, message, { fetchModel });
+}
+
+// Mail delivered straight to the Worker by Cloudflare Email Routing.
+export async function handleEmail(emailMessage, env, { fetchModel = fetch, resolveTxt } = {}) {
+  if (!env.DB || !env.MAIL) throw new Error('Relay bindings are incomplete');
+  const message = await inspectCloudflareInbound(emailMessage, {
+    resolveAgentAddress: (candidates) => resolveAgentAddress(env.DB, candidates), resolveTxt,
+  });
+  if (message.ignored) {
+    console.log('Inbound email ignored:', message.reason);
+    return Response.json({ accepted: false, reason: message.reason });
+  }
+  return acceptMessage(env, message, { fetchModel });
+}
+
+async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
   const agent = (message.agentAddress ?? '').trim().toLowerCase();
   const account = await env.DB.prepare(`SELECT a.id, a.owner_email,
     COALESCE(p.default_model, a.default_model) AS default_model,
@@ -202,7 +221,7 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
   const statements = [];
   const catalog = await accountModelCatalog(env.DB, account.id, threadId);
   if (!threadId) statements.push(env.DB.prepare('INSERT INTO threads (id, account_id, subject, device_id) VALUES (?, ?, ?, ?)')
-    .bind(newThreadId, account.id, message.subject.slice(0, 300), catalog.deviceId));
+    .bind(newThreadId, account.id, await sealText(env, message.subject.slice(0, 300)), catalog.deviceId));
   statements.push(env.DB.prepare(`INSERT INTO messages
     (id, account_id, thread_id, provider_email_id, message_id, direction, sender_email, object_key, agent_email)
     VALUES (?, ?, ?, ?, ?, 'inbound', ?, ?, ?)`).bind(id, account.id, newThreadId, message.providerEmailId, message.messageId, message.from, objectKey, agent));
@@ -223,6 +242,7 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
     WHERE j.thread_id = ? AND j.workspace_json IS NOT NULL
     ORDER BY m.rowid DESC LIMIT 1`).bind(threadId).first() : null;
   const priorWorkspace = previousWorkspace ? JSON.parse(previousWorkspace.workspace_json) : null;
+  if (priorWorkspace?.pending) priorWorkspace.pending = await openText(env, priorWorkspace.pending);
   const projects = threadUnavailable || priorWorkspace?.kind ? [] : await accountProjectCatalog(env.DB, account.id, threadId);
   const subjectLine = String(message.subject ?? '').replace(/[\r\n]+/g, ' ').slice(0, 300).trim();
   const requestText = `${subjectLine ? `Subject: ${subjectLine}\n` : ''}${currentText(message.body)}`.slice(0, 4000);
@@ -245,7 +265,7 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
   let workspaceJson = workspace?.kind ? JSON.stringify(workspace) : null;
   if (workspace?.ask && model && !model.error) {
     model = { error: workspace.ask };
-    workspaceJson = JSON.stringify({ pending: projectState.slice(0, 2000) });
+    workspaceJson = JSON.stringify({ pending: await sealText(env, projectState.slice(0, 2000)) });
   }
   if (model?.id === 'claude-sonnet-5-5' && env.CLAUDE_ROUTE_ENABLED !== 'true') {
     model = { error: 'Claude models are not enabled in this pilot. Ask for an available OpenAI model or omit the model to use your default.' };
@@ -288,7 +308,21 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
 }
 
 export default {
+  async email(message, env, ctx) {
+    env = protectedEnv(env);
+    try {
+      const response = await handleEmail(message, env);
+      if (response.ok && env.STATUS_REACTIONS_ENABLED === 'true') {
+        ctx.waitUntil(sendNextStatusReaction(env).catch(() => console.error('Status reaction is delayed')));
+      }
+    } catch (error) {
+      // A thrown error makes Cloudflare retry or bounce; keep the reason out of logs.
+      console.error('Inbound email intake failed:', error instanceof Error ? error.message : 'Unknown error');
+      throw error;
+    }
+  },
   async fetch(request, env, ctx) {
+    env = protectedEnv(env);
     if (request.method === 'GET' && new URL(request.url).pathname === '/account') return accountPage();
     try {
       const billing = await handleTestWalletRequest(request, env);
@@ -315,6 +349,7 @@ export default {
     }
   },
   async scheduled(_event, env) {
+    env = protectedEnv(env);
     try {
       for (let index = 0; index < 10; index += 1) {
         if (!await completeOneModelClarification(env)) break;

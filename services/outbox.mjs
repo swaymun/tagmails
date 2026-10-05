@@ -4,6 +4,8 @@ import { addressParser } from 'postal-mime';
 import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.mjs';
 import { knownAgentAddresses } from './agent-addresses.mjs';
 import { testSenderFor } from './agent-username.mjs';
+import { cloudflareMessageId, sendWithCloudflare } from './cloudflare-mail.mjs';
+import { openText, sealText } from './storage-crypto.mjs';
 import { renderResult } from '../apps/mock-inbox/mail.mjs';
 import { releaseFailedPrimaryTestEmail, releaseTestEmail, settleTestEmail, testBillingEnabled, testWalletSnapshot } from './email-charges.mjs';
 import { selectedModelStatus } from './model-route.mjs';
@@ -75,7 +77,7 @@ export async function reconcileSentEvent(env, event) {
   try { payload = JSON.parse(row.payload_json); }
   catch { return { accepted: false }; }
   if (payload.tags?.some(({ name, value }) => name === 'tagmails_job' && value === event.jobId) !== true ||
-      payload.from !== event.from || payload.subject !== event.subject ||
+      payload.from !== event.from || await openText(env, payload.subject) !== event.subject ||
       !matchesSentAudience(payload, event) || !MESSAGE_ID.test(event.messageId ?? '') ||
       (row.provider_email_id && row.provider_email_id !== event.providerEmailId)) return { accepted: false };
   if (row.state === 'sent') {
@@ -104,7 +106,7 @@ export async function recordDeliveryOutcome(env, event) {
   try { payload = JSON.parse(row.payload_json); }
   catch { return { accepted: false }; }
   if (payload.tags?.some(({ name, value }) => name === 'tagmails_job' && value === event.jobId) !== true ||
-      payload.from !== event.from || payload.subject !== event.subject ||
+      payload.from !== event.from || await openText(env, payload.subject) !== event.subject ||
       !Array.isArray(payload.to) ||
       ![...payload.to, ...(payload.cc ?? [])].includes(event.recipient)) return { accepted: false };
   await env.DB.prepare(`INSERT INTO delivery_recipients
@@ -144,7 +146,7 @@ export async function reconcileOneUnknownOutbox(env, {
   for (const summary of page.data.data) {
     if (checked >= 10) break;
     try {
-      if (payload.from !== providerMailbox(summary.from) || payload.subject !== summary.subject ||
+      if (payload.from !== providerMailbox(summary.from) || await openText(env, payload.subject) !== summary.subject ||
           !sameRecipients(payload.to, providerRecipients(summary.to)) ||
           !sameRecipients(payload.cc ?? [], providerRecipients(summary.cc))) continue;
     } catch { continue; }
@@ -299,6 +301,7 @@ async function prepare(env, row) {
         ? 'This reply is the agent\'s report. Verify local file changes before relying on them.'
       : null,
   });
+  inbound.subject = await openText(env, inbound.subject);
   if (/[\r\n]/.test(inbound.subject)) throw new InvalidOutboxSource('Outbox subject contains a line break');
   return {
     from: testSender ?? agent, ...(testSender ? { replyTo: agent } : {}),
@@ -360,8 +363,8 @@ export async function purgeSettledOutboundBodies(env) {
     FROM outbox o JOIN jobs j ON j.id = o.job_id
     JOIN threads t ON t.id = j.thread_id
     WHERE o.state IN ('accepted', 'sent') AND o.payload_json IS NOT NULL
-      AND (json_type(o.payload_json, '$.html') IS NOT NULL OR
-        json_type(o.payload_json, '$.text') IS NOT NULL)
+      AND (json_type(o.payload_json, '$.bodyStored') IS NOT NULL OR
+        json_type(o.payload_json, '$.html') IS NOT NULL OR json_type(o.payload_json, '$.text') IS NOT NULL)
     ORDER BY o.updated_at, o.job_id LIMIT 20`).bind().all();
   let purged = 0;
   for (const row of found.results ?? found) {
@@ -388,12 +391,16 @@ export async function purgeSettledOutboundBodies(env) {
 }
 
 export async function sendNextOutbox(env, {
+  // Cloudflare Email Sending when the EMAIL binding exists; Resend otherwise.
   // Saved payloads keep the bare address for sender checks; mail shows a display name.
-  sendEmail = (payload, options) => new Resend(env.RESEND_API_KEY).emails.send(
-    { ...payload, from: `TagMails <${payload.from}>` }, options),
-  getSentEmail = (id) => new Resend(env.RESEND_API_KEY).emails.get(id),
+  sendEmail = env.EMAIL ? (payload) => sendWithCloudflare(env, payload)
+    : (payload, options) => new Resend(env.RESEND_API_KEY).emails.send(
+      { ...payload, from: `TagMails <${payload.from}>` }, options),
+  // Cloudflare returns the sent message's ID directly; Resend needs a lookup.
+  getSentEmail = env.EMAIL ? async (id) => ({ data: { id, message_id: cloudflareMessageId(id) } })
+    : (id) => new Resend(env.RESEND_API_KEY).emails.get(id),
 } = {}) {
-  if (!env.DB || !env.MAIL || !env.RESEND_API_KEY) throw new Error('Outbound bindings are incomplete');
+  if (!env.DB || !env.MAIL || (!env.RESEND_API_KEY && !env.EMAIL)) throw new Error('Outbound bindings are incomplete');
   // Scheduled invocations cannot run beyond 15 minutes. A send still marked
   // in progress after 20 minutes might already have reached the provider.
   const stale = await env.DB.prepare(`UPDATE outbox SET state = 'uncertain', updated_at = CURRENT_TIMESTAMP
@@ -444,9 +451,11 @@ export async function sendNextOutbox(env, {
   if (payload.from !== (testSenderFor(env, row.agent_email) ?? row.agent_email.toLowerCase())) {
     throw new Error('Outbox sender does not match its account');
   }
-  // Attachment bytes stay in R2, avoiding D1's row-size limit and extra plaintext copies.
-  const savedPayload = { ...payload, ...(payload.attachments ? { attachments:
-    payload.attachments.map(({ filename, contentType }) => ({ filename, contentType })) } : {}) };
+  // D1 keeps only routing metadata; the body and attachments live in the
+  // encrypted R2 copy below until the send settles.
+  const { html: _html, text: _text, attachments, ...metadata } = payload;
+  const savedPayload = { ...metadata, subject: await sealText(env, payload.subject), bodyStored: true,
+    ...(attachments ? { attachments: attachments.map(({ filename, contentType }) => ({ filename, contentType })) } : {}) };
   const claimed = await env.DB.prepare(`UPDATE outbox SET state = 'sending', payload_json = ?, updated_at = CURRENT_TIMESTAMP
     WHERE job_id = ? AND state = 'queued' RETURNING job_id`).bind(JSON.stringify(savedPayload), row.job_id).first();
   if (!claimed) return { state: 'contended' };

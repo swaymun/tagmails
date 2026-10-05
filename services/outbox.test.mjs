@@ -52,7 +52,10 @@ test('settled replies purge rendered bodies while retaining delivery and reactio
   assert.equal((await sendNextOutbox(env, provider)).state, 'sent');
   const key = 'outbound/account-1/job-1.json';
   assert.ok(objects.has(key));
-  assert.ok(JSON.parse(sqlite.prepare("SELECT payload_json FROM outbox WHERE job_id = 'job-1'").get().payload_json).html);
+  // D1 never holds the rendered body; it stays in the R2 copy until the send settles.
+  const stored = JSON.parse(sqlite.prepare("SELECT payload_json FROM outbox WHERE job_id = 'job-1'").get().payload_json);
+  assert.equal(stored.html, undefined);
+  assert.equal(stored.bodyStored, true);
 
   const originalDelete = env.MAIL.delete;
   env.MAIL.delete = async () => { throw new Error('Temporary R2 failure'); };

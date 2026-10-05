@@ -3,6 +3,7 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { runReceiptPage } from './account-page.mjs';
 import { selectedModelDetail, selectedModelStatus } from './model-route.mjs';
 import { addressDomain, checkAddress, chooseAddress } from './agent-username.mjs';
+import { openText } from './storage-crypto.mjs';
 import { artifactForDownload, selectedRunArtifacts } from './run-artifacts.mjs';
 import { knownAgentAddresses } from './agent-addresses.mjs';
 import { accountPreferences, saveAccountPreferences } from './account-preferences.mjs';
@@ -205,7 +206,7 @@ async function accountThreads(env, accountId) {
   for (const row of rows.results ?? rows) {
     let thread = threads.at(-1);
     if (thread?.id !== row.id) {
-      thread = { id: row.id, subject: row.subject, createdAt: row.created_at,
+      thread = { id: row.id, subject: await openText(env, row.subject), createdAt: row.created_at,
         latestRunId: row.latest_run_id, device: row.device_name
           ? { name: row.device_name, revokedAt: row.device_revoked_at } : null,
         participants: [] };
@@ -358,6 +359,7 @@ async function runRow(env, runId, accountId) {
     .bind(runId, row.provider_email_id).all() : { results: [] };
   let project = null;
   try { project = JSON.parse(row.workspace_json ?? 'null')?.name ?? null; } catch { /* Older runs have no folder. */ }
+  row.subject = await openText(env, row.subject);
   return { ...row, selectedModel: selectedModelDetail(row.model_json), model: selectedModelStatus(row.model_json),
     project, result, artifacts,
     deliveryRecipients: deliveries.results ?? deliveries };
@@ -390,6 +392,7 @@ async function threadTranscriptPage(env, accountId, threadId, before, headers) {
   const thread = await env.DB.prepare('SELECT id, subject FROM threads WHERE id = ? AND account_id = ?')
     .bind(threadId, accountId).first();
   if (!thread) return json({ error: 'Thread not found' }, 404, headers);
+  thread.subject = await openText(env, thread.subject);
   let cursor = null;
   if (before !== null) {
     if (!/^[0-9a-f-]{36}$/i.test(before)) return json({ error: 'Invalid cursor' }, 400, headers);

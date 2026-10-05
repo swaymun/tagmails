@@ -1,12 +1,14 @@
 import { buildStatusReaction } from './status-reaction-mime.mjs';
 import { sendRawResendEmail } from './resend-smtp.mjs';
 import { testSenderFor } from './agent-username.mjs';
+import { sendRawWithCloudflare } from './cloudflare-mail.mjs';
+import { openText } from './storage-crypto.mjs';
 
 const rank = (alias) => `CASE ${alias}.status WHEN 'received' THEN 0 WHEN 'working' THEN 1 ELSE 2 END`;
 
-export async function sendNextStatusReaction(env, { send = sendRawResendEmail } = {}) {
+export async function sendNextStatusReaction(env, { send = env.EMAIL ? (message) => sendRawWithCloudflare(env, message) : sendRawResendEmail } = {}) {
   if (env.STATUS_REACTIONS_ENABLED !== 'true') return { state: 'disabled' };
-  if (!env.DB || !env.RESEND_API_KEY) throw new Error('Status reaction bindings are incomplete');
+  if (!env.DB || (!env.RESEND_API_KEY && !env.EMAIL)) throw new Error('Status reaction bindings are incomplete');
   const stale = await env.DB.prepare(`UPDATE status_reactions SET state = 'uncertain', updated_at = CURRENT_TIMESTAMP
     WHERE (job_id, status) = (SELECT job_id, status FROM status_reactions
       WHERE state = 'sending' AND updated_at <= datetime('now', '-20 minutes')
@@ -49,7 +51,7 @@ export async function sendNextStatusReaction(env, { send = sendRawResendEmail } 
   try {
     const message = buildStatusReaction({ jobId: row.job_id, status: row.status,
       from: row.agent_email.toLowerCase(), to: sender, targetMessageId: row.message_id,
-      subject: row.subject });
+      subject: await openText(env, row.subject) });
     const sent = await send({ ...message, apiKey: env.RESEND_API_KEY });
     if (!sent?.accepted) throw new Error('SMTP did not confirm acceptance');
   } catch {
