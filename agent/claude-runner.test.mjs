@@ -135,6 +135,15 @@ process.stdin.on('end', () => {
   assert.match(writeCalls[3].prompt, /read and edit files in the selected workspace/);
   assert.doesNotMatch(writeCalls[3].args.join(' '), /Bash|WebFetch|WebSearch/);
   assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'write-sessions.json'))).threads['thread-1'].workspace, fs.realpathSync(workspace));
+  // An owner email loads the owner's own Claude Code setup and connectors.
+  const ownerClaim = claim('job-owner', 'Make a Google Doc from the notes.');
+  ownerClaim.request.fromOwner = true;
+  await runClaim(ownerClaim);
+  const ownerArgs = fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).at(-1).args;
+  for (const flag of ['--safe-mode', '--strict-mcp-config', '--disable-slash-commands', 'mcp__*']) assert.ok(!ownerArgs.includes(flag), flag);
+  assert.deepEqual(ownerArgs.slice(ownerArgs.indexOf('--disallowedTools'), ownerArgs.indexOf('--disallowedTools') + 3),
+    ['--disallowedTools', 'mcp__*__trash*', 'mcp__*__delete*']);
+  assert.ok(ownerArgs.includes('--restricted') && ownerArgs.includes('--no-chrome'));
   assert.equal((await runClaim(claim('job-2', 'Continue.'))).runtime, 'claude-cli-write');
   const resumedWrite = fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).at(-1);
   assert.ok(resumedWrite.args.includes('33333333-3333-4333-8333-333333333333'));
@@ -182,4 +191,11 @@ test('each Claude permission mode maps to its CLI flags, and bypass is owner-onl
   assert.equal(MODES.bypassPermissions.restricted, false);
   assert.equal(MODES.bypassPermissions.ownerOnly, true);
   assert.equal(MODES.acceptEdits.tools.includes('Bash'), false);
+});
+
+test('owner connector rules name each MCP server', async () => {
+  const { mcpAllowRules } = await import('./claude-runner.mjs');
+  assert.deepEqual(mcpAllowRules('Checking MCP server health…\n\nclaude.ai Google Drive: https://drivemcp.googleapis.com/mcp/v1 - ✔ Connected\nblender: uvx blender-mcp - ✗ Failed to connect\n'),
+    ['--allowedTools', 'mcp__claude_ai_Google_Drive__*', 'mcp__blender__*']);
+  assert.deepEqual(mcpAllowRules('No MCP servers configured.'), []);
 });

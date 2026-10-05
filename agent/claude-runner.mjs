@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -145,13 +145,38 @@ const SYSTEM_PROMPTS = {
   bypassPermissions: 'You are TagMails, an email agent with full access on the owner\'s computer. Act carefully: never send messages, deploy, purchase, or delete data unless the owner explicitly asked in this email. Report every change and check.',
 };
 
+// Allow rules must name a server (mcp__<server>__*), so list the owner's
+// servers: "claude.ai Google Drive" becomes mcp__claude_ai_Google_Drive__*.
+export function mcpAllowRules(listing) {
+  const names = [...String(listing).matchAll(/^(.+?): \S+.* - /gm)].map((match) => match[1].trim());
+  const rules = [...new Set(names.map((name) => `mcp__${name.replace(/[^A-Za-z0-9_-]/g, '_')}__*`))];
+  return rules.length ? ['--allowedTools', ...rules] : [];
+}
+
+function ownerMcpAllowRules() {
+  try {
+    const listing = execFileSync(process.env.TAGMAILS_CLAUDE_BIN || 'claude', ['mcp', 'list'],
+      { encoding: 'utf8', timeout: 30_000, env: claudeEnvironment(), stdio: ['ignore', 'pipe', 'ignore'] });
+    return mcpAllowRules(listing);
+  } catch { return []; }
+}
+
 async function runClaude(claim, workspace, sessionId, staged, write) {
   const mode = MODES[selectedMode()];
+  // Owner emails get the owner's Claude Code setup (MCP servers, claude.ai
+  // connectors, plugins, skills, CLAUDE.md). Everyone else gets none of it.
+  // --restricted still confines file tools to the workspace either way.
+  const owner = claim.request?.fromOwner === true && process.env.TAGMAILS_OWNER_TOOLS !== 'off';
   const args = [
-    '--print', '--output-format', 'stream-json', '--verbose', '--safe-mode',
+    '--print', '--output-format', 'stream-json', '--verbose',
+    ...(owner ? [] : ['--safe-mode']),
     ...(mode.restricted ? ['--restricted'] : []),
-    '--strict-mcp-config', '--disable-slash-commands', '--no-chrome',
-    ...(mode.tools ? ['--tools', mode.tools] : []), '--disallowedTools', 'mcp__*',
+    ...(owner ? [] : ['--strict-mcp-config', '--disable-slash-commands']), '--no-chrome',
+    ...(mode.tools ? ['--tools', mode.tools] : []),
+    // Nobody can approve a tool mid-email, so the owner's connectors are
+    // pre-approved outside read-only mode, except tools that trash or delete.
+    ...(owner ? [...(mode.write || selectedMode() === 'manual' ? ownerMcpAllowRules() : []),
+      '--disallowedTools', 'mcp__*__trash*', 'mcp__*__delete*'] : ['--disallowedTools', 'mcp__*']),
     '--permission-mode', mode.permission,
     '--permission-prompts', 'none', '--model', claim.model.id, '--effort', EFFORTS[claim.model.effort],
     '--system-prompt', SYSTEM_PROMPTS[selectedMode()],
