@@ -1,3 +1,5 @@
+import { notifyDevices } from './device-push.mjs';
+
 export const TEST_EMAIL_CENTS = 5;
 
 export const FILE_TRANSFER_CENTS_PER_GB = 5;
@@ -57,6 +59,7 @@ export async function reservePendingTestEmails(env, accountId, limit = 20) {
     if (!changed(result)) break;
     reserved += 1;
   }
+  if (reserved) await notifyDevices(env, accountId);
   return reserved;
 }
 

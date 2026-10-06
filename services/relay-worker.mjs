@@ -7,6 +7,8 @@ import { accountProjectCatalog, routeProject } from './project-route.mjs';
 import { inspectResendInbound } from './resend-inbound.mjs';
 import { knownAgentAddresses } from './agent-addresses.mjs';
 import { handleDeviceRequest } from './device-jobs.mjs';
+import { notifyDevices } from './device-push.mjs';
+export { DevicePush } from './device-push.mjs';
 import { purgeSettledOutboundBodies, reconcileOneUnknownOutbox, reconcileSentEvent, recordDeliveryOutcome, sendNextOutbox } from './outbox.mjs';
 import { handleAccountRequest } from './account-auth.mjs';
 import { accountPage } from './account-page.mjs';
@@ -302,12 +304,14 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
     return Response.json({ accepted: true, duplicate: false, threadUnavailable: true });
   }
   if (testBillingEnabled(env)) {
+    // Reserving the credit is what wakes the computers.
     try { await reservePendingTestEmails(env, account.id); }
     catch { console.error('Test email credit reservation is delayed'); }
     const charge = await env.DB.prepare('SELECT job_id FROM test_email_charges WHERE job_id = ? AND state = ?')
       .bind(jobId, 'reserved').first();
     return Response.json({ accepted: true, duplicate: false, awaitingCredits: !model.error && !charge });
   }
+  if (!model?.error) await notifyDevices(env, account.id);
   return Response.json({ accepted: true, duplicate: false });
 }
 

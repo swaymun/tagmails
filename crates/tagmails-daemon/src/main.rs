@@ -17,6 +17,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 mod paths;
+mod push;
 mod service;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -959,6 +960,7 @@ fn run_relay(settings: &Settings, once: bool) -> Result<(), Box<dyn Error>> {
     }
     let mut next_model_probe = Instant::now();
     let mut next_project_probe = Instant::now();
+    let push = (!once).then(|| push::Push::start(&settings.relay, &settings.token));
     loop {
         if Instant::now() >= next_model_probe {
             next_model_probe = Instant::now() + Duration::from_secs(120);
@@ -1000,7 +1002,10 @@ fn run_relay(settings: &Settings, once: bool) -> Result<(), Box<dyn Error>> {
             return Ok(());
         }
         if !claimed {
-            thread::sleep(Duration::from_secs(15));
+            match &push {
+                Some(push) => push.wait(),
+                None => thread::sleep(push::POLL_EVERY),
+            }
         }
     }
 }

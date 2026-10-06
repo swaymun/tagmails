@@ -6,6 +6,7 @@ import { ARTIFACT_ID, selectedRunArtifacts, uploadRunArtifact } from './run-arti
 import { catalogFromDevice, deviceDefaults, deviceLimits } from './model-catalog.mjs';
 import { cleanProjectCatalog } from './project-route.mjs';
 import { currentText } from './jev-route.mjs';
+import { openDevicePush } from './device-push.mjs';
 
 const TOKEN = /^tm_dev_[A-Za-z0-9_-]{43}$/;
 const LEASE_SECONDS = 90;
@@ -46,8 +47,8 @@ async function boundedJson(request) {
 }
 
 async function claim(env, device) {
-  // A claim request is the daemon's regular poll, including when the queue is empty.
-  // Throttle writes so an idle Mac does not write to D1 every 30 seconds.
+  // Claims also come from idle polls (every 15s without push, every 10 minutes
+  // with it), so most find the queue empty. Throttle the last-seen write.
   await env.DB.prepare(`UPDATE devices SET last_seen_at = CURRENT_TIMESTAMP
     WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < datetime('now', '-2 minutes'))`)
     .bind(device.id).run();
@@ -304,7 +305,7 @@ async function complete(env, device, body) {
 
 export async function handleDeviceRequest(request, env) {
   const url = new URL(request.url);
-  if (!((request.method === 'GET' && ['/api/device/attachment', '/api/device/status'].includes(url.pathname)) ||
+  if (!((request.method === 'GET' && ['/api/device/attachment', '/api/device/status', '/api/device/push'].includes(url.pathname)) ||
     (request.method === 'POST' && ['/api/device/claim', '/api/device/renew', '/api/device/started', '/api/device/complete', '/api/device/artifacts', '/api/device/models', '/api/device/projects'].includes(url.pathname)))) {
     return new Response('Not found', { status: 404 });
   }
@@ -315,6 +316,7 @@ export async function handleDeviceRequest(request, env) {
   if (url.pathname === '/api/device/status') return Response.json({ paired: true }, {
     headers: { 'Cache-Control': 'no-store' },
   });
+  if (url.pathname === '/api/device/push') return openDevicePush(request, env, device);
   if (url.pathname === '/api/device/attachment') return attachment(request, env, device, url);
   if (url.pathname === '/api/device/claim') return claim(env, device);
   if (url.pathname === '/api/device/artifacts') return uploadRunArtifact(request, env, device);

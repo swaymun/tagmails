@@ -10,6 +10,8 @@
     "migrations_dir": "services/migrations"
   }],
   "r2_buckets": [{ "binding": "MAIL", "bucket_name": "tagmails-selfhost-mail" }],
+  "durable_objects": { "bindings": [{ "name": "DEVICE_PUSH", "class_name": "DevicePush" }] },
+  "migrations": [{ "tag": "v1-device-push", "new_sqlite_classes": ["DevicePush"] }],
   "triggers": { "crons": ["* * * * *"] },
   "secrets": { "required": [
     "RESEND_API_KEY",
