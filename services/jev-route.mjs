@@ -156,6 +156,7 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
     if (!response.ok) throw new Error(`Jev HTTP ${response.status}`);
     const answers = (await response.json()).answers;
     const routeChoice = confidentChoice(answers?.route, 0.6);
+    if (!routeChoice) console.log('Jev route unconfident', answers?.route?.choice, JSON.stringify(Object.entries(answers?.route?.probabilities ?? {}).filter(([, p]) => p > 0.05)));
     if (routeChoice === 'unsupported') return { error: UNAVAILABLE_MODEL };
     const route = Object.hasOwn(routes, routeChoice) ? routes[routeChoice] : null;
     if (!route && direct.error) return direct;
