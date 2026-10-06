@@ -5,6 +5,9 @@ const EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'm
 const SPEEDS = new Set(['standard', 'fast', 'ultrafast']);
 export const CODEX_ACCESS = ['read', 'write', 'full'];
 export const CLAUDE_PERMISSIONS = ['manual', 'acceptEdits', 'auto', 'bypassPermissions'];
+// Mirrors the daemon's default ceiling when the computer hasn't reported one.
+const DEFAULT_MAX_ACCESS = 'write';
+const DEFAULT_MAX_CLAUDE_PERMISSION = 'auto';
 
 // A default saved on the website wins, then the computer's own default
 // (`tagmails start --model ...`), then the account's original model.
@@ -43,6 +46,13 @@ export async function saveAccountPreferences(env, account, input) {
     throw new Error('Choose an available permission.');
   }
   const catalog = await accountModelCatalog(env.DB, account.id);
+  // The website can't choose above what the computer allows; full access and
+  // bypass need an explicit opt-in on the computer itself.
+  const above = (order, value, max) => value !== null && order.indexOf(value) > order.indexOf(max);
+  if (above(CODEX_ACCESS, codexAccess, catalog.limits?.access ?? DEFAULT_MAX_ACCESS) ||
+      above(CLAUDE_PERMISSIONS, claudePermission, catalog.limits?.claudePermission ?? DEFAULT_MAX_CLAUDE_PERMISSION)) {
+    throw new Error('Your computer does not allow that permission. Raise it there with tagmails start --max-access or --max-claude-permission.');
+  }
   const available = catalog.models.find((item) => item.id === model);
   if (!(catalog.models.length ? available || (model === 'claude-sonnet-5-5' && env.CLAUDE_ROUTE_ENABLED === 'true')
     : LEGACY_MODELS.has(model)) || !EFFORTS.has(effort) || !SPEEDS.has(speed)) {

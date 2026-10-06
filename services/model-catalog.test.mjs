@@ -118,15 +118,22 @@ test('website permissions travel with each job, and the computer reports its lim
   sqlite.prepare('INSERT INTO devices (id, account_id, token_hash) VALUES (?, ?, ?)')
     .run('device-1', 'account-1', createHash('sha256').update(token).digest('hex'));
   const account = { id: 'account-1', default_model: 'gpt-6-sol' };
-  await handleDeviceRequest(new Request('https://relay.test/api/device/models', {
+  const choice = { model: 'gpt-6-sol', effort: 'medium', speed: 'standard' };
+  // Before the computer reports a ceiling, the website stops at write and auto.
+  await assert.rejects(saveAccountPreferences(env, account, { ...choice, codexAccess: 'full' }), /does not allow/);
+  await assert.rejects(saveAccountPreferences(env, account, { ...choice, claudePermission: 'bypassPermissions' }), /does not allow/);
+  const report = (limits) => handleDeviceRequest(new Request('https://relay.test/api/device/models', {
     method: 'POST', headers: { Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ models: reported, limits: { access: 'write', claudePermission: 'auto', extra: 'ignored' } }),
+    body: JSON.stringify({ models: reported, limits }),
   }), env);
-  await saveAccountPreferences(env, account, { model: 'gpt-6-sol', effort: 'medium', speed: 'standard',
-    codexAccess: 'full', claudePermission: 'acceptEdits' });
+  await report({ access: 'write', claudePermission: 'auto', extra: 'ignored' });
+  await assert.rejects(saveAccountPreferences(env, account, { ...choice, codexAccess: 'full' }), /does not allow/);
+  // Only a computer that opted in locally (tagmails start --max-access full) can be set to full.
+  await report({ access: 'full', claudePermission: 'auto' });
+  await saveAccountPreferences(env, account, { ...choice, codexAccess: 'full', claudePermission: 'acceptEdits' });
   const saved = await accountPreferences(env, account);
   assert.deepEqual([saved.codexAccess, saved.claudePermission, saved.limits],
-    ['full', 'acceptEdits', { access: 'write', claudePermission: 'auto' }]);
+    ['full', 'acceptEdits', { access: 'full', claudePermission: 'auto' }]);
   await assert.rejects(saveAccountPreferences(env, account, { model: 'gpt-6-sol', effort: 'medium', speed: 'standard', codexAccess: 'root' }), /permission/);
   const cleared = await clearAccountPreferences(env, account);
   assert.equal(cleared.codexAccess, 'full', 'handing the model back keeps the permission choice');

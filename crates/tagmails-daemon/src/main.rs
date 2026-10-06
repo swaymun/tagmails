@@ -245,7 +245,7 @@ fn publish_model_catalog(
     if defaults.is_object() {
         catalog["defaults"] = defaults.clone();
     }
-    // The most this machine allows (everything, unless locked with
+    // The most this machine allows (write and auto unless raised locally with
     // --max-access / --max-claude-permission); a website choice is capped here.
     catalog["limits"] = json!({
         "access": max_access(&config),
@@ -754,12 +754,36 @@ fn chosen<'a>(choice: Option<&'a str>, default: &'a str, max: &'a str, order: &[
     }
 }
 
+/// The website can never raise a machine to full access or bypass on its own;
+/// only `tagmails start --max-access full` (or `--access full`) on the machine can.
+const DEFAULT_MAX_ACCESS: &str = "write";
+const DEFAULT_MAX_CLAUDE_PERMISSION: &str = "auto";
+
 fn max_access(config: &Value) -> &str {
-    config["maxAccess"].as_str().filter(|value| ACCESS_ORDER.contains(value)).unwrap_or("full")
+    config["maxAccess"].as_str().filter(|value| ACCESS_ORDER.contains(value)).unwrap_or(DEFAULT_MAX_ACCESS)
 }
 
 fn max_claude_permission(config: &Value) -> &str {
-    config["maxClaudePermission"].as_str().filter(|value| CLAUDE_ORDER.contains(value)).unwrap_or("bypassPermissions")
+    config["maxClaudePermission"].as_str().filter(|value| CLAUDE_ORDER.contains(value)).unwrap_or(DEFAULT_MAX_CLAUDE_PERMISSION)
+}
+
+/// A local default above the ceiling raises the ceiling: choosing it on the
+/// machine is the explicit local opt-in. An explicit --max-* flag wins.
+fn raise_ceilings_for_local_defaults(config: &mut Value, explicit_max_access: bool, explicit_max_claude: bool) {
+    let rank = |order: &[&str], value: &str| order.iter().position(|item| *item == value);
+    if !explicit_max_access {
+        let access = config["access"].as_str().unwrap_or("read").to_owned();
+        if rank(&ACCESS_ORDER, &access) > rank(&ACCESS_ORDER, max_access(config)) {
+            config["maxAccess"] = json!(access);
+        }
+    }
+    if !explicit_max_claude {
+        if let Some(permission) = config["claudePermission"].as_str().map(str::to_owned) {
+            if rank(&CLAUDE_ORDER, &permission) > rank(&CLAUDE_ORDER, max_claude_permission(config)) {
+                config["maxClaudePermission"] = json!(permission);
+            }
+        }
+    }
 }
 
 const ACCESS_ORDER: [&str; 3] = ["read", "write", "full"];
@@ -1029,8 +1053,30 @@ mod tests {
         // A machine locked with --max-access never goes above it.
         assert_eq!(chosen(Some("full"), "write", "write", &ACCESS_ORDER), "write");
         assert_eq!(chosen(None, "full", "write", &ACCESS_ORDER), "write");
-        assert_eq!(max_access(&json!({})), "full");
+        // Without a local opt-in the website tops out at write and auto.
+        assert_eq!(max_access(&json!({})), "write");
+        assert_eq!(max_claude_permission(&json!({})), "auto");
+        assert_eq!(chosen(Some("full"), "read", max_access(&json!({})), &ACCESS_ORDER), "read");
+        assert_eq!(chosen(Some("bypassPermissions"), "acceptEdits", max_claude_permission(&json!({})), &CLAUDE_ORDER), "acceptEdits");
+        assert_eq!(max_access(&json!({"maxAccess": "full"})), "full");
         assert_eq!(max_claude_permission(&json!({"maxClaudePermission": "auto"})), "auto");
+    }
+
+    #[test]
+    fn only_a_local_choice_raises_the_permission_ceiling() {
+        let mut config = json!({"access": "full", "claudePermission": "bypassPermissions"});
+        raise_ceilings_for_local_defaults(&mut config, false, false);
+        assert_eq!(max_access(&config), "full");
+        assert_eq!(max_claude_permission(&config), "bypassPermissions");
+        // An explicit --max-* keeps its value.
+        let mut locked = json!({"access": "full", "maxAccess": "read", "claudePermission": "bypassPermissions", "maxClaudePermission": "manual"});
+        raise_ceilings_for_local_defaults(&mut locked, true, true);
+        assert_eq!(max_access(&locked), "read");
+        assert_eq!(max_claude_permission(&locked), "manual");
+        // Write and auto stay under the default ceiling and add nothing.
+        let mut plain = json!({"access": "write", "claudePermission": "auto"});
+        raise_ceilings_for_local_defaults(&mut plain, false, false);
+        assert!(plain["maxAccess"].is_null() && plain["maxClaudePermission"].is_null());
     }
 
     #[test]
@@ -1375,7 +1421,9 @@ Usage:
 
 --access and --claude-permission set this machine's default permission. Permissions
 chosen on tagmails.com override it, up to --max-access / --max-claude-permission
-(everything by default).
+(write and auto by default). Full access and bypass are only reachable after you
+allow them here, with --max-access full / --max-claude-permission bypass or by
+choosing --access full / --claude-permission bypass.
 
 --model, --effort and --speed set this machine's default for emails that don't ask for
 one; a default saved on tagmails.com overrides them.
@@ -1493,6 +1541,8 @@ fn command_start(args: &[String]) -> Result<(), Box<dyn Error>> {
         };
         config["claudePermission"] = json!(mode);
     }
+    let explicit_max_access = option(args, "--max-access")?.is_some();
+    let explicit_max_claude = option(args, "--max-claude-permission")?.is_some();
     if let Some(max) = option(args, "--max-access")? {
         if !ACCESS_ORDER.contains(&max.as_str()) {
             return Err("--max-access must be read, write, or full".into());
@@ -1509,6 +1559,7 @@ fn command_start(args: &[String]) -> Result<(), Box<dyn Error>> {
         };
         config["maxClaudePermission"] = json!(mode);
     }
+    raise_ceilings_for_local_defaults(&mut config, explicit_max_access, explicit_max_claude);
     if let Some(context) = option(args, "--routing-context")? {
         if !["full", "files"].contains(&context.as_str()) {
             return Err("--routing-context must be full or files".into());
@@ -1604,6 +1655,7 @@ fn command_status() -> Result<(), Box<dyn Error>> {
     println!("  Service     {}", service::status());
     println!("  Access      Codex {}, Claude {}", config["access"].as_str().unwrap_or("read"),
         config["claudePermission"].as_str().unwrap_or("acceptEdits"));
+    println!("  Website max Codex {}, Claude {}", max_access(&config), max_claude_permission(&config));
     if config["workspace"].is_null() {
         println!("  Routing     {} context", config["routingContext"].as_str().unwrap_or("full"));
     }

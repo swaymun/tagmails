@@ -53,7 +53,7 @@ Gmail ─► Cloudflare Email Routing (or Resend webhook) ─► relay Worker (D
 | `--access full` | No sandbox. Only runs emails from the account owner. |
 | `--projects` (default) / `--workspace PATH` | Pick from recent Codex/Claude project folders per thread, or pin one folder. |
 | `--claude-permission manual\|accept-edits\|auto\|bypass` | Claude Code permission mode. `bypass` is owner-only. |
-| `--max-access`, `--max-claude-permission` | Ceiling for permissions chosen on the website. Defaults to everything. |
+| `--max-access`, `--max-claude-permission` | Ceiling for permissions chosen on the website. Defaults to `write` and `auto`. Full access and `bypass` are reachable only after you allow them on the machine (`--max-access full`, or `--access full` / `--claude-permission bypass`). |
 
 Owner emails get the owner's own tool setup (MCP servers, connectors, skills). Participant emails run with none of it. Config is in `~/.config/tagmails/`, data in `~/Library/Application Support/TagMails` or `~/.local/share/tagmails`.
 
