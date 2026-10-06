@@ -8,6 +8,11 @@
   "durable_objects": { "bindings": [{ "name": "DEVICE_PUSH", "class_name": "DevicePush" }] },
   "migrations": [{ "tag": "v1-device-push", "new_sqlite_classes": ["DevicePush"] }],
   "triggers": { "crons": ["* * * * *"] },
+  // Per-IP limits for unauthenticated routes (services/rate-limit.mjs).
+  "ratelimits": [
+    { "name": "PUBLIC_RATE_LIMIT", "namespace_id": "1001", "simple": { "limit": 300, "period": 60 } },
+    { "name": "AUTH_RATE_LIMIT", "namespace_id": "1002", "simple": { "limit": 20, "period": 60 } }
+  ],
   "secrets": { "required": ["RESEND_API_KEY", "RESEND_WEBHOOK_SECRET", "GOOGLE_CLIENT_ID", "AGENT_DOMAIN", "PUBLIC_ORIGIN"] },
   "env": {
     "dev": {
@@ -17,6 +22,10 @@
       "r2_buckets": [{ "binding": "MAIL", "bucket_name": "tagmails-relay-mail-dev" }],
       "send_email": [{ "name": "EMAIL" }],
       "durable_objects": { "bindings": [{ "name": "DEVICE_PUSH", "class_name": "DevicePush" }] },
+      "ratelimits": [
+        { "name": "PUBLIC_RATE_LIMIT", "namespace_id": "2001", "simple": { "limit": 300, "period": 60 } },
+        { "name": "AUTH_RATE_LIMIT", "namespace_id": "2002", "simple": { "limit": 20, "period": 60 } }
+      ],
       "secrets": { "required": ["GOOGLE_CLIENT_ID", "AGENT_DOMAIN", "PUBLIC_ORIGIN", "SITE_ORIGIN", "STORAGE_KEY"] },
       "triggers": { "crons": ["* * * * *"] }
     }

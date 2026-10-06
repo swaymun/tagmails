@@ -22,6 +22,7 @@ This path uses Resend for mail, matching `wrangler.selfhost.example.jsonc`. The 
 | R2 bucket | `MAIL` | `tagmails-selfhost-mail` | Raw mail, results and files can't be stored. |
 | Durable Object | `DEVICE_PUSH` (class `DevicePush`, migration `v1-device-push`) | | Daemons fall back to polling every 15 s. |
 | Cron trigger | | `* * * * *` | Replies never send, clarifications never complete, cleanup stops. |
+| Rate limiting | `PUBLIC_RATE_LIMIT` (300/min per IP), `AUTH_RATE_LIMIT` (20/min per IP) | `namespace_id` 1001, 1002 | No limits on pages, webhooks, sign-in, pairing or bad device tokens. Pick IDs unused in your account. |
 
 ## Secrets and variables
 
@@ -100,6 +101,7 @@ Run from the repo root. `$ORIGIN` is the Worker origin.
 | "TagMails signup is closed during the private pilot" | `PILOT_OWNER_EMAIL` unset or a different address. |
 | Google button says sign-in is unavailable | `GOOGLE_CLIENT_ID` or `AGENT_DOMAIN` missing, or `AGENT_DOMAIN` isn't a plain domain. |
 | Google popup error `origin_mismatch` | The Worker origin isn't an authorized JavaScript origin. |
+| 429 "Too many requests" | Over a per-IP limit. Wait a minute; raise the `limit` in the config if real traffic hits it. |
 | Webhook returns 500 | Wrong `RESEND_WEBHOOK_SECRET`, or `RESEND_API_KEY` lacks receiving access. Logs say "Inbound mail intake failed". |
 | Mail accepted, nothing claimed | No paired device, the daemon is stopped, or the sender is not the owner and not a thread participant (`{"accepted":false}`). |
 | "Sender authentication did not pass DMARC or aligned DKIM" | The mail was forwarded or sent from an unauthenticated server. Send directly from Gmail. |

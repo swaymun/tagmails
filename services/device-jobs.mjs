@@ -7,6 +7,7 @@ import { catalogFromDevice, deviceDefaults, deviceLimits } from './model-catalog
 import { cleanProjectCatalog } from './project-route.mjs';
 import { currentText } from './jev-route.mjs';
 import { openDevicePush } from './device-push.mjs';
+import { rateLimited, tooManyRequests } from './rate-limit.mjs';
 
 const TOKEN = /^tm_dev_[A-Za-z0-9_-]{43}$/;
 const LEASE_SECONDS = 90;
@@ -357,7 +358,9 @@ export async function handleDeviceRequest(request, env) {
   if (url.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(url.hostname)) return json({ error: 'HTTPS required' }, 403);
   if (!env.DB || !env.MAIL) throw new Error('Device job bindings are incomplete');
   const device = await deviceFor(request, env);
-  if (!device) return json({ error: 'Unauthorized device' }, 401);
+  // Only failed tokens count, so a guessing client is slowed and paired devices never are.
+  if (!device) return await rateLimited(env, 'AUTH_RATE_LIMIT', request, 'device')
+    ? tooManyRequests() : json({ error: 'Unauthorized device' }, 401);
   if (url.pathname === '/api/device/status') return Response.json({ paired: true }, {
     headers: { 'Cache-Control': 'no-store' },
   });

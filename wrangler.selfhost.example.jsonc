@@ -13,6 +13,11 @@
   "durable_objects": { "bindings": [{ "name": "DEVICE_PUSH", "class_name": "DevicePush" }] },
   "migrations": [{ "tag": "v1-device-push", "new_sqlite_classes": ["DevicePush"] }],
   "triggers": { "crons": ["* * * * *"] },
+  // Per-IP limits for unauthenticated routes. namespace_id must be unique in your account.
+  "ratelimits": [
+    { "name": "PUBLIC_RATE_LIMIT", "namespace_id": "1001", "simple": { "limit": 300, "period": 60 } },
+    { "name": "AUTH_RATE_LIMIT", "namespace_id": "1002", "simple": { "limit": 20, "period": 60 } }
+  ],
   "secrets": { "required": [
     "RESEND_API_KEY",
     "RESEND_WEBHOOK_SECRET",

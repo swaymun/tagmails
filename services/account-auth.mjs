@@ -8,6 +8,7 @@ import { artifactForDownload, selectedRunArtifacts } from './run-artifacts.mjs';
 import { knownAgentAddresses } from './agent-addresses.mjs';
 import { accountPreferences, clearAccountPreferences, saveAccountPreferences } from './account-preferences.mjs';
 import { accountModelCatalog } from './model-catalog.mjs';
+import { rateLimited, tooManyRequests } from './rate-limit.mjs';
 
 const googleKeys = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
 const DEVICE_TOKEN = /^tm_dev_[A-Za-z0-9_-]{43}$/;
@@ -333,7 +334,10 @@ async function siteAccountRequest(request, env, pathname, verifyIdentity) {
   });
   if (!siteOriginFor(request, env)) return json({ error: 'Invalid origin' }, 403);
   const owner = await siteOwnerFor(request, env, verifyIdentity);
-  if (owner.error) return json({ error: owner.error }, owner.status, headers);
+  if (owner.error) {
+    if (owner.status === 401 && await rateLimited(env, 'AUTH_RATE_LIMIT', request, 'site')) return tooManyRequests(headers);
+    return json({ error: owner.error }, owner.status, headers);
+  }
   const { account } = owner;
   if (pathname === '/api/site/account' && request.method === 'GET') {
     const changes = await env.DB.prepare('SELECT address_changes FROM accounts WHERE id = ?').bind(account.id).first();
@@ -550,7 +554,10 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
     const credential = request.headers.get('authorization')?.match(/^Bearer (\S+)$/)?.[1];
     let identity;
     try { identity = await siteIdentity(env, credential, verifyIdentity); }
-    catch { return json({ error: 'Google sign-in required' }, 401, headers); }
+    catch {
+      if (await rateLimited(env, 'AUTH_RATE_LIMIT', request, 'site')) return tooManyRequests(headers);
+      return json({ error: 'Google sign-in required' }, 401, headers);
+    }
     const jobId = apiRunId ?? apiArtifact[1];
     const viewer = await runViewer(env, jobId, identity);
     if (apiArtifact && !viewer?.owner) return json({ error: 'Run not found' }, 404, headers);
@@ -575,6 +582,8 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
       ? json({ clientId: env.GOOGLE_CLIENT_ID }, 200, siteCors(request, env))
       : json({ error: 'Google sign-in is not configured' }, 503, siteCors(request, env));
   }
+  if ((pathname === '/api/auth/google' || pathname === '/api/device/pair') && request.method === 'POST' &&
+      await rateLimited(env, 'AUTH_RATE_LIMIT', request, 'auth')) return tooManyRequests(siteCors(request, env));
   if (pathname === '/api/auth/google' && request.method === 'POST') return signIn(request, env, verifyIdentity, exchangeCode);
   if (pathname === '/api/device/pair' && request.method === 'POST') return pair(request, env);
   const account = await accountFor(request, env);
