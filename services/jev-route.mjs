@@ -37,8 +37,6 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
     ...(catalog ? {} : { luna: LUNA }),
   };
   if (catalog) {
-    const luna = catalog.find((model) => /luna/i.test(model.id));
-    if (luna) routes.luna = { id: luna.id, effort: 'medium' };
     catalog.forEach((model, index) => { routes[`model${index}`] = { id: model.id, effort: 'medium' }; });
   }
   const direct = chooseModel(body, defaultModel, { codexModel, availableModels: catalog });
@@ -87,9 +85,10 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
               codex: 'The sender asks to use Codex, Sol, or Seoul as a generic model name without specifying a model version.',
               claude: 'The sender asks to use Claude or Claude Code without naming a specific Claude model.',
               ...(catalog ? {} : { codex61: 'The sender explicitly asks to use GPT-6.1 Sol by version, rather than generic Codex or Sol.' }),
-              ...(routes.luna ? { luna: 'The sender asks to use Luna without naming an exact version.' } : {}),
+              ...(catalog ? {} : { luna: 'The sender asks to use Luna without naming an exact version.' }),
+              // One criterion per model: a duplicate "luna" choice would split the probability and neither would clear the threshold.
               ...Object.fromEntries((catalog ?? []).map((model, index) => [`model${index}`,
-                `The sender specifically asks to use ${model.name} (${model.id}) for this task, including a clear spelling or speech transcription variant.`])),
+                `The sender specifically asks to use ${model.name} (${model.id}) for this task, including a clear spelling or speech transcription variant${/luna/i.test(model.id) ? ', or just Luna' : ''}.`])),
               unsupported: 'The sender clearly asks to use a specific model outside the available choices.',
             },
           },
