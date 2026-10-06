@@ -216,7 +216,9 @@ test('Codex passes advertised effort and fast tier and records reasoning summari
   const turn = fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse).find((item) => item.method === 'turn/start');
   assert.equal(turn.params.effort, 'medium');
   assert.equal(turn.params.serviceTierForTurn, 'priority');
-  assert.match(turn.params.input[0].text, /already selected gpt-6-luna with medium reasoning and fast speed/);
+  // The model and settings go to the app-server, never into the prompt text.
+  assert.match(turn.params.input[0].text, /routing preferences TagMails has already applied/);
+  assert.doesNotMatch(turn.params.input[0].text, /gpt-6-luna/);
   assert.match(turn.params.input[0].text, /routing preferences already applied by the app-server/);
 });
 
