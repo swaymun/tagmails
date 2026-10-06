@@ -186,13 +186,15 @@ export async function handleEmail(emailMessage, env, { fetchModel = fetch, resol
 // A follow-up that arrives while an earlier email in its thread is running can
 // adjust that run instead of waiting behind it. Returns the run to steer, or
 // null to queue as usual. Attachments and explicit Model lines always queue.
+// Only the running email's own sender can steer it: an owner turn may have
+// full access and the owner's connectors, which a participant must not reach.
 async function steerTarget(env, agent, threadId, message, fetchModel) {
   if (!threadId || !env.TYPESAFE_API_KEY || message.attachments?.length || /^Model:/im.test(message.body ?? '')) return null;
-  const running = await env.DB.prepare(`SELECT j.id, m.object_key, m.message_id FROM jobs j
+  const running = await env.DB.prepare(`SELECT j.id, m.object_key, m.message_id, m.sender_email FROM jobs j
     JOIN messages m ON m.id = j.message_id
     WHERE j.thread_id = ? AND j.state = 'running' AND j.lease_until > CURRENT_TIMESTAMP
     ORDER BY m.rowid DESC LIMIT 1`).bind(threadId).first();
-  if (!running) return null;
+  if (!running || running.sender_email !== message.from) return null;
   try {
     const object = await env.MAIL.get(running.object_key);
     if (!object) return null;

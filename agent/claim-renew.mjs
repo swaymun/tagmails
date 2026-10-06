@@ -53,7 +53,10 @@ export function keepClaim(claim, onLost, { every = Number(process.env.TAGMAILS_C
       const renewed = await renew(claim);
       lastOk = now();
       for (const steer of onSteer ? renewed?.steers ?? [] : []) {
-        if (!handled.has(steer.id)) handled.set(steer.id, Boolean(await onSteer(steer).catch(() => false)));
+        // A different sender's follow-up never joins this turn (it may run with
+        // owner-only access); it is handed back to run as its own job.
+        const sameSender = typeof steer.from === 'string' && steer.from === claim.request?.from;
+        if (!handled.has(steer.id)) handled.set(steer.id, sameSender && Boolean(await onSteer(steer).catch(() => false)));
         await ack(claim, steer.id, handled.get(steer.id)).catch(() => {});
       }
     }

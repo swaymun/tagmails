@@ -195,10 +195,13 @@ async function renew(env, device, body) {
 
 // Follow-up emails waiting to steer this run. The computer confirms each one
 // with /api/device/steered; until then it stays pending and is re-offered.
+// Only the run's own sender may steer it (see steerTarget in relay-worker.mjs).
 async function pendingSteers(env, device, jobId) {
   const { results = [] } = await env.DB.prepare(`SELECT s.id, m.object_key, m.message_id, m.agent_email FROM jobs s
     JOIN messages m ON m.id = s.message_id
-    WHERE s.steer_of = ? AND s.steer_state = 'pending' ORDER BY s.rowid LIMIT 3`).bind(jobId).all();
+    JOIN jobs r ON r.id = s.steer_of JOIN messages rm ON rm.id = r.message_id
+    WHERE s.steer_of = ? AND s.steer_state = 'pending' AND m.sender_email = rm.sender_email
+    ORDER BY s.rowid LIMIT 3`).bind(jobId).all();
   const steers = [];
   for (const item of results) {
     try {
