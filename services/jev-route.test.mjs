@@ -219,7 +219,7 @@ test('Jev sees common dictation variants next to each model name', async () => {
     fetcher: async (_url, options) => { body = JSON.parse(options.body); return Response.json({ answers: {} }); } });
   const { instructions, criteria } = body.questions.route;
   assert.match(instructions, /son it for Sonnet/);
-  assert.match(criteria.codex, /"Seoul"/);
+  assert.match(criteria.model0, /"Seoul"/);
   assert.match(criteria.model1, /"son it"/);
   assert.match(criteria.model2, /"high cool"/);
   assert.match(criteria.claude, /"Cloud"/);

@@ -117,8 +117,11 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
             instructions: 'Does the sender ask the agent to use a specific model for this task? Select none unless a model preference is clearly requested in the current text. A reply that merely continues the task should select none. Many emails are dictated, so interpret spelling and speech-to-text variants of model names inside a model request, such as Seoul for Sol, son it for Sonnet, high cool for Haiku, or loon uh for Luna; the same words in ordinary text (find hotels in Seoul, that is cool) are not model requests. Ignore quoted messages and model names mentioned only for comparison or discussion. If a requested model is outside the supported choices, select unsupported even when its provider also has a supported model.',
             criteria: {
               none: 'No clear request to use one of the listed models for this task.',
-              codex: `The sender asks to use Codex or Sol as a generic model name without specifying a model version.${heard('codex', 'sol')}`,
-              claude: `The sender asks to use Claude or Claude Code without naming a specific Claude model.${heard('claude')}`,
+              // With a catalog, Sol has its own model or family choice; naming it here too would split the vote.
+              codex: catalog?.some((model) => familyOf(model) === 'sol')
+                ? `The sender asks to use Codex without naming a model.${heard('codex')}`
+                : `The sender asks to use Codex or Sol as a generic model name without specifying a model version.${heard('codex', 'sol')}`,
+              claude: `The sender asks to use Claude or Claude Code and names no particular Claude model such as Opus, Sonnet, Haiku or Fable.${heard('claude')}`,
               ...(catalog ? {} : { codex61: 'The sender explicitly asks to use GPT-6.1 Sol by version, rather than generic Codex or Sol.' }),
               ...(catalog ? {} : { luna: 'The sender asks to use Luna without naming an exact version.' }),
               // One criterion per model: a duplicate "luna" choice would split the probability and neither would clear the threshold.
@@ -126,7 +129,7 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
                 const shared = ambiguous.some(([, group]) => group.includes(model));
                 const sounds = heard(...String(model.name ?? model.id).split(/[\s-]+/));
                 return [`model${index}`, shared
-                  ? `The sender names the exact version ${model.name} (${model.id}), not just the family name.${sounds}`
+                  ? `The sender names the exact version ${model.name} (${model.id}), not just the family name.`
                   : `The sender specifically asks to use ${model.name} (${model.id}) for this task, or just its name ${familyOf(model)}.${sounds}`];
               })),
               ...Object.fromEntries(ambiguous.map(([key, group], index) => [`family${index}`,
