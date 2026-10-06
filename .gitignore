@@ -6,3 +6,4 @@ target/
 .env*
 .wrangler/
 wrangler.selfhost.jsonc
+calls.jsonl
