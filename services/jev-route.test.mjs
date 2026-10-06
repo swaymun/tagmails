@@ -187,3 +187,23 @@ test('no effort request is not a request for none reasoning', async () => {
     apiKey: 'test-key', fetcher: answers('none'), availableModels: catalog,
   })).error, /does not offer none reasoning/);
 });
+
+test('a bare family name routes to its newest version when several are installed', async () => {
+  const availableModels = [
+    { id: 'gpt-5.6-luna', name: 'GPT-5.6-Luna', efforts: ['low', 'medium'], speeds: ['standard', 'fast'] },
+    { id: 'gpt-6-luna', name: 'GPT-6-Luna', efforts: ['low', 'medium'], speeds: ['standard', 'fast'] },
+    { id: 'gpt-6-sol', name: 'GPT-6-Sol', efforts: ['low', 'medium'], speeds: ['standard', 'fast'] },
+  ];
+  let criteria;
+  const selected = await routeModel('use luna low fast', 'gpt-6-sol', {
+    apiKey: 'test-key', availableModels, fetcher: async (_url, options) => {
+      criteria = JSON.parse(options.body).questions.route.criteria;
+      return Response.json({ answers: {
+        route: { type: 'choice', choice: 'family0', probabilities: { family0: 0.9 } },
+        requestedEffort: { type: 'choice', choice: 'low', probabilities: { low: 0.9 } },
+        speed: { type: 'choice', choice: 'fast', probabilities: { fast: 0.9 } } } });
+    } });
+  assert.deepEqual(selected, { id: 'gpt-6-luna', effort: 'low', speed: 'fast', source: 'classified' });
+  assert.equal(criteria.luna, undefined, 'no duplicate luna choice that would split the probability');
+  assert.match(criteria.family0, /luna/i);
+});

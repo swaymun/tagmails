@@ -30,6 +30,17 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
   // "Use Claude" means the account's Claude default, or the machine's first Claude model.
   const claudeModel = claudeModels.length
     ? { id: (claudeModels.find((model) => model.id === defaultModel) ?? claudeModels[0]).id, effort: 'medium' } : CLAUDE;
+  // "Luna" or "Opus" without a version is ambiguous when the machine offers several. Name the family
+  // in its own choice and send it to the newest version; the per-model choices then mean "this exact version".
+  const familyOf = (model) => String(model.name ?? model.id).trim().split(/[\s-]+/).filter((word) => !/^[\d.]+$/.test(word)).pop()?.toLowerCase() || model.id;
+  const version = (model) => (String(model.id).match(/\d+/g) ?? []).map(Number);
+  const newest = (a, b) => { for (let i = 0; i < Math.max(a.length, b.length); i += 1) { if ((a[i] ?? -1) !== (b[i] ?? -1)) return (a[i] ?? -1) - (b[i] ?? -1); } return 0; };
+  const families = new Map();
+  for (const model of catalog ?? []) {
+    const key = `${model.id.startsWith('claude-') ? 'claude' : 'codex'}:${familyOf(model)}`;
+    families.set(key, [...(families.get(key) ?? []), model]);
+  }
+  const ambiguous = [...families.entries()].filter(([, group]) => group.length > 1);
   const routes = {
     codex: { id: codexModel, effort: 'medium' },
     claude: claudeModel,
@@ -38,6 +49,9 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
   };
   if (catalog) {
     catalog.forEach((model, index) => { routes[`model${index}`] = { id: model.id, effort: 'medium' }; });
+    ambiguous.forEach(([key, group], index) => {
+      routes[`family${index}`] = { id: [...group].sort((a, b) => newest(version(b), version(a)))[0].id, effort: 'medium' };
+    });
   }
   const direct = chooseModel(body, defaultModel, { codexModel, availableModels: catalog });
   const knownPrior = priorModel && Object.values(routes).some(({ id }) => priorModel.id === id) &&
@@ -87,8 +101,14 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
               ...(catalog ? {} : { codex61: 'The sender explicitly asks to use GPT-6.1 Sol by version, rather than generic Codex or Sol.' }),
               ...(catalog ? {} : { luna: 'The sender asks to use Luna without naming an exact version.' }),
               // One criterion per model: a duplicate "luna" choice would split the probability and neither would clear the threshold.
-              ...Object.fromEntries((catalog ?? []).map((model, index) => [`model${index}`,
-                `The sender specifically asks to use ${model.name} (${model.id}) for this task, including a clear spelling or speech transcription variant${/luna/i.test(model.id) ? ', or just Luna' : ''}.`])),
+              ...Object.fromEntries((catalog ?? []).map((model, index) => {
+                const shared = ambiguous.some(([, group]) => group.includes(model));
+                return [`model${index}`, shared
+                  ? `The sender names the exact version ${model.name} (${model.id}), not just the family name.`
+                  : `The sender specifically asks to use ${model.name} (${model.id}) for this task, including a clear spelling or speech transcription variant${/luna/i.test(model.id) ? ', or just Luna' : ''}.`];
+              })),
+              ...Object.fromEntries(ambiguous.map(([key, group], index) => [`family${index}`,
+                `The sender asks for ${familyOf(group[0])} (${group.map((model) => model.name).join(', ')}) without naming a version.`])),
               unsupported: 'The sender clearly asks to use a specific model outside the available choices.',
             },
           },
