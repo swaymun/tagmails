@@ -227,8 +227,12 @@ async function prepare(env, row) {
   const siteOrigin = publicOrigin(env.SITE_ORIGIN);
   const relayOrigin = publicOrigin(env.PUBLIC_ORIGIN);
   const ownerCanOpen = [request.from, ...visible].includes(owner);
+  // The owner opens the email inline on their page; a guest on a shared
+  // thread can't sign in there, so they keep the standalone run page.
+  const sharedReply = [...to, ...cc].some((email) => email !== owner);
   const transcriptUrl = siteOrigin
-    ? `${siteOrigin}/run?id=${encodeURIComponent(row.job_id)}`
+    ? sharedReply ? `${siteOrigin}/run?id=${encodeURIComponent(row.job_id)}`
+      : `${siteOrigin}/?run=${encodeURIComponent(row.job_id)}#emails`
     : relayOrigin ? `${relayOrigin}/runs/${encodeURIComponent(row.job_id)}` : null;
   const participantTranscriptReady = siteOrigin && env.SITE_PARTICIPANT_TRANSCRIPTS === 'true';
   const sharedWithParticipant = [...to, ...cc].some((email) => email !== owner);

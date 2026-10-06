@@ -239,10 +239,16 @@ fn publish_model_catalog(
     });
     // Defaults set with `tagmails start --model/--effort/--speed`. A default
     // saved on the website overrides them.
-    let defaults = &load_config()["defaults"];
+    let config = load_config();
+    let defaults = &config["defaults"];
     if defaults.is_object() {
         catalog["defaults"] = defaults.clone();
     }
+    // The most this machine allows; a website choice is capped at these.
+    catalog["limits"] = json!({
+        "access": config["access"].as_str().unwrap_or("read"),
+        "claudePermission": config["claudePermission"].as_str().unwrap_or("acceptEdits"),
+    });
     let response = relay_post(client, base, "/api/device/models", token, catalog)?;
     if response["saved"] != true {
         return Err("Relay did not save the model catalog".into());
@@ -667,10 +673,21 @@ fn upload_file(
     Ok(())
 }
 
+/// A website permission choice applies only up to this machine's limit.
+fn capped<'a>(choice: Option<&'a str>, limit: &'a str, order: &[&str]) -> &'a str {
+    let rank = |value: &str| order.iter().position(|item| *item == value);
+    match (choice, rank(limit)) {
+        (Some(choice), Some(max)) if rank(choice).is_some_and(|wanted| wanted <= max) => choice,
+        _ => limit,
+    }
+}
+
+const ACCESS_ORDER: [&str; 3] = ["read", "write", "full"];
+const CLAUDE_ORDER: [&str; 5] = ["readonly", "manual", "acceptEdits", "auto", "bypassPermissions"];
+
 fn relay_iteration(client: &Client, settings: &Settings) -> Result<bool, Box<dyn Error>> {
     let base = settings.relay.as_str();
     let token = settings.token.as_str();
-    let access = settings.access.as_str();
     let response = relay_post(client, base, "/api/device/claim", token, json!({}))?;
     if response["claimed"] != true {
         return Ok(false);
@@ -686,6 +703,14 @@ fn relay_iteration(client: &Client, settings: &Settings) -> Result<bool, Box<dyn
         .to_owned();
     claim["claimId"] = json!(lease_id);
     claim["claimed"] = json!(true);
+    let access = capped(claim["permissions"]["codexAccess"].as_str(), settings.access.as_str(), &ACCESS_ORDER).to_owned();
+    let access = access.as_str();
+    let claude_permission = capped(
+        claim["permissions"]["claudePermission"].as_str(),
+        settings.claude_permission.as_str(),
+        &CLAUDE_ORDER,
+    )
+    .to_owned();
     let file_request = requested_workspace_file(&claim);
     let workspace = job_workspace(settings, &claim);
     let mut result = match (&file_request, &workspace) {
@@ -706,7 +731,7 @@ fn relay_iteration(client: &Client, settings: &Settings) -> Result<bool, Box<dyn
             ) {
                 eprintln!("Status reaction could not be queued: {error}");
             }
-            relay_result(&claim, base, access, &settings.claude_permission, workspace)?
+            relay_result(&claim, base, access, &claude_permission, workspace)?
         }
     };
     if result["state"] == "completed" && wants_answer_file(&claim) {
@@ -900,6 +925,16 @@ fn run_relay(settings: &Settings, once: bool) -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn website_permissions_never_exceed_the_machine_limit() {
+        assert_eq!(capped(Some("read"), "write", &ACCESS_ORDER), "read");
+        assert_eq!(capped(Some("full"), "write", &ACCESS_ORDER), "write");
+        assert_eq!(capped(None, "write", &ACCESS_ORDER), "write");
+        assert_eq!(capped(Some("bogus"), "write", &ACCESS_ORDER), "write");
+        assert_eq!(capped(Some("bypassPermissions"), "auto", &CLAUDE_ORDER), "auto");
+        assert_eq!(capped(Some("manual"), "auto", &CLAUDE_ORDER), "manual");
+    }
+
     #[test]
     fn attached_files_get_distinct_stable_upload_ids() {
         let lease = "11111111-2222-4333-8444-5555555555a0";

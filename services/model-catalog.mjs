@@ -68,8 +68,16 @@ export function deviceDefaults(input, models) {
   return out;
 }
 
+// The most a computer allows, from `tagmails start --access/--claude-permission`.
+export function deviceLimits(input) {
+  const access = ['read', 'write', 'full'].includes(input?.access) ? input.access : null;
+  const claude = ['readonly', 'manual', 'acceptEdits', 'auto', 'bypassPermissions'].includes(input?.claudePermission)
+    ? input.claudePermission : null;
+  return access || claude ? { access, claudePermission: claude } : null;
+}
+
 export async function accountModelCatalog(db, accountId, threadId = null) {
-  const row = await db.prepare(`SELECT d.id AS device_id, d.model_catalog_json, d.model_catalog_at, d.defaults_json FROM devices d
+  const row = await db.prepare(`SELECT d.id AS device_id, d.model_catalog_json, d.model_catalog_at, d.defaults_json, d.limits_json FROM devices d
     WHERE d.account_id = ? AND d.revoked_at IS NULL AND d.model_catalog_json IS NOT NULL
       AND d.model_catalog_at >= datetime('now', '-24 hours')
       AND (? IS NULL OR (SELECT device_id FROM threads WHERE id = ? AND account_id = ?) IS NULL
@@ -81,6 +89,8 @@ export async function accountModelCatalog(db, accountId, threadId = null) {
     if (!Array.isArray(models)) throw new Error('Invalid saved catalog');
     let defaults = null;
     try { defaults = deviceDefaults(JSON.parse(row.defaults_json ?? 'null'), models); } catch { /* Ignore. */ }
-    return { models, observedAt: row.model_catalog_at, deviceId: row.device_id, defaults };
+    let limits = null;
+    try { limits = deviceLimits(JSON.parse(row.limits_json ?? 'null')); } catch { /* Ignore. */ }
+    return { models, observedAt: row.model_catalog_at, deviceId: row.device_id, defaults, limits };
   } catch { return { models: [], observedAt: null, deviceId: null, defaults: null }; }
 }

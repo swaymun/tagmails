@@ -8,11 +8,11 @@ test('email defaults persist and supply a fallback while Jev may override task c
   const { env } = bindings();
   const account = { id: 'account-1', default_model: 'gpt-6.1-sol' };
   assert.deepEqual(await accountPreferences(env, account), {
-    model: 'gpt-6.1-sol', effort: 'medium', speed: 'standard', source: 'default',
+    model: 'gpt-6.1-sol', effort: 'medium', speed: 'standard', source: 'default', codexAccess: null, claudePermission: null, limits: null,
   });
   await saveAccountPreferences(env, account, { model: 'gpt-6-luna', effort: 'high', speed: 'fast' });
   const saved = await accountPreferences(env, account);
-  assert.deepEqual(saved, { model: 'gpt-6-luna', effort: 'high', speed: 'fast', source: 'site' });
+  assert.deepEqual(saved, { model: 'gpt-6-luna', effort: 'high', speed: 'fast', source: 'site', codexAccess: null, claudePermission: null, limits: null });
   assert.deepEqual(await routeModel('Review the files.', saved.model, {
     defaultEffort: saved.effort, defaultSpeed: saved.speed,
   }), { id: 'gpt-6-luna', effort: 'high', speed: 'fast', source: 'default' });

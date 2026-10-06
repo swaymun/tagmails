@@ -181,8 +181,9 @@ test('provider acceptance settles a reserved charge; uncertain delivery holds it
   assert.deepEqual(await testWalletSnapshot(env, 'account-1'), { balanceCents: 0, waitingEmails: 0 });
 });
 
-test('failed and approval-waiting agent turns return test credit before their notice email', async () => {
-  for (const state of ['failed', 'needs_approval']) {
+test('agent replies are charged whatever their outcome; turns that never reached the harness are free', async () => {
+  for (const [state, runtime, charged] of [['failed', 'codex-app-server-write', true], ['needs_approval', 'codex-app-server-write', true],
+    ['failed', 'tagmails-router', false]]) {
     const { env, sqlite } = pilot();
     credit(sqlite, 'account-1', 5, state);
     await deliver(env, `mail-${state}`);
@@ -193,24 +194,25 @@ test('failed and approval-waiting agent turns return test credit before their no
     const completion = await handleDeviceRequest(new Request('https://relay.test/api/device/complete', {
       method: 'POST', headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify({ jobId: task.jobId, leaseId: task.leaseId,
-        result: { state, summary: 'The agent could not finish this task.' } }),
+        result: { runtime, state, summary: 'The agent could not finish this task.' } }),
     }), env);
     assert.equal(completion.status, 200);
     assert.equal((await completion.json()).completed, true);
     assert.equal(sqlite.prepare('SELECT state FROM test_email_charges WHERE job_id = ?').get(task.jobId).state,
-      'released');
-    assert.deepEqual(await testWalletSnapshot(env, 'account-1'), { balanceCents: 5, waitingEmails: 0 });
+      charged ? 'reserved' : 'released');
+    assert.deepEqual(await testWalletSnapshot(env, 'account-1'), { balanceCents: charged ? 0 : 5, waitingEmails: 0 });
     assert.equal((await sendNextOutbox(env, {
       sendEmail: async (payload) => {
-        assert.match(payload.text, /No charge/);
-        assert.match(payload.text, /Balance \$0\.05/);
+        if (charged) assert.doesNotMatch(payload.text, /No charge/);
+        else assert.match(payload.text, /No charge/);
+        assert.match(payload.text, charged ? /Balance \$0\.00/ : /Balance \$0\.05/);
         return { data: { id: `sent-${state}` } };
       },
       getSentEmail: async () => ({ data: { message_id: `<sent-${state}@tagmails.test>` } }),
     })).state, 'sent');
     await reconcileTestEmailCharges(env);
-    assert.equal(sqlite.prepare('SELECT state FROM test_email_charges WHERE job_id = ?').get(task.jobId).state,
-      'released');
+    assert.notEqual(sqlite.prepare('SELECT state FROM test_email_charges WHERE job_id = ?').get(task.jobId).state,
+      charged ? 'released' : 'reserved');
   }
 });
 

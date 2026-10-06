@@ -83,13 +83,12 @@ export async function prepareCodexProfile(workspace, access = false) {
   return home;
 }
 
-// Owner turns run like Wonder does: a TagMails-only Codex home (its own
-// sessions and history) that links the owner's Codex config, sign-in,
-// plugins, skills and rules, so their connectors (Google Drive, Gmail, ...)
-// work. The permission profile arrives as -c overrides on each run instead of
-// a config file, and desktop control stays off.
-const SHARED = ['config.toml', 'auth.json', '.credentials.json', 'plugins', 'skills', 'rules'];
-
+// Owner turns run in the owner's own Codex home, like Wonder's project
+// threads: their config, sign-in, plugins and connectors apply, and the thread
+// shows up in the Codex app so a codex://threads/<id> link can open it. The
+// TagMails permission profile arrives as -c overrides (nothing is written to
+// the owner's config) and desktop control stays off. TagMails keeps its own
+// thread-to-session map in a separate folder.
 function profileOverride(profile, access) {
   return `permissions.${profile}={extends=":read-only",filesystem={":root"="deny",":minimal"="read",":tmpdir"="deny",":slash_tmp"="deny",":workspace_roots"={"."="${access}"}},network={enabled=false}}`;
 }
@@ -110,22 +109,16 @@ export async function prepareOwnerCodexHome(workspace, access = false) {
   const full = access === 'full';
   const write = access === true || access === 'write';
   const desktop = process.env.TAGMAILS_CODEX_DESKTOP_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
-  const destination = process.env.TAGMAILS_CODEX_OWNER_HOME ||
+  const store = process.env.TAGMAILS_CODEX_OWNER_HOME ||
     path.join(os.homedir(), '.tagmails', full ? 'codex-owner-full' : write ? 'codex-owner-write' : 'codex-owner-readonly');
-  if (!path.isAbsolute(desktop) || !path.isAbsolute(destination)) throw new Error('Codex homes must be absolute paths');
-  await fs.mkdir(destination, { recursive: true, mode: 0o700 });
-  const home = await fs.realpath(destination);
-  const source = await fs.realpath(desktop);
-  for (const root of [home, source]) {
+  if (!path.isAbsolute(desktop) || !path.isAbsolute(store)) throw new Error('Codex homes must be absolute paths');
+  await fs.mkdir(store, { recursive: true, mode: 0o700 });
+  const home = await fs.realpath(desktop);
+  const storeDir = await fs.realpath(store);
+  for (const root of [home, storeDir]) {
     if (overlaps(workspace, root) || overlaps(root, workspace)) {
       throw new Error('Codex homes must be outside the selected workspace');
     }
   }
-  for (const name of SHARED) {
-    const from = path.join(source, name);
-    const to = path.join(home, name);
-    try { await fs.access(from); } catch { continue; }
-    try { await fs.lstat(to); } catch { await fs.symlink(from, to); }
-  }
-  return { home, args: ownerOverrides(full ? 'full' : write) };
+  return { home, storeDir, args: ownerOverrides(full ? 'full' : write) };
 }

@@ -37,7 +37,7 @@ function request(path, method = 'GET', body, cookie, origin = 'https://relay.tes
 test('Google ID tokens require a valid signature, client, and verified personal Gmail address', async () => {
   const { token, keys } = await signedGoogleToken();
   assert.deepEqual(await verifyGoogleCredential(token, clientId, keys), {
-    sub: 'google-user-2', email: 'new.owner@gmail.com',
+    sub: 'google-user-2', email: 'new.owner@gmail.com', givenName: '', familyName: '',
   });
   await assert.rejects(verifyGoogleCredential(token, 'another-client', keys));
   await assert.rejects(verifyGoogleCredential(`${token}x`, clientId, keys));
@@ -136,13 +136,13 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   assert.deepEqual(await (await handleAccountRequest(preferencesRequest(customOrigin), env, options)).json(), {
-    model: 'gpt-6.1-sol', effort: 'medium', speed: 'standard', source: 'default',
+    model: 'gpt-6.1-sol', effort: 'medium', speed: 'standard', source: 'default', codexAccess: null, claudePermission: null, limits: null,
   });
   const changedPreferences = await handleAccountRequest(preferencesRequest(customOrigin, 'POST', {
     model: 'gpt-6-luna', effort: 'low', speed: 'fast',
   }), env, options);
   assert.equal(changedPreferences.status, 200);
-  assert.deepEqual(await changedPreferences.json(), { model: 'gpt-6-luna', effort: 'low', speed: 'fast', source: 'site' });
+  assert.deepEqual(await changedPreferences.json(), { model: 'gpt-6-luna', effort: 'low', speed: 'fast', source: 'site', codexAccess: null, claudePermission: null, limits: null });
   assert.equal((await handleAccountRequest(preferencesRequest('https://attacker.test', 'POST', {
     model: 'gpt-6-sol', effort: 'medium', speed: 'standard',
   }), env, options)).status, 403);
@@ -380,7 +380,8 @@ test('the private Site can show the owner account and manage only its paired dev
   const account = await handleAccountRequest(site('/api/site/account'), env, options);
   assert.equal(account.headers.get('access-control-allow-origin'), env.SITE_ORIGIN);
   assert.deepEqual(await account.json(), { ownerEmail: 'owner@gmail.com',
-    agentEmail: 'agent@wonder.test', defaultModel: 'gpt-6.1-sol', deliveryReady: false, addressDomain: null });
+    agentEmail: 'agent@wonder.test', defaultModel: 'gpt-6.1-sol', deliveryReady: false, addressDomain: null,
+    addressChangesLeft: 3 });
   assert.equal((await handleAccountRequest(site('/api/site/devices'), env, options)).status, 200);
   const code = await (await handleAccountRequest(site('/api/site/pairing-code', 'POST'), env, options)).json();
   assert.match(code.code, /^tm_pair_[A-Za-z0-9_-]{27}$/);

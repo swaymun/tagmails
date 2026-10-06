@@ -3,7 +3,7 @@ import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.m
 import { chooseModel } from '../apps/mock-inbox/model.mjs';
 import { testBillingEnabled } from './email-charges.mjs';
 import { ARTIFACT_ID, selectedRunArtifacts, uploadRunArtifact } from './run-artifacts.mjs';
-import { catalogFromDevice, deviceDefaults } from './model-catalog.mjs';
+import { catalogFromDevice, deviceDefaults, deviceLimits } from './model-catalog.mjs';
 import { cleanProjectCatalog } from './project-route.mjs';
 import { currentText } from './jev-route.mjs';
 
@@ -95,12 +95,19 @@ async function claim(env, device) {
   });
   if (parsed.messageId !== message.message_id) throw new Error('Stored MIME no longer matches the claimed job');
   const workspace = row.workspace_json ? JSON.parse(row.workspace_json) : null;
+  // Website permission choice; the computer applies it only up to its own limit.
+  const chosen = await env.DB.prepare('SELECT codex_access, claude_permission FROM account_preferences WHERE account_id = ?')
+    .bind(device.account_id).first();
+  const permissions = chosen?.codex_access || chosen?.claude_permission
+    ? { ...(chosen.codex_access ? { codexAccess: chosen.codex_access } : {}),
+      ...(chosen.claude_permission ? { claudePermission: chosen.claude_permission } : {}) } : null;
   const earlier = await unrunEarlierRequests(env, device, row, message.agent_email ?? account.agent_email);
   const body = earlier.length ? `${earlier.map((item) =>
     `Earlier in this thread, ${item.from} wrote (the relay replied without running an agent):\n${item.text}`).join('\n\n')}\n\nThe current message:\n${parsed.body}` : parsed.body;
   const envelope = {
     jobId: row.id, threadId: row.thread_id, leaseId, leaseUntil: row.lease_until,
     model: row.model_json ? JSON.parse(row.model_json) : chooseModel(parsed.body, account.default_model),
+    ...(permissions ? { permissions } : {}),
     ...(workspace?.kind === 'project' ? { workspace: { kind: 'project', path: workspace.path } }
       : workspace?.kind === 'scratch' ? { workspace: { kind: 'scratch' } } : {}),
     request: { from: parsed.from, fromOwner: parsed.from === account.owner_email,
@@ -227,6 +234,8 @@ function validResult(value) {
         window.durationMins > 0 && window.durationMins <= 10_080 &&
         Number.isInteger(window.remainingPercent) && window.remainingPercent >= 0 && window.remainingPercent <= 100 &&
         Number.isSafeInteger(window.resetsAt) && window.resetsAt > 0))) &&
+    (value.session === undefined || (['codex', 'claude'].includes(value.session?.harness) &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.session?.id ?? ''))) &&
     (value.reportedListCostUsd === undefined || (typeof value.reportedListCostUsd === 'number' &&
       Number.isFinite(value.reportedListCostUsd) && value.reportedListCostUsd >= 0 && value.reportedListCostUsd <= 1000));
 }
@@ -279,7 +288,10 @@ async function complete(env, device, body) {
         AND (created_at, rowid) < (SELECT created_at, rowid FROM jobs WHERE id = ?)`)
       .bind(body.jobId, device.id, body.leaseId, resultHash, body.jobId));
   }
-  if (testBillingEnabled(env) && body.result.state !== 'completed') {
+  // A reply the agent wrote is charged whatever its outcome. Only a turn
+  // that never reached the harness (the daemon refused it: no folder, bad
+  // file request) is free.
+  if (testBillingEnabled(env) && body.result.runtime === 'tagmails-router') {
     statements.push(env.DB.prepare(`UPDATE test_email_charges
       SET state = 'released', updated_at = CURRENT_TIMESTAMP
       WHERE job_id = ? AND state = 'reserved' AND EXISTS (
@@ -323,9 +335,11 @@ export async function handleDeviceRequest(request, env) {
     try { models = catalogFromDevice(body); }
     catch { return json({ error: 'Invalid model catalog' }, 400); }
     const defaults = deviceDefaults(body?.defaults, models);
-    await env.DB.prepare(`UPDATE devices SET model_catalog_json = ?, model_catalog_at = CURRENT_TIMESTAMP, defaults_json = ?
-      WHERE id = ? AND account_id = ? AND revoked_at IS NULL`)
-      .bind(JSON.stringify(models), defaults ? JSON.stringify(defaults) : null, device.id, device.account_id).run();
+    const limits = deviceLimits(body?.limits);
+    await env.DB.prepare(`UPDATE devices SET model_catalog_json = ?, model_catalog_at = CURRENT_TIMESTAMP, defaults_json = ?,
+      limits_json = ? WHERE id = ? AND account_id = ? AND revoked_at IS NULL`)
+      .bind(JSON.stringify(models), defaults ? JSON.stringify(defaults) : null, limits ? JSON.stringify(limits) : null,
+        device.id, device.account_id).run();
     return json({ saved: true, count: models.length });
   }
   if (url.pathname === '/api/device/projects') {

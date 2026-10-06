@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { runReceiptPage } from './account-page.mjs';
 import { selectedModelDetail, selectedModelStatus } from './model-route.mjs';
-import { addressDomain, checkAddress, chooseAddress } from './agent-username.mjs';
+import { addressDomain, checkAddress, chooseAddress, claimInitialAddress, changesLeft } from './agent-username.mjs';
 import { openText } from './storage-crypto.mjs';
 import { artifactForDownload, selectedRunArtifacts } from './run-artifacts.mjs';
 import { knownAgentAddresses } from './agent-addresses.mjs';
@@ -76,7 +76,8 @@ export async function verifyGoogleCredential(credential, clientId, keys = google
       (payload.azp && payload.azp !== clientId)) {
     throw new Error('A verified personal Gmail account is required');
   }
-  return { sub: payload.sub, email };
+  const name = (value) => typeof value === 'string' ? value.trim().slice(0, 60) : '';
+  return { sub: payload.sub, email, givenName: name(payload.given_name), familyName: name(payload.family_name) };
 }
 
 export async function accountFor(request, env) {
@@ -150,6 +151,8 @@ async function signIn(request, env, verifyIdentity, exchangeCode) {
     try {
       await env.DB.prepare('INSERT INTO accounts (id, google_sub, owner_email, agent_email) VALUES (?, ?, ?, ?)')
         .bind(accountId, identity.sub, identity.email, agent).run();
+      try { await claimInitialAddress(env, accountId, identity.givenName, identity.familyName); }
+      catch (error) { console.error('Initial agent address was not assigned', error); }
     } catch {
       // A concurrent sign-in for the same Google account may have won.
       const raced = await env.DB.prepare('SELECT id FROM accounts WHERE google_sub = ?')
@@ -333,9 +336,10 @@ async function siteAccountRequest(request, env, pathname, verifyIdentity) {
   if (owner.error) return json({ error: owner.error }, owner.status, headers);
   const { account } = owner;
   if (pathname === '/api/site/account' && request.method === 'GET') {
+    const changes = await env.DB.prepare('SELECT address_changes FROM accounts WHERE id = ?').bind(account.id).first();
     return json({ ownerEmail: account.owner_email, agentEmail: account.agent_email,
       defaultModel: account.default_model, deliveryReady: env.MAIL_DELIVERY_READY === 'true',
-      addressDomain: addressDomain(env) }, 200, headers);
+      addressDomain: addressDomain(env), addressChangesLeft: changesLeft(changes) }, 200, headers);
   }
   if (pathname === '/api/site/address' && request.method === 'GET') {
     return json(await checkAddress(env, account, new URL(request.url).searchParams.get('name')), 200, headers);
@@ -452,7 +456,7 @@ async function threadTranscriptPage(env, accountId, threadId, before, headers) {
       .bind(before, threadId).first();
     if (!cursor) return json({ error: 'Invalid cursor' }, 400, headers);
   }
-  const rows = await env.DB.prepare(`SELECT j.id, j.state, j.created_at, j.result_key, j.model_json,
+  const rows = await env.DB.prepare(`SELECT j.id, j.state, j.created_at, j.result_key, j.model_json, j.workspace_json,
     m.sender_email FROM jobs j JOIN messages m ON m.id = j.message_id
     WHERE j.thread_id = ? AND (? IS NULL OR j.created_at < ? OR (j.created_at = ? AND j.id < ?))
     ORDER BY j.created_at DESC, j.id DESC LIMIT 21`)
@@ -466,10 +470,17 @@ async function threadTranscriptPage(env, accountId, threadId, before, headers) {
       try { result = JSON.parse(new TextDecoder().decode(await saved.arrayBuffer())); }
       catch { /* An unreadable result must not break the rest of the thread. */ }
     }
-    return { id: row.id, state: row.state, createdAt: row.created_at,
-      sender: row.sender_email, selectedModel: selectedModelDetail(row.model_json),
+    let project = null;
+    try { project = JSON.parse(row.workspace_json ?? 'null')?.name ?? null; } catch { /* Older runs have no folder. */ }
+    const files = await selectedRunArtifacts(env, accountId, row.id, result?.artifactIds);
+    const session = ['codex', 'claude'].includes(result?.session?.harness) && /^[0-9a-f-]{36}$/i.test(result?.session?.id ?? '')
+      ? { harness: result.session.harness, id: result.session.id } : null;
+    return { id: row.id, state: row.state, outcome: result?.state ?? null, createdAt: row.created_at,
+      sender: row.sender_email, selectedModel: selectedModelDetail(row.model_json), project,
       summary: typeof result?.summary === 'string' ? result.summary : null,
-      transcript: visibleTranscript(result?.transcript) };
+      answer: typeof result?.answer === 'string' ? result.answer : null,
+      files: files.map((file) => ({ id: file.id, name: file.name, size: file.byte_size })),
+      session, transcript: visibleTranscript(result?.transcript) };
   }));
   return json({ thread, runs: runs.reverse(),
     nextBefore: (rows.results ?? rows).length > 20 ? page.at(-1).id : null }, 200, headers);

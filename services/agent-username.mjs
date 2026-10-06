@@ -7,7 +7,8 @@ const RESERVED = new Set(['abuse', 'admin', 'administrator', 'agent', 'api', 'bi
   'dmarc', 'help', 'hello', 'hostmaster', 'info', 'legal', 'mail', 'mailer-daemon', 'news', 'noreply', 'no-reply',
   'notifications', 'owner', 'postmaster', 'privacy', 'root', 'sales', 'security', 'setup', 'support', 'system',
   'tagmails', 'tagmail', 'team', 'test', 'webmaster', 'www']);
-const CHANGE_INTERVAL_MINUTES = 60;
+const MAX_CHANGES = 3;
+const CHANGE_INTERVAL_DAYS = 30;
 
 export function addressDomain(env) {
   const domain = String(env.ADDRESS_DOMAIN ?? '').trim().toLowerCase();
@@ -38,9 +39,13 @@ export async function chooseAddress(env, account, value) {
   const check = await checkAddress(env, account, value);
   if (!check.available) return { error: check.reason, status: 400 };
   if (check.current) return { agentEmail: check.address };
-  const recent = await env.DB.prepare(`SELECT 1 FROM accounts WHERE id = ? AND address_changed_at IS NOT NULL
-    AND address_changed_at > datetime('now', ?)`).bind(account.id, `-${CHANGE_INTERVAL_MINUTES} minutes`).first();
-  if (recent) return { error: 'You changed your address recently. Try again in an hour.', status: 429 };
+  const limits = await env.DB.prepare(`SELECT address_changes,
+      address_changed_at IS NOT NULL AND address_changed_at > datetime('now', ?) AS recent
+    FROM accounts WHERE id = ?`).bind(`-${CHANGE_INTERVAL_DAYS} days`, account.id).first();
+  if ((limits?.address_changes ?? 0) >= MAX_CHANGES) {
+    return { error: `You've used all ${MAX_CHANGES} address changes.`, status: 429 };
+  }
+  if (limits?.recent) return { error: `You can change your address once every ${CHANGE_INTERVAL_DAYS} days.`, status: 429 };
   try {
     // The update trigger records the new address in account_agent_addresses;
     // its primary key makes a concurrent claim of the same name fail here.
@@ -48,14 +53,54 @@ export async function chooseAddress(env, account, value) {
       env.DB.prepare(`INSERT INTO account_agent_addresses (email, account_id)
         SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM account_agent_addresses WHERE email = ?)`)
         .bind(check.address, account.id, check.address),
-      env.DB.prepare(`UPDATE accounts SET agent_email = ?, address_changed_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND EXISTS (SELECT 1 FROM account_agent_addresses WHERE email = ? AND account_id = ?)`)
+      env.DB.prepare(`UPDATE accounts SET agent_email = ?, address_changed_at = CURRENT_TIMESTAMP,
+        address_changes = address_changes + 1
+        WHERE id = ? AND address_changes < ${MAX_CHANGES} AND EXISTS (SELECT 1 FROM account_agent_addresses WHERE email = ? AND account_id = ?)`)
         .bind(check.address, account.id, check.address, account.id),
     ]);
   } catch { return { error: 'That address is taken.', status: 409 }; }
   const saved = await env.DB.prepare('SELECT agent_email FROM accounts WHERE id = ?').bind(account.id).first();
   return saved?.agent_email === check.address ? { agentEmail: check.address }
     : { error: 'That address is taken.', status: 409 };
+}
+
+export function changesLeft(row) {
+  return Math.max(0, MAX_CHANGES - (row?.address_changes ?? 0));
+}
+
+// Signup picks an address from the Google name: first, first+last,
+// first+last initial, first.last, then first plus a number. It doesn't count
+// as a change.
+export function suggestedNames(given, family) {
+  const clean = (value) => String(value ?? '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]/g, '');
+  const first = clean(given);
+  const last = clean(family);
+  if (!first) return [];
+  const names = [first, ...(last ? [`${first}${last}`, `${first}${last[0]}`, `${first}.${last}`] : []),
+    ...[2, 3, 7, 11, 42].map((n) => `${first}${n}`)];
+  return [...new Set(names.map((name) => name.slice(0, 30)))].filter((name) => !usernameProblem(name));
+}
+
+export async function claimInitialAddress(env, accountId, given, family) {
+  const domain = addressDomain(env);
+  if (!domain) return null;
+  for (const name of suggestedNames(given, family)) {
+    const address = `${name}@${domain}`;
+    try {
+      await env.DB.batch([
+        env.DB.prepare(`INSERT INTO account_agent_addresses (email, account_id)
+          SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM account_agent_addresses WHERE email = ?)`)
+          .bind(address, accountId, address),
+        env.DB.prepare(`UPDATE accounts SET agent_email = ?
+          WHERE id = ? AND EXISTS (SELECT 1 FROM account_agent_addresses WHERE email = ? AND account_id = ?)`)
+          .bind(address, accountId, address, accountId),
+      ]);
+    } catch { continue; }
+    const saved = await env.DB.prepare('SELECT agent_email FROM accounts WHERE id = ?').bind(accountId).first();
+    if (saved?.agent_email === address) return address;
+  }
+  return null;
 }
 
 // Mail from an address on the verified domain goes out under its own name.

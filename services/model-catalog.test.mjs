@@ -37,7 +37,7 @@ test('a paired Mac publishes a bounded model list that is scoped to its owner', 
   }), /does not offer/);
   assert.deepEqual(await saveAccountPreferences(env, { id: 'account-1' }, {
     model: 'gpt-6-astra', effort: 'high', speed: 'fast',
-  }), { model: 'gpt-6-astra', effort: 'high', speed: 'fast', source: 'site' });
+  }), { model: 'gpt-6-astra', effort: 'high', speed: 'fast', source: 'site', codexAccess: null, claudePermission: null, limits: null });
   sqlite.prepare("UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE id = 'device-1'").run();
   assert.deepEqual((await accountModelCatalog(env.DB, 'account-1')).models, []);
 });
@@ -102,13 +102,32 @@ test('a site default overrides the computer default, which overrides the account
   assert.equal((await publish({ model: 'gpt-6-astra', effort: 'xhigh', speed: 'fast' })).status, 200);
   // An effort the model lacks is dropped rather than trusted.
   assert.deepEqual(await accountPreferences(env, account),
-    { model: 'gpt-6-astra', effort: 'medium', speed: 'fast', source: 'computer' });
+    { model: 'gpt-6-astra', effort: 'medium', speed: 'fast', source: 'computer', codexAccess: null, claudePermission: null, limits: null });
   await publish({ model: 'gpt-6-astra', effort: 'high' });
   assert.equal((await accountPreferences(env, account)).effort, 'high');
   await saveAccountPreferences(env, account, { model: 'gpt-6-sol', effort: 'medium', speed: 'standard' });
   assert.deepEqual(await accountPreferences(env, account),
-    { model: 'gpt-6-sol', effort: 'medium', speed: 'standard', source: 'site' });
+    { model: 'gpt-6-sol', effort: 'medium', speed: 'standard', source: 'site', codexAccess: null, claudePermission: null, limits: null });
   assert.equal((await clearAccountPreferences(env, account)).source, 'computer');
   await publish({ model: 'not-on-this-mac' });
   assert.equal((await accountPreferences(env, account)).source, 'default');
+});
+
+test('website permissions travel with each job, and the computer reports its limits', async () => {
+  const { env, sqlite } = bindings();
+  sqlite.prepare('INSERT INTO devices (id, account_id, token_hash) VALUES (?, ?, ?)')
+    .run('device-1', 'account-1', createHash('sha256').update(token).digest('hex'));
+  const account = { id: 'account-1', default_model: 'gpt-6-sol' };
+  await handleDeviceRequest(new Request('https://relay.test/api/device/models', {
+    method: 'POST', headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ models: reported, limits: { access: 'write', claudePermission: 'auto', extra: 'ignored' } }),
+  }), env);
+  await saveAccountPreferences(env, account, { model: 'gpt-6-sol', effort: 'medium', speed: 'standard',
+    codexAccess: 'full', claudePermission: 'acceptEdits' });
+  const saved = await accountPreferences(env, account);
+  assert.deepEqual([saved.codexAccess, saved.claudePermission, saved.limits],
+    ['full', 'acceptEdits', { access: 'write', claudePermission: 'auto' }]);
+  await assert.rejects(saveAccountPreferences(env, account, { model: 'gpt-6-sol', effort: 'medium', speed: 'standard', codexAccess: 'root' }), /permission/);
+  const cleared = await clearAccountPreferences(env, account);
+  assert.equal(cleared.codexAccess, 'full', 'handing the model back keeps the permission choice');
 });
