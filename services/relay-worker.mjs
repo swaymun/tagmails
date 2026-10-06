@@ -22,6 +22,7 @@ import { accountModelCatalog } from './model-catalog.mjs';
 import { accountPreferences } from './account-preferences.mjs';
 import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.mjs';
 import { routeFollowUp } from './steer-route.mjs';
+import { iconResponse } from './brand-icons.mjs';
 
 const MAX_WEBHOOK_BYTES = 128_000;
 
@@ -366,6 +367,8 @@ export default {
   },
   async fetch(request, env, ctx) {
     env = protectedEnv(env);
+    const icon = iconResponse(request);
+    if (icon) return icon;
     if (request.method === 'GET' && new URL(request.url).pathname === '/account') return accountPage();
     try {
       const billing = await handleTestWalletRequest(request, env);

@@ -1,10 +1,11 @@
 import { randomBytes } from 'node:crypto';
+import { ICON_LINKS } from './brand-icons.mjs';
 
 export function accountPage() {
   const nonce = randomBytes(16).toString('base64');
   const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Account · TagMails</title>
+<title>Account · TagMails</title>${ICON_LINKS}
 <style nonce="${nonce}">
   :root{font:16px/1.5 system-ui,sans-serif;color:#242424;background:#f7f4ed}
   body{margin:0}main{max-width:680px;margin:8vh auto;padding:0 24px 80px}
@@ -271,7 +272,7 @@ document.addEventListener('DOMContentLoaded', () => {
 </div></main></body></html>`;
   return new Response(html, { headers: {
     'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
-    'Content-Security-Policy': `default-src 'none'; script-src 'nonce-${nonce}' https://accounts.google.com; style-src 'nonce-${nonce}'; img-src https: data:; frame-src https://accounts.google.com; connect-src 'self' https://accounts.google.com; base-uri 'none'; form-action 'none'`,
+    'Content-Security-Policy': `default-src 'none'; script-src 'nonce-${nonce}' https://accounts.google.com; style-src 'nonce-${nonce}'; img-src https: data:; frame-src https://accounts.google.com; connect-src 'self' https://accounts.google.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
     'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'strict-origin-when-cross-origin',
   } });
 }
@@ -295,7 +296,7 @@ export function runReceiptPage(run) {
   const listCost = run.result?.reportedListCostUsd;
   const list = (items) => `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${escapeHtml(run.subject)} · TagMails run</title><style nonce="${nonce}">
+<title>${escapeHtml(run.subject)} · TagMails run</title>${ICON_LINKS}<style nonce="${nonce}">
 :root{font:16px/1.55 system-ui,sans-serif;color:#242424;background:#f7f4ed}body{margin:0}main{max-width:720px;margin:7vh auto;padding:0 24px 80px}
 a{color:#255d53}a:focus-visible{outline:3px solid #b98432;outline-offset:3px}.eyebrow{letter-spacing:.12em;text-transform:uppercase;font-size:.72rem;font-weight:700;color:#57776f}
 h1{font-size:clamp(2rem,6vw,3.25rem);line-height:1.1;margin:.35em 0}h2{font-size:1.05rem;margin:28px 0 8px}p{margin:8px 0 16px}.card{background:#fff;border:1px solid #ddd9cf;border-radius:14px;padding:24px;margin:24px 0}
@@ -326,7 +327,7 @@ ${transcript?.truncated ? '<p class="muted">Long content and later steps were sh
 </main></body></html>`;
   return new Response(html, { headers: {
     'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
-    'Content-Security-Policy': `default-src 'none'; style-src 'nonce-${nonce}'; base-uri 'none'; frame-ancestors 'none'`,
+    'Content-Security-Policy': `default-src 'none'; style-src 'nonce-${nonce}'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'`,
     'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
   } });
 }

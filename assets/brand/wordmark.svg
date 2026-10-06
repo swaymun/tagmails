@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 268 64" role="img" aria-label="tagmails.">
+  <style>.word{fill:#1d2420}.dot{fill:#7aa33a}@media (prefers-color-scheme:dark){.word{fill:#eef1ec}.dot{fill:#d0f06c}}</style>
+  <rect width="64" height="64" rx="16" fill="#172620"/>
+  <path d="M18 43 43 18M27 18h16v16" fill="none" stroke="#d0f06c" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <text class="word" x="80" y="45" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="38" font-weight="650">tagmails<tspan class="dot">.</tspan></text>
+</svg>
