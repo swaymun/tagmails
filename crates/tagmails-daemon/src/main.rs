@@ -249,6 +249,8 @@ fn publish_model_catalog(
     catalog["limits"] = json!({
         "access": max_access(&config),
         "claudePermission": max_claude_permission(&config),
+        "defaultAccess": config["access"].as_str().unwrap_or("read"),
+        "defaultClaudePermission": config["claudePermission"].as_str().unwrap_or("acceptEdits"),
     });
     let response = relay_post(client, base, "/api/device/models", token, catalog)?;
     if response["saved"] != true {

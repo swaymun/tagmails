@@ -11,7 +11,7 @@ test('Claude models come from the SDK list, without the "default" alias or dupli
     { value: 'weird', resolvedModel: 'gpt-6', displayName: 'Not Claude' },
   ];
   assert.deepEqual(cleanClaudeModels(rows), [
-    { id: 'claude-opus-5-5', name: 'Opus 5.5', harness: 'claude', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], speeds: ['standard', 'fast'], autoMode: true },
+    { id: 'claude-opus-5-5', name: 'Opus 5.5', harness: 'claude', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], speeds: ['standard'], autoMode: true },
     { id: 'claude-sonnet-5-5', name: 'Sonnet 5.5', harness: 'claude', efforts: ['low', 'medium'], speeds: ['standard'] },
   ]);
   let closed = false;

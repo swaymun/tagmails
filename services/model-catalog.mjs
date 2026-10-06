@@ -44,8 +44,8 @@ export function cleanClaudeCatalog(input) {
     }
     seen.add(model.id);
     const name = typeof model.name === 'string' && model.name.trim() && model.name.length <= 80 ? model.name.trim() : model.id;
-    return { id: model.id, name, harness: 'claude', efforts: [...new Set(model.efforts)],
-      speeds: [...new Set(['standard', ...model.speeds])] };
+    // Claude Code has no speed tiers; only Codex models offer fast modes.
+    return { id: model.id, name, harness: 'claude', efforts: [...new Set(model.efforts)], speeds: ['standard'] };
   });
 }
 
@@ -70,10 +70,15 @@ export function deviceDefaults(input, models) {
 
 // The most a computer allows, from `tagmails start --access/--claude-permission`.
 export function deviceLimits(input) {
-  const access = ['read', 'write', 'full'].includes(input?.access) ? input.access : null;
-  const claude = ['readonly', 'manual', 'acceptEdits', 'auto', 'bypassPermissions'].includes(input?.claudePermission)
-    ? input.claudePermission : null;
-  return access || claude ? { access, claudePermission: claude } : null;
+  const codex = (value) => ['read', 'write', 'full'].includes(value) ? value : null;
+  const claude = (value) => ['readonly', 'manual', 'acceptEdits', 'auto', 'bypassPermissions'].includes(value) ? value : null;
+  const access = codex(input?.access);
+  const claudePermission = claude(input?.claudePermission);
+  if (!access && !claudePermission) return null;
+  // The machine's maximum, plus its own default used when the site hasn't chosen.
+  return { access, claudePermission,
+    ...(codex(input?.defaultAccess) ? { defaultAccess: input.defaultAccess } : {}),
+    ...(claude(input?.defaultClaudePermission) ? { defaultClaudePermission: input.defaultClaudePermission } : {}) };
 }
 
 export async function accountModelCatalog(db, accountId, threadId = null) {

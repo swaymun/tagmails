@@ -14,7 +14,7 @@ export function cleanClaudeModels(rows) {
     seen.add(id);
     const efforts = (row.supportedEffortLevels ?? []).filter((effort) => EFFORTS.has(effort));
     models.push({ id, name: String(row.displayName ?? id).slice(0, 80), harness: 'claude',
-      efforts: efforts.length ? efforts : ['medium'], speeds: row.supportsFastMode ? ['standard', 'fast'] : ['standard'],
+      efforts: efforts.length ? efforts : ['medium'], speeds: ['standard'],
       ...(row.supportsAutoMode ? { autoMode: true } : {}) });
   }
   return models;
