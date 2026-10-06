@@ -207,3 +207,20 @@ test('a bare family name routes to its newest version when several are installed
   assert.equal(criteria.luna, undefined, 'no duplicate luna choice that would split the probability');
   assert.match(criteria.family0, /luna/i);
 });
+
+test('Jev sees common dictation variants next to each model name', async () => {
+  const availableModels = [
+    { id: 'gpt-6-sol', name: 'GPT-6-Sol', efforts: ['medium'], speeds: ['standard'] },
+    { id: 'claude-sonnet-5-5', name: 'Sonnet 5.5', efforts: ['medium'], speeds: ['standard'] },
+    { id: 'claude-haiku-4-5-20251001', name: 'Haiku 4.5', efforts: ['medium'], speeds: ['standard'] },
+  ];
+  let body;
+  await routeModel('use son it for this', 'gpt-6-sol', { apiKey: 'k', availableModels,
+    fetcher: async (_url, options) => { body = JSON.parse(options.body); return Response.json({ answers: {} }); } });
+  const { instructions, criteria } = body.questions.route;
+  assert.match(instructions, /son it for Sonnet/);
+  assert.match(criteria.codex, /"Seoul"/);
+  assert.match(criteria.model1, /"son it"/);
+  assert.match(criteria.model2, /"high cool"/);
+  assert.match(criteria.claude, /"Cloud"/);
+});

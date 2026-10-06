@@ -4,6 +4,27 @@ const CLAUDE = { id: 'claude-sonnet-5-5', effort: 'medium' };
 const LUNA = { id: 'gpt-6-luna', effort: 'medium' };
 const EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 
+// How dictation commonly mishears model names. Shown to Jev next to each name;
+// they only count inside a model request ("find hotels in Seoul" is not one).
+export const SOUNDS_LIKE = {
+  sol: ['Seoul', 'soul', 'sole', 'saul', 'sold'],
+  luna: ['loona', 'loon uh', 'lunar', 'looner', 'luner'],
+  astra: ['Astro', 'astral', 'extra'],
+  terra: ['Tera', 'Tara', 'terror'],
+  codex: ['code x', 'codecs', 'co-decks'],
+  claude: ['Cloud', 'clod', 'Claud', 'clawed'],
+  sonnet: ['son it', 'sonic', 'sonnett', 'sunnet'],
+  haiku: ['high cool', 'hi coo', 'hiku', 'haiko'],
+  opus: ['opis', 'oh pus', 'octopus'],
+  fable: ['fabel', 'table', 'favel'],
+  gpt: ['GBT', 'GPD', 'chat GPT'],
+};
+
+function heard(...names) {
+  const variants = [...new Set(names.flatMap((name) => SOUNDS_LIKE[String(name).toLowerCase()] ?? []))];
+  return variants.length ? ` Dictation may write it as ${variants.map((variant) => `"${variant}"`).join(', ')}.` : '';
+}
+
 function confidentChoice(answer, threshold = 0.65) {
   return answer?.type === 'choice' && Number.isFinite(answer.probabilities?.[answer.choice]) &&
     answer.probabilities[answer.choice] >= threshold ? answer.choice : null;
@@ -93,22 +114,23 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
         questions: {
           route: {
             type: 'choice',
-            instructions: 'Does the sender ask the agent to use a specific model for this task? Select none unless a model preference is clearly requested in the current text. A reply that merely continues the task should select none. Interpret obvious spelling or speech transcription variants of model names in a model request, such as Seoul for Sol. Ignore quoted messages and model names mentioned only for comparison or discussion. If a requested model is outside the supported choices, select unsupported even when its provider also has a supported model.',
+            instructions: 'Does the sender ask the agent to use a specific model for this task? Select none unless a model preference is clearly requested in the current text. A reply that merely continues the task should select none. Many emails are dictated, so interpret spelling and speech-to-text variants of model names inside a model request, such as Seoul for Sol, son it for Sonnet, high cool for Haiku, or loon uh for Luna; the same words in ordinary text (find hotels in Seoul, that is cool) are not model requests. Ignore quoted messages and model names mentioned only for comparison or discussion. If a requested model is outside the supported choices, select unsupported even when its provider also has a supported model.',
             criteria: {
               none: 'No clear request to use one of the listed models for this task.',
-              codex: 'The sender asks to use Codex, Sol, or Seoul as a generic model name without specifying a model version.',
-              claude: 'The sender asks to use Claude or Claude Code without naming a specific Claude model.',
+              codex: `The sender asks to use Codex or Sol as a generic model name without specifying a model version.${heard('codex', 'sol')}`,
+              claude: `The sender asks to use Claude or Claude Code without naming a specific Claude model.${heard('claude')}`,
               ...(catalog ? {} : { codex61: 'The sender explicitly asks to use GPT-6.1 Sol by version, rather than generic Codex or Sol.' }),
               ...(catalog ? {} : { luna: 'The sender asks to use Luna without naming an exact version.' }),
               // One criterion per model: a duplicate "luna" choice would split the probability and neither would clear the threshold.
               ...Object.fromEntries((catalog ?? []).map((model, index) => {
                 const shared = ambiguous.some(([, group]) => group.includes(model));
+                const sounds = heard(...String(model.name ?? model.id).split(/[\s-]+/));
                 return [`model${index}`, shared
-                  ? `The sender names the exact version ${model.name} (${model.id}), not just the family name.`
-                  : `The sender specifically asks to use ${model.name} (${model.id}) for this task, including a clear spelling or speech transcription variant${/luna/i.test(model.id) ? ', or just Luna' : ''}.`];
+                  ? `The sender names the exact version ${model.name} (${model.id}), not just the family name.${sounds}`
+                  : `The sender specifically asks to use ${model.name} (${model.id}) for this task, or just its name ${familyOf(model)}.${sounds}`];
               })),
               ...Object.fromEntries(ambiguous.map(([key, group], index) => [`family${index}`,
-                `The sender asks for ${familyOf(group[0])} (${group.map((model) => model.name).join(', ')}) without naming a version.`])),
+                `The sender asks for ${familyOf(group[0])} (${group.map((model) => model.name).join(', ')}) without naming a version.${heard(familyOf(group[0]))}`])),
               unsupported: 'The sender clearly asks to use a specific model outside the available choices.',
             },
           },
