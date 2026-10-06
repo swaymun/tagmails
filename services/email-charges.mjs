@@ -92,6 +92,18 @@ export async function testWalletSnapshot(env, accountId) {
   return { balanceCents: row.credits - row.charges, waitingEmails: row.waiting };
 }
 
+// Replies TagMails writes itself (a question back, a revoked computer) are
+// charged when the balance covers them, and still sent free when it doesn't.
+export async function chargeRelayReply(env, jobId) {
+  if (!testBillingEnabled(env)) return;
+  await env.DB.prepare(`INSERT OR IGNORE INTO test_email_charges (job_id, account_id, amount_cents, state)
+    SELECT j.id, t.account_id, ?, 'reserved' FROM jobs j JOIN threads t ON t.id = j.thread_id
+    WHERE j.id = ? AND (SELECT COALESCE(SUM(amount_cents), 0) FROM credit_ledger WHERE account_id = t.account_id)
+      - (SELECT COALESCE(SUM(amount_cents), 0) FROM test_email_charges
+         WHERE account_id = t.account_id AND state != 'released') >= ?`)
+    .bind(TEST_EMAIL_CENTS, jobId, TEST_EMAIL_CENTS).run();
+}
+
 export async function settleTestEmail(env, jobId) {
   if (!testBillingEnabled(env)) return;
   await env.DB.prepare(`UPDATE test_email_charges SET state = 'settled', updated_at = CURRENT_TIMESTAMP

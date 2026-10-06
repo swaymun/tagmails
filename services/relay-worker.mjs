@@ -11,7 +11,7 @@ import { purgeSettledOutboundBodies, reconcileOneUnknownOutbox, reconcileSentEve
 import { handleAccountRequest } from './account-auth.mjs';
 import { accountPage } from './account-page.mjs';
 import { handleTestWalletRequest, reconcileDueRefunds } from './billing-wallet.mjs';
-import { fundPendingTestEmails, reconcileTestEmailCharges, reservePendingTestEmails,
+import { chargeRelayReply, fundPendingTestEmails, reconcileTestEmailCharges, reservePendingTestEmails,
   testBillingEnabled } from './email-charges.mjs';
 import { deleteExpiredRunArtifacts } from './run-artifacts.mjs';
 import { deleteSettledInboundMime } from './inbound-retention.mjs';
@@ -83,7 +83,7 @@ export async function completeOneModelClarification(env) {
   if (!row) return false;
   const key = `results/${row.account_id}/${row.id}/model-clarification.json`;
   const result = { runtime: 'relay', state: 'needs_clarification', summary: row.error,
-    checks: ['No local agent ran and no task credit was charged.'] };
+    checks: ['No local agent ran.'] };
   await env.MAIL.put(key, JSON.stringify(result), { httpMetadata: { contentType: 'application/json' } });
   const [updated] = await env.DB.batch([
     env.DB.prepare(`UPDATE jobs SET state = 'completed', result_key = ?
@@ -93,7 +93,9 @@ export async function completeOneModelClarification(env) {
       SELECT id FROM jobs WHERE id = ? AND state = 'completed' AND result_key = ?`)
       .bind(row.id, key),
   ]);
-  return (updated.meta?.changes ?? updated.changes) === 1;
+  const completed = (updated.meta?.changes ?? updated.changes) === 1;
+  if (completed) await chargeRelayReply(env, row.id);
+  return completed;
 }
 
 async function resolveAgentAddress(db, candidates) {
@@ -274,7 +276,7 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
     summary: owner
       ? 'This thread\'s Mac was revoked, so the task did not run. Start a new email to your agent address to begin a new session.'
       : 'This thread\'s Mac was revoked, so the task did not run. Ask the account owner to start a new email thread with you.',
-    checks: ['No local agent ran and no task credit was charged.'],
+    checks: ['No local agent ran.'],
   } : null;
   const resultKey = unavailableResult ? `results/${account.id}/${jobId}/unavailable.json` : null;
   if (unavailableResult) await env.MAIL.put(resultKey, JSON.stringify(unavailableResult), {
@@ -295,7 +297,10 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
     if (raced) return Response.json({ accepted: true, duplicate: true });
     throw error;
   }
-  if (threadUnavailable) return Response.json({ accepted: true, duplicate: false, threadUnavailable: true });
+  if (threadUnavailable) {
+    await chargeRelayReply(env, jobId);
+    return Response.json({ accepted: true, duplicate: false, threadUnavailable: true });
+  }
   if (testBillingEnabled(env)) {
     try { await reservePendingTestEmails(env, account.id); }
     catch { console.error('Test email credit reservation is delayed'); }

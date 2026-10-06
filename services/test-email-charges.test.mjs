@@ -181,9 +181,9 @@ test('provider acceptance settles a reserved charge; uncertain delivery holds it
   assert.deepEqual(await testWalletSnapshot(env, 'account-1'), { balanceCents: 0, waitingEmails: 0 });
 });
 
-test('agent replies are charged whatever their outcome; turns that never reached the harness are free', async () => {
+test('every reply is charged whatever its outcome, including turns the computer refused', async () => {
   for (const [state, runtime, charged] of [['failed', 'codex-app-server-write', true], ['needs_approval', 'codex-app-server-write', true],
-    ['failed', 'tagmails-router', false]]) {
+    ['failed', 'tagmails-router', true]]) {
     const { env, sqlite } = pilot();
     credit(sqlite, 'account-1', 5, state);
     await deliver(env, `mail-${state}`);
@@ -286,4 +286,16 @@ test('owner revocation releases a guest job that cannot be delivered', async () 
     WHERE m.sender_email = 'guest@gmail.com'`).get();
   assert.deepEqual({ ...row }, { job_state: 'failed', charge_state: 'released' });
   assert.deepEqual(await testWalletSnapshot(env, 'account-1'), { balanceCents: 5, waitingEmails: 0 });
+});
+
+test('a question back is charged when the balance covers it, and still sent free when it does not', async () => {
+  const { env, sqlite } = pilot();
+  await deliver(env, 'question-broke', 'owner@gmail.com', { body: 'Model: Gemini Ultra\nCheck this.' });
+  assert.equal(await completeOneModelClarification(env), true);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM test_email_charges').get().n, 0);
+  credit(sqlite, 'account-1', 5, 'question');
+  await deliver(env, 'question-paid', 'owner@gmail.com', { body: 'Model: Gemini Ultra\nCheck this too.' });
+  assert.equal(await completeOneModelClarification(env), true);
+  assert.deepEqual(sqlite.prepare('SELECT state, amount_cents FROM test_email_charges').all().map((row) => ({ ...row })),
+    [{ state: 'reserved', amount_cents: 5 }]);
 });

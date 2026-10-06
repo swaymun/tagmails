@@ -288,17 +288,8 @@ async function complete(env, device, body) {
         AND (created_at, rowid) < (SELECT created_at, rowid FROM jobs WHERE id = ?)`)
       .bind(body.jobId, device.id, body.leaseId, resultHash, body.jobId));
   }
-  // A reply the agent wrote is charged whatever its outcome. Only a turn
-  // that never reached the harness (the daemon refused it: no folder, bad
-  // file request) is free.
-  if (testBillingEnabled(env) && body.result.runtime === 'tagmails-router') {
-    statements.push(env.DB.prepare(`UPDATE test_email_charges
-      SET state = 'released', updated_at = CURRENT_TIMESTAMP
-      WHERE job_id = ? AND state = 'reserved' AND EXISTS (
-        SELECT 1 FROM jobs WHERE id = ? AND device_id = ? AND lease_id = ?
-          AND result_hash = ? AND state = ?)`)
-      .bind(body.jobId, body.jobId, device.id, body.leaseId, resultHash, state));
-  }
+  // Every reply is charged whatever its outcome; the charge was reserved
+  // when the email arrived.
   if (reactionStatus && env.STATUS_REACTIONS_ENABLED === 'true') {
     statements.push(env.DB.prepare(`INSERT OR IGNORE INTO status_reactions (job_id, status)
       SELECT j.id, ? FROM jobs j JOIN messages m ON m.id = j.message_id

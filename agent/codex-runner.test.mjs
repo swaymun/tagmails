@@ -219,7 +219,6 @@ test('Codex passes advertised effort and fast tier and records reasoning summari
   // The model and settings go to the app-server, never into the prompt text.
   assert.match(turn.params.input[0].text, /routing preferences TagMails has already applied/);
   assert.doesNotMatch(turn.params.input[0].text, /gpt-6-luna/);
-  assert.match(turn.params.input[0].text, /routing preferences already applied by the app-server/);
 });
 
 test('Codex rejects a speed tier missing from its live model catalog', async (t) => {

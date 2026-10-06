@@ -4,7 +4,7 @@ Internal decision memo, checked October 3, 2026. These are current public list p
 
 ## Launch pricing (October 5, 2026)
 
-Billing is in dollars, with no credits or points. Customers keep a prepaid USD balance: top-ups are $10 through Stripe Checkout, and new accounts start at $0. Each accepted task email costs $0.05. Files up to 3.5 MB are attached for free, and larger files become 7-day links at $0.05 per started GB. Every reply the agent writes is charged, including failed and approval-waiting runs. Only emails that never reach the harness (no computer, a project question, an unavailable model) and duplicate mail are free. The site, the Stripe line item and the email footer (`Balance $9.95`) all show dollars. The ledger stays in integer cents (`credit_ledger.amount_cents`).
+Billing is in dollars, with no credits or points. Customers keep a prepaid USD balance: top-ups are $10 through Stripe Checkout, and new accounts start at $0. Each accepted task email costs $0.05. Files up to 3.5 MB are attached for free, and larger files become 7-day links at $0.05 per started GB. Every reply is charged, including failed and approval-waiting runs and questions TagMails sends back (which project, an unavailable model, a revoked computer). A question back is sent free only when the balance can't cover it, so it never waits for a top-up. Duplicate mail and reactions are free. The site, the Stripe line item and the email footer (`Balance $9.95`) all show dollars. The ledger stays in integer cents (`credit_ledger.amount_cents`).
 
 ## What one charge buys
 
