@@ -81,9 +81,13 @@ async function verifySignature(signatureHeader, headers, body, resolveTxt) {
   const result = { domain: (t.d ?? '').toLowerCase(), selector: t.s ?? '', pass: false };
   if (t.v !== '1' || t.a !== 'rsa-sha256' || !t.d || !t.s || !t.b || !t.bh || !t.h) return { ...result, reason: 'unsupported signature' };
   if (t.x && Number(t.x) * 1000 < Date.now()) return { ...result, reason: 'expired' };
+  // RFC 6376 requires From to be signed; without it the signature says nothing about the sender.
+  if (!t.h.toLowerCase().split(':').map((item) => item.trim()).includes('from')) return { ...result, reason: 'from not signed' };
   const [headerMode, bodyMode = 'simple'] = (t.c ?? 'simple/simple').split('/');
-  const bodyHash = new Uint8Array(await crypto.subtle.digest('SHA-256',
-    canonicalBody(body, bodyMode, t.l == null ? null : Number(t.l))));
+  const fullBody = canonicalBody(body, bodyMode, null);
+  // l= signs only a prefix, so anyone could append instructions after it.
+  if (t.l != null && !(Number(t.l) >= fullBody.length)) return { ...result, reason: 'partial body signature' };
+  const bodyHash = new Uint8Array(await crypto.subtle.digest('SHA-256', fullBody));
   const expected = decodeBase64(t.bh);
   if (bodyHash.length !== expected.length || bodyHash.some((byte, index) => byte !== expected[index])) {
     return { ...result, reason: 'body hash mismatch' };
@@ -124,6 +128,8 @@ export async function verifyDkim(raw, fromAddress, { resolveTxt = (name) => dohT
   const { head, body } = splitMessage(raw);
   const headers = parseHeaders(head);
   const fromDomain = String(fromAddress ?? '').split('@').pop().toLowerCase();
+  // Two From headers make "who signed" and "who it's from" ambiguous between parsers.
+  if (headers.filter((header) => header.name === 'from').length !== 1) return { pass: false, results: [] };
   const signatures = headers.filter((header) => header.name === 'dkim-signature').slice(0, 5);
   const results = [];
   for (const signature of signatures) {
