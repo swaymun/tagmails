@@ -67,11 +67,15 @@ for (const [target, zigTarget] of Object.entries(TARGETS)) {
   fs.rmSync(stage, { recursive: true, force: true });
   sums[target] = sha256(output);
 }
+const sumsText = Object.entries(sums).map(([target, sum]) =>
+  `${sum}  tagmails-${version}${target === 'source' ? '' : `-${target}`}.tar.gz`).join('\n');
+// install.sh carries this version's sums, so a tampered release download is refused.
 fs.writeFileSync(path.join(destination, 'install.sh'),
-  fs.readFileSync(path.join(root, 'packaging/install.sh'), 'utf8').replace(/^VERSION=.*$/m, `VERSION="\${TAGMAILS_VERSION:-${version}}"`));
+  fs.readFileSync(path.join(root, 'packaging/install.sh'), 'utf8')
+    .replace(/^VERSION=.*$/m, `VERSION="\${TAGMAILS_VERSION:-${version}}"`)
+    .replace(/^PINNED_SUMS=.*$/m, `PINNED_SUMS='${sumsText}'`));
 fs.chmodSync(path.join(destination, 'install.sh'), 0o755);
-fs.writeFileSync(path.join(destination, 'SHA256SUMS'), Object.entries(sums).map(([target, sum]) =>
-  `${sum}  tagmails-${version}${target === 'source' ? '' : `-${target}`}.tar.gz`).join('\n') + '\n');
+fs.writeFileSync(path.join(destination, 'SHA256SUMS'), `${sumsText}\n`);
 
 const asset = (target) => `    url "${releaseBase}/tagmails-${version}-${target}.tar.gz"\n    sha256 "${sums[target]}"`;
 const formula = `class Tagmails < Formula
