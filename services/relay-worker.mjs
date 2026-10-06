@@ -65,6 +65,15 @@ export async function parentThread(db, accountId, parentIds) {
     WHERE t.account_id = ? AND m.account_id = ? AND m.message_id IN (${candidates.map(() => '?').join(', ')})`)
     .bind(accountId, accountId, ...candidates).all();
   const threads = new Map((rows.results ?? rows).map((row) => [row.message_id, row.thread_id]));
+  // Status messages ("TagMails received your request.") carry <jobId.status@domain>; a reply to one stays in its thread.
+  const statusJobs = candidates.map((id) => id.match(/^<([0-9a-f-]{36})\.(?:received|working|completed|failed)@/i)?.[1]).filter(Boolean);
+  if (statusJobs.length) {
+    const jobs = await db.prepare(`SELECT j.id, j.thread_id FROM jobs j JOIN threads t ON t.id = j.thread_id
+      WHERE t.account_id = ? AND j.id IN (${statusJobs.map(() => '?').join(', ')})`).bind(accountId, ...statusJobs).all();
+    for (const job of jobs.results ?? jobs) {
+      for (const id of candidates) if (id.toLowerCase().startsWith(`<${job.id}.`)) threads.set(id, job.thread_id);
+    }
+  }
   for (const messageId of candidates.reverse()) {
     if (threads.has(messageId)) return threads.get(messageId);
   }

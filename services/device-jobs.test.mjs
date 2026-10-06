@@ -538,3 +538,12 @@ test('a participant follow-up never steers the owner run; it queues as its own j
   const guestJob = sqlite.prepare("SELECT j.state, j.steer_of FROM jobs j JOIN messages m ON m.id = j.message_id WHERE m.sender_email = 'guest@gmail.com'").get();
   assert.deepEqual({ ...guestJob }, { state: 'queued', steer_of: null });
 });
+
+test('a reply to a status message stays in the thread of the job it reported on', async () => {
+  const { env, sqlite } = bindings();
+  device(sqlite);
+  await inbound(env, 'status-1', 'Review the note.');
+  const job = sqlite.prepare('SELECT id, thread_id FROM jobs').get();
+  await inbound(env, 'status-2', 'one more thing', [`<${job.id}.received@wonder.test>`]);
+  assert.equal(sqlite.prepare('SELECT COUNT(DISTINCT thread_id) AS n FROM jobs').get().n, 1);
+});
