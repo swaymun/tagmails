@@ -6,6 +6,7 @@ Email-to-agent relay: a Cloudflare Worker (`services/`, `apps/mock-inbox/`, D1 +
 
 - `npm test` (Node, ~1 min; the full agent suite is slow only if a fake CLI hangs) and `cargo test -p tagmails-daemon`.
 - Jev routing prompts are checked against the live API with `npm run eval:model-routing` and `node scripts/research-steer.mjs` (needs `TYPESAFE_API_KEY`, or `~/.config/wonder/jev.json`). Both cost fractions of a cent.
+- After a change is committed locally, push it to `origin main` without asking. Pushes to `services/`, `apps/` or `wrangler.jsonc` also deploy the relay.
 - Don't commit `calls.jsonl` (test noise) or the `site` submodule pointer unless asked.
 
 ## Deploying the relay
