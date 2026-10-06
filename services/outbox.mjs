@@ -4,7 +4,7 @@ import { addressParser } from 'postal-mime';
 import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.mjs';
 import { knownAgentAddresses } from './agent-addresses.mjs';
 import { testSenderFor } from './agent-username.mjs';
-import { cloudflareMessageId, sendWithCloudflare } from './cloudflare-mail.mjs';
+import { cloudflareMessageId, senderName, sendWithCloudflare } from './cloudflare-mail.mjs';
 import { openText, sealText } from './storage-crypto.mjs';
 import { renderResult } from '../apps/mock-inbox/mail.mjs';
 import { ATTACHABLE_BYTES, releaseFailedPrimaryTestEmail, releaseTestEmail, settleTestEmail, testBillingEnabled, testWalletSnapshot } from './email-charges.mjs';
@@ -406,7 +406,7 @@ export async function sendNextOutbox(env, {
   // Saved payloads keep the bare address for sender checks; mail shows a display name.
   sendEmail = env.EMAIL ? (payload) => sendWithCloudflare(env, payload)
     : (payload, options) => new Resend(env.RESEND_API_KEY).emails.send(
-      { ...payload, from: `TagMails <${payload.from}>` }, options),
+      { ...payload, from: `${senderName(payload)} <${payload.from}>` }, options),
   // Cloudflare returns the sent message's ID directly; Resend needs a lookup.
   getSentEmail = env.EMAIL ? async (id) => ({ data: { id, message_id: cloudflareMessageId(id) } })
     : (id) => new Resend(env.RESEND_API_KEY).emails.get(id),

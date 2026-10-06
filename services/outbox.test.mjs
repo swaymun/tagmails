@@ -468,11 +468,11 @@ test('provider lookup reconciles only an exactly tagged uncertain reply', async 
     listSentEmails: async (options) => {
       lists += 1;
       assert.deepEqual(options, { limit: 100 });
-      return { data: { data: [{ id: providerId, from: 'TagMails <agent@wonder.test>',
+      return { data: { data: [{ id: providerId, from: 'agent <agent@wonder.test>',
         to: ['owner@gmail.com'], cc: null, subject: 'Re: Shared work' }] } };
     },
     getSentEmail: async () => ({ data: { id: providerId, message_id: '<found@tagmails.test>',
-      from: 'TagMails <agent@wonder.test>', to: ['owner@gmail.com'], cc: null,
+      from: 'agent <agent@wonder.test>', to: ['owner@gmail.com'], cc: null,
       subject: 'Re: Shared work', tags: [{ name: 'tagmails_job', value: tag }] } }),
   };
   assert.deepEqual(await reconcileOneUnknownOutbox(env, provider), { state: 'uncertain', jobId });

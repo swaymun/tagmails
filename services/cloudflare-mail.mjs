@@ -87,7 +87,7 @@ export async function sendWithCloudflare(env, payload) {
   }
   for (const tag of payload.tags ?? []) headers[`X-TagMails-${tag.name.replace(/[^A-Za-z0-9-]/g, '-')}`] = tag.value;
   const result = await env.EMAIL.send({
-    from: { email: payload.from, name: 'TagMails' },
+    from: { email: payload.from, name: senderName(payload) },
     to: payload.to,
     ...(payload.cc?.length ? { cc: payload.cc } : {}),
     ...(payload.replyTo ? { replyTo: payload.replyTo } : {}),
@@ -100,6 +100,12 @@ export async function sendWithCloudflare(env, payload) {
       disposition: 'attachment' })) } : {}),
   });
   return { data: { id: result.messageId } };
+}
+
+// The agent's own name (the part before @ in its address) is the display name, so mail shows as "swagbot".
+export function senderName({ from, replyTo }) {
+  const name = String(replyTo ?? from ?? '').split('@')[0].replace(/[^\w.+-]/g, '');
+  return name || 'TagMails';
 }
 
 export function cloudflareMessageId(id) {

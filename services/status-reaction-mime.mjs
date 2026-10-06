@@ -34,7 +34,7 @@ export function buildStatusReaction({ jobId, status, from, to, targetMessageId, 
   const boundary = `tagmails-${jobId}-${status}`;
   const reaction = Buffer.from(JSON.stringify({ version: 1, emoji: selected.emoji })).toString('base64');
   const raw = [
-    `From: <${from}>`, `To: <${to}>`, `Subject: ${encodedSubject(subject)}`,
+    `From: ${from.split('@')[0].replace(/[^\w.+-]/g, '') || 'TagMails'} <${from}>`, `To: <${to}>`, `Subject: ${encodedSubject(subject)}`,
     `Date: ${new Date().toUTCString()}`,
     `Message-ID: <${jobId}.${status}@${from.split('@')[1]}>`,
     `In-Reply-To: ${targetMessageId}`, `References: ${targetMessageId}`,

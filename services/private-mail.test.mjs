@@ -133,7 +133,7 @@ test('replies go out through the EMAIL binding with threading headers and attach
     tags: [{ name: 'tagmails_job', value: 'job-1' }],
     attachments: [{ filename: 'a.txt', contentType: 'text/plain', content: 'ZGF0YQ==' }] });
   assert.deepEqual(result, { data: { id: '<cf-1@tagmails.com>' } });
-  assert.deepEqual(sent[0].from, { email: 'saimun@tagmails.com', name: 'TagMails' });
+  assert.deepEqual(sent[0].from, { email: 'saimun@tagmails.com', name: 'saimun' });
   assert.deepEqual(sent[0].headers, { 'In-Reply-To': '<m-1@gmail.com>', References: '<m-1@gmail.com>', 'X-TagMails-tagmails-job': 'job-1' });
   assert.equal(sent[0].attachments[0].type, 'text/plain');
   assert.equal(sent[0].cc, undefined);
