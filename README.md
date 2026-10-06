@@ -1,72 +1,90 @@
-# TagMails
+<p><img src="assets/brand/wordmark.svg" alt="tagmails." height="48"></p>
 
-Email your coding agent. TagMails gives Codex (and later Claude Code) on your own computer an email address: you send a task from Gmail, the agent runs locally in the right project folder, and the answer comes back in the same thread. Reply to continue the same session.
+Email your coding agent. Send a task to your TagMails address, Codex or Claude Code runs it on your own machine in the right project folder, and the answer comes back in the same thread.
 
-Status: private owner-only pilot. See [docs/runbook.md](docs/runbook.md) for what is live and [docs/launch-gates.md](docs/launch-gates.md) for what must be true before anyone else can sign up.
+Status: owner-only pilot on the `tagmails-relay-dev` Worker. The hosted service is not open for signup; you can [run your own relay](docs/self-hosting.md).
+
+## Quickstart
+
+1. Install the agent on a Mac or Linux machine that has a signed-in `codex` or `claude` CLI and Node.js 20+:
+
+   ```sh
+   brew install swaymun/tagmails/tagmails
+   # or, without Homebrew (verifies SHA-256 sums):
+   curl -fsSL https://tagmails.com/install.sh | sh
+   ```
+
+2. Sign in on your relay's `/account` page, create a pairing code, and start the service:
+
+   ```sh
+   tagmails pair tm_pair_… --relay https://your-relay.example
+   tagmails start --access read        # launchd on macOS, systemd user unit on Linux
+   tagmails status
+   ```
+
+3. From the Gmail account you signed in with, email your agent address. Reply in the thread to continue the same session.
+
+Other commands: `tagmails logs`, `tagmails stop`, `tagmails open <thread-id>` (resume a thread's session locally), `tagmails uninstall`. Run `tagmails --help` for all flags.
 
 ## How it works
 
 ```
-Gmail ──► Resend inbound ──► relay (Cloudflare Worker, D1, R2)
-                               │  Jev routes model/effort/speed and the project folder
-                               ▼
-                 tagmails agent on your computer (polls, signed claims)
-                               │  runs Codex app-server or Claude CLI in that folder
-                               ▼
-                relay ──► Resend outbound ──► reply in the same Gmail thread
+Gmail ─► Cloudflare Email Routing (or Resend webhook) ─► relay Worker (D1, R2, Durable Object)
+                                                           │ routes model and project folder
+                                                           ▼
+                                  tagmails daemon on your machine (WebSocket push, signed claims)
+                                                           │ runs codex app-server or claude CLI
+                                                           ▼
+                                  relay outbox ─► reply in the same Gmail thread
 ```
 
-- **Agent** (`crates/tagmails-daemon`, binary `tagmails`): pairs with the relay, runs as a launchd agent (macOS) or systemd user service (Linux), publishes the machine's model list and recent Codex/Claude project folders, claims jobs, and runs the Node adapters in `agent/`. It only runs in folders it published itself, or, when no project fits, a chat folder (`~/Documents/Codex/<date>/<subject>` for Codex, `~/.tagmails/chats/…` otherwise) that the thread keeps.
-- **Relay** (`services/`): Resend webhooks, Google sign-in, pairing, the job queue, routing (`jev-route.mjs` for model, `project-route.mjs` for folder), the outbox, status reactions, test credits, and run artifacts.
-- **Site** (`site/`, a submodule): the landing page, `/setup`, and `/run`. Plain HTML/CSS/JS, no build step.
-- **Lab** (`apps/mock-inbox`): a local Gmail-like inbox for testing the whole loop without real mail. `mail.mjs` and `markdown.mjs` there are the email renderers the relay uses.
+- `crates/tagmails-daemon`: the `tagmails` binary. Pairs, claims jobs, picks the folder, runs the adapters, uploads results.
+- `agent/`: Node adapters that drive Codex and Claude Code and enforce the local permission mode.
+- `services/`: the Worker. Inbound mail, Google sign-in, pairing, the job queue and leases, routing, outbox, run pages.
+- `apps/mock-inbox`: a local Gmail-like lab for the whole loop without real mail. Its `mail.mjs` and `markdown.mjs` render the relay's emails.
+- `site/`: private submodule for the website. Not needed to self-host.
 
-## Using the agent
+## Permissions
 
-```sh
-brew install swaymun/tagmails/tagmails          # or: curl -fsSL https://tagmails.com/install.sh | sh
-tagmails pair tm_pair_…                          # code from https://tagmails.com/setup
-tagmails start --access read --projects          # or --workspace /path, --access write|full
-tagmails status
-```
+| Flag | Effect |
+| --- | --- |
+| `--access read` (default) | Agent can read the workspace, no edits. |
+| `--access write` | Edits inside the chosen folder. Authorized participants can request edits too. |
+| `--access full` | No sandbox. Only runs emails from the account owner. |
+| `--projects` (default) / `--workspace PATH` | Pick from recent Codex/Claude project folders per thread, or pin one folder. |
+| `--claude-permission manual\|accept-edits\|auto\|bypass` | Claude Code permission mode. `bypass` is owner-only. |
+| `--max-access`, `--max-claude-permission` | Ceiling for permissions chosen on the website. Defaults to everything. |
 
-`tagmails logs`, `tagmails stop`, `tagmails open <thread-id>` (resume an email thread's session in Codex/Claude), and `tagmails uninstall` cover the rest. Config lives in `~/.config/tagmails/`, data in `~/Library/Application Support/TagMails` (macOS) or `~/.local/share/tagmails` (Linux).
+Owner emails get the owner's own tool setup (MCP servers, connectors, skills). Participant emails run with none of it. Config is in `~/.config/tagmails/`, data in `~/Library/Application Support/TagMails` or `~/.local/share/tagmails`.
+
+## Security model
+
+- A sender is the owner only if the mail passes DMARC (Resend path) or a DKIM signature from the From domain that covers From and the whole body (Cloudflare path). Anyone else must be a participant the owner put on that thread, and only on that thread.
+- The device token never leaves the machine; the relay stores its SHA-256. Each claim is HMAC-signed with it and the daemon rejects unsigned or altered claims.
+- The daemon only runs in folders it published itself or in a per-thread chat folder. Attachments are staged as fixed file names and labeled untrusted.
+- Follow-ups sent mid-run join the live turn only when they come from the same sender as the running email.
+- With `STORAGE_KEY` set, stored mail, results and files are sealed with AES-256-GCM.
+- Email content is untrusted input to the agent. Read access is the default for a reason; see [docs/email-privacy.md](docs/email-privacy.md) for what the relay keeps.
 
 ## Development
 
 ```sh
 npm ci
-npm test                                  # relay, adapters, lab and site tests (node --test)
-cargo test -p tagmails-daemon             # agent CLI, claims, routing, service files
+npm test                                  # Worker, adapters, lab (node --test, ~15 s)
+cargo test -p tagmails-daemon
 npm run lab                               # local inbox at http://127.0.0.1:4177
-cargo run -p tagmails-daemon -- --once    # mock agent processing one lab job
-npm run eval:email                        # render every reply state and check the MIME
-npm run eval:model-routing                # Jev model-routing cases (needs a TypeSafe key)
+cargo run -p tagmails-daemon -- --once    # mock agent takes one lab job
 ```
 
-Project routing is documented in [docs/project-routing.md](docs/project-routing.md). Rerun its studies before changing the prompt, fields or threshold.
-
-## Releasing the agent
-
-```sh
-node scripts/package-agent.mjs            # needs zig + cargo-zigbuild and the four rustup targets
-```
-
-This builds `tagmails-<version>-<target>.tar.gz` for macOS and Linux on arm64 and x86_64, a source tarball, `install.sh`, `SHA256SUMS`, and `Formula/tagmails.rb`. Upload the archives to a `v<version>` release on `swaymun/homebrew-tagmails` and commit the formula there. Copy `packaging/install.sh` into `site/dist/` when it changes. Bump the version in both `agent/package.json` and `crates/tagmails-daemon/Cargo.toml`.
-
-## Deploying
-
-See [docs/runbook.md](docs/runbook.md). In short: apply D1 migrations, deploy the Worker with `wrangler deploy --env dev`, then publish `site/dist`.
+`AGENTS.md` covers deploys, releases and conventions. Pushes to `main` that touch `services/`, `apps/` or `wrangler.jsonc` deploy the dev relay.
 
 ## Docs
 
-- [docs/runbook.md](docs/runbook.md): live pilot state, deploy steps, checks, stop conditions
-- [docs/launch-gates.md](docs/launch-gates.md): what must be proven before customers
-- [docs/email-privacy.md](docs/email-privacy.md): why customer mail can't go through the current Resend setup
-- [docs/provider-paths.md](docs/provider-paths.md): OpenAI/Anthropic terms questions for a paid beta
-- [docs/pricing.md](docs/pricing.md): pricing model inputs
-- [docs/email-format.md](docs/email-format.md): reply email and status reaction contract
-- [docs/project-routing.md](docs/project-routing.md): how a folder is chosen, what the machine shares, and the context study
+- [docs/setup-for-agents.md](docs/setup-for-agents.md): unattended relay setup for a coding agent, with a copyable prompt
 - [docs/self-hosting.md](docs/self-hosting.md): run your own relay
+- [docs/runbook.md](docs/runbook.md): the live pilot, checks and stop conditions
+- [docs/project-routing.md](docs/project-routing.md), [docs/email-format.md](docs/email-format.md), [docs/email-privacy.md](docs/email-privacy.md), [docs/launch-gates.md](docs/launch-gates.md), [docs/pricing.md](docs/pricing.md), [docs/provider-paths.md](docs/provider-paths.md)
 
-Licensed MIT.
+## License
+
+MIT. See [LICENSE](LICENSE).
