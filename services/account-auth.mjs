@@ -476,7 +476,8 @@ async function threadTranscriptPage(env, accountId, threadId, before, headers) {
     const session = ['codex', 'claude'].includes(result?.session?.harness) && /^[0-9a-f-]{36}$/i.test(result?.session?.id ?? '')
       ? { harness: result.session.harness, id: result.session.id } : null;
     return { id: row.id, state: row.state, outcome: result?.state ?? null, createdAt: row.created_at,
-      sender: row.sender_email, selectedModel: selectedModelDetail(row.model_json), project,
+      sender: row.sender_email, selectedModel: selectedModelDetail(row.model_json),
+      model: selectedModelStatus(row.model_json), project,
       summary: typeof result?.summary === 'string' ? result.summary : null,
       answer: typeof result?.answer === 'string' ? result.answer : null,
       files: files.map((file) => ({ id: file.id, name: file.name, size: file.byte_size })),
