@@ -273,7 +273,7 @@ test('the owner footer opens the run in the app that ran it', async () => {
     sendEmail: async (payload) => { sent = payload; return { data: { id: 'open-1' } }; },
     getSentEmail: async () => ({ data: { message_id: '<open-1@tagmails.test>' } }),
   })).state, 'sent');
-  assert.match(sent.html, /href="https:\/\/tagmails\.example\/open\.html#claude\/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"[^>]*>Open in Claude</);
+  assert.match(sent.html, /href="claude:\/\/resume\?session=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"[^>]*>Open in Claude</);
   assert.doesNotMatch(sent.text, /Transcript/);
 });
 

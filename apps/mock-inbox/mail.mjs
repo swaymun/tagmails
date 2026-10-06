@@ -45,7 +45,10 @@ export function renderResult(result) {
   const note = typeof result.note === 'string' && result.note.trim() ? result.note.trim() : null;
   const status = result.statusLine || ({ failed: 'Stopped',
     needs_approval: 'Needs approval' }[result.state] ?? null);
-  const safeLinks = (result.links ?? []).map(({ label, url }) => ({ label, url: safeUrl(url) }))
+  // Footer links may also open the owner's session straight in Codex or Claude.
+  const appUrl = (url) => typeof url === 'string' &&
+    /^(codex:\/\/threads\/|claude:\/\/resume\?session=)[0-9a-f-]{36}$/.test(url) ? url : null;
+  const safeLinks = (result.links ?? []).map(({ label, url }) => ({ label, url: safeUrl(url) ?? appUrl(url) }))
     .filter(({ url }) => url);
   const linkStyle = 'color:#1f5c41;text-decoration:underline';
   const links = safeLinks.map(({ label, url }) =>
