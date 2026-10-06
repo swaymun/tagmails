@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import test from 'node:test';
-import { completeOneModelClarification, handleInbound } from './relay-worker.mjs';
+import { completeOneModelClarification, handleInbound, parentThread } from './relay-worker.mjs';
 import { bindings } from './bindings-fixture.mjs';
 import { sendNextOutbox } from './outbox.mjs';
 
@@ -263,4 +263,20 @@ test('a signed Resend delivery selects the matching account address', async () =
   assert.deepEqual(await (await handleInbound(webhook(['agent@wonder.test', 'u-second@tagmails.test']), env, {
     ...provider, getReceivedEmail: async () => { throw new Error('Ambiguous mail must not be fetched'); },
   })).json(), { accepted: false });
+});
+
+test('a reply joins the thread of its newest known parent in one lookup', async () => {
+  const { env } = bindings();
+  await deliver(env, mail('thread-a', 'owner@gmail.com'));
+  await deliver(env, mail('thread-b', 'owner@gmail.com'));
+  const threadOf = async (id) => (await env.DB.prepare('SELECT thread_id FROM messages WHERE provider_email_id = ?').bind(id).first()).thread_id;
+  let queries = 0;
+  const db = { prepare: (sql) => { queries += 1; return env.DB.prepare(sql); } };
+  const chain = ['<unknown-1@gmail.com>', '<thread-a@gmail.com>', '<thread-b@gmail.com>', '<unknown-2@gmail.com>'];
+  assert.equal(await parentThread(db, 'account-1', chain), await threadOf('thread-b'));
+  assert.equal(await parentThread(db, 'account-1', chain.slice(0, 2)), await threadOf('thread-a'));
+  assert.equal(await parentThread(db, 'account-1', ['<unknown-1@gmail.com>']), null);
+  assert.equal(await parentThread(db, 'other-account', chain), null);
+  assert.equal(await parentThread(db, 'account-1', []), null);
+  assert.equal(queries, 4);
 });

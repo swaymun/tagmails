@@ -53,12 +53,18 @@ async function receivedEmail(env, emailId) {
   return data;
 }
 
-async function parentThread(db, accountId, parentIds) {
-  for (const messageId of parentIds.slice(-50).reverse()) {
-    const row = await db.prepare(`SELECT m.thread_id FROM messages m
-      JOIN threads t ON t.id = m.thread_id
-      WHERE t.account_id = ? AND m.message_id = ? LIMIT 1`).bind(accountId, messageId).first();
-    if (row) return row.thread_id;
+// The thread of the newest known parent. One query instead of one per
+// References entry (up to 50 for a long reply chain).
+export async function parentThread(db, accountId, parentIds) {
+  const candidates = [...new Set(parentIds.slice(-50))];
+  if (!candidates.length) return null;
+  const rows = await db.prepare(`SELECT m.message_id, m.thread_id FROM messages m
+    JOIN threads t ON t.id = m.thread_id
+    WHERE t.account_id = ? AND m.account_id = ? AND m.message_id IN (${candidates.map(() => '?').join(', ')})`)
+    .bind(accountId, accountId, ...candidates).all();
+  const threads = new Map((rows.results ?? rows).map((row) => [row.message_id, row.thread_id]));
+  for (const messageId of candidates.reverse()) {
+    if (threads.has(messageId)) return threads.get(messageId);
   }
   return null;
 }
