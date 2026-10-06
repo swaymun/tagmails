@@ -20,6 +20,8 @@ import { deleteSettledInboundMime } from './inbound-retention.mjs';
 import { sendNextStatusReaction } from './status-reactions.mjs';
 import { accountModelCatalog } from './model-catalog.mjs';
 import { accountPreferences } from './account-preferences.mjs';
+import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.mjs';
+import { routeFollowUp } from './steer-route.mjs';
 
 const MAX_WEBHOOK_BYTES = 128_000;
 
@@ -181,6 +183,27 @@ export async function handleEmail(emailMessage, env, { fetchModel = fetch, resol
   return acceptMessage(env, message, { fetchModel });
 }
 
+// A follow-up that arrives while an earlier email in its thread is running can
+// adjust that run instead of waiting behind it. Returns the run to steer, or
+// null to queue as usual. Attachments and explicit Model lines always queue.
+async function steerTarget(env, agent, threadId, message, fetchModel) {
+  if (!threadId || !env.TYPESAFE_API_KEY || message.attachments?.length || /^Model:/im.test(message.body ?? '')) return null;
+  const running = await env.DB.prepare(`SELECT j.id, m.object_key, m.message_id FROM jobs j
+    JOIN messages m ON m.id = j.message_id
+    WHERE j.thread_id = ? AND j.state = 'running' AND j.lease_until > CURRENT_TIMESTAMP
+    ORDER BY m.rowid DESC LIMIT 1`).bind(threadId).first();
+  if (!running) return null;
+  try {
+    const object = await env.MAIL.get(running.object_key);
+    if (!object) return null;
+    const earlier = await parseInbound(await object.arrayBuffer(), agent, {
+      verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false });
+    const choice = await routeFollowUp(`Subject: ${earlier.subject}\n${currentText(earlier.body)}`,
+      currentText(message.body), { apiKey: env.TYPESAFE_API_KEY, fetcher: fetchModel });
+    return choice === 'queue' ? null : running.id;
+  } catch { return null; }
+}
+
 async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
   const agent = (message.agentAddress ?? '').trim().toLowerCase();
   const account = await env.DB.prepare(`SELECT a.id, a.owner_email, a.default_model
@@ -273,6 +296,7 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
   if (model?.id?.startsWith('claude-') && env.CLAUDE_ROUTE_ENABLED !== 'true') {
     model = { error: 'Claude models are not enabled in this pilot. Ask for an available OpenAI model or omit the model to use your default.' };
   }
+  const steerOf = threadUnavailable || model?.error ? null : await steerTarget(env, agent, threadId, message, fetchModel);
   const unavailableResult = threadUnavailable ? {
     runtime: 'relay', state: 'failed',
     summary: owner
@@ -284,8 +308,9 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
   if (unavailableResult) await env.MAIL.put(resultKey, JSON.stringify(unavailableResult), {
     httpMetadata: { contentType: 'application/json' },
   });
-  statements.push(env.DB.prepare('INSERT INTO jobs (id, thread_id, message_id, state, model_json, result_key, workspace_json) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .bind(jobId, newThreadId, id, threadUnavailable ? 'failed' : 'queued', model && JSON.stringify(model), resultKey, workspaceJson));
+  statements.push(env.DB.prepare('INSERT INTO jobs (id, thread_id, message_id, state, model_json, result_key, workspace_json, steer_of, steer_state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(jobId, newThreadId, id, threadUnavailable ? 'failed' : steerOf ? 'completed' : 'queued', model && JSON.stringify(model), resultKey, workspaceJson,
+      steerOf, steerOf ? 'pending' : null));
   if (!threadUnavailable && !model?.error && env.STATUS_REACTIONS_ENABLED === 'true' &&  message.from.endsWith('@gmail.com')) {
     statements.push(env.DB.prepare("INSERT INTO status_reactions (job_id, status) VALUES (?, 'received')").bind(jobId));
   }
@@ -299,6 +324,8 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
     if (raced) return Response.json({ accepted: true, duplicate: true });
     throw error;
   }
+  // The running agent receives it on its next lease renewal; no reply or charge of its own.
+  if (steerOf) return Response.json({ accepted: true, duplicate: false, steering: true });
   if (threadUnavailable) {
     await chargeRelayReply(env, jobId);
     return Response.json({ accepted: true, duplicate: false, threadUnavailable: true });

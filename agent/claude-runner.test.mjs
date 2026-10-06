@@ -23,9 +23,17 @@ test('Claude read-only adapter resumes only its saved thread and caches complete
 const fs = require('node:fs');
 const path = require('node:path');
 const args = process.argv.slice(2);
-let prompt = '';
-process.stdin.on('data', chunk => { prompt += chunk; });
-process.stdin.on('end', () => {
+let buffered = '';
+let started = false;
+process.stdin.on('data', chunk => {
+  buffered += chunk;
+  const newline = buffered.indexOf(String.fromCharCode(10));
+  if (started || newline < 0) return;
+  started = true;
+  const prompt = JSON.parse(buffered.slice(0, newline)).message.content;
+  run(prompt);
+});
+function run(prompt) {
   const attachmentLine = prompt.split(String.fromCharCode(10)).find(line => line.startsWith('1. /'));
   const attachment = attachmentLine?.split(' (')[0].slice(3);
   const attachmentText = attachment ? fs.readFileSync(attachment, 'utf8') : null;
@@ -50,7 +58,7 @@ process.stdin.on('end', () => {
       'claude-haiku-helper': { inputTokens: 3, cacheReadInputTokens: 0,
         cacheCreationInputTokens: 0, outputTokens: 2, costUSD: 0.000012, costBasis: 'list' } } }));
   process.stdout.write('\\n');
-});
+}
 `, { mode: 0o755 });
   const keys = ['TAGMAILS_WORKSPACE', 'TAGMAILS_CLAUDE_SESSION_FILE', 'TAGMAILS_CLAUDE_BIN', 'ANTHROPIC_API_KEY', 'TAGMAILS_RUNTIME'];
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));

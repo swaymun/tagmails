@@ -64,3 +64,17 @@ test('a lease survives network blips and stops only when gone or truly expired',
   stopGone();
   assert.equal(gone, 1, 'a replaced lease stops the run right away');
 });
+
+test('a follow-up offered on renewal is delivered once and acknowledged', async () => {
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const delivered = [];
+  const acks = [];
+  const renew = async () => ({ steers: [{ id: 's1', from: 'a@b.c', text: 'make it 10 days' }] });
+  const stop = keepClaim({ jobId: 'j' }, () => {}, { every: 5, renew,
+    onSteer: async (steer) => { delivered.push(steer.id); return true; },
+    ack: async (_claim, id, ok) => { acks.push([id, ok]); } });
+  await wait(40);
+  stop();
+  assert.deepEqual(delivered, ['s1'], 're-offered follow-ups are not delivered twice');
+  assert.ok(acks.length >= 2 && acks.every(([id, ok]) => id === 's1' && ok === true), 'the ack is retried until the relay stops offering it');
+});

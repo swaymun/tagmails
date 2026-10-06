@@ -477,3 +477,38 @@ test('a reply after a relay-only answer also hands the agent the original reques
   const next = envelope((await call(env, paired.token, 'claim')).body);
   assert.equal(next.request.body, 'Now do Tokyo too.');
 });
+
+test('a follow-up classified as steering rides the run, and queues if the run ends first', async () => {
+  const { env, sqlite } = bindings();
+  env.TYPESAFE_API_KEY = 'test-key';
+  const paired = device(sqlite);
+  const jev = (choice) => async () => Response.json({ answers: { route: { type: 'choice', choice, probabilities: { [choice]: 0.95 } } } });
+  const send = async (id, body, parentIds, choice) => {
+    const messageId = `<${id}@gmail.com>`;
+    const rawMime = Buffer.from(['From: owner@gmail.com', 'To: agent@wonder.test', 'Subject: Trip',
+      `Message-ID: ${messageId}`, ...(parentIds.length ? [`References: ${parentIds.join(' ')}`] : []),
+      'Content-Type: text/plain; charset=utf-8', '', body].join('\r\n'));
+    const message = { providerEmailId: id, messageId, from: 'owner@gmail.com', agentAddress: 'agent@wonder.test',
+      to: ['agent@wonder.test'], cc: [], bcc: [], subject: 'Trip', parentIds, rawMime, body, attachments: [] };
+    return (await handleInbound(new Request('https://relay.test/webhooks/resend', { method: 'POST', body: '{}' }), env, {
+      inspect: async () => message, fetchModel: jev(choice) })).json();
+  };
+  await send('steer-1', 'Write the japan guide.', [], 'queue');
+  const claimed = envelope((await call(env, paired.token, 'claim')).body);
+  assert.deepEqual(await send('steer-2', 'make it 10 days', ['<steer-1@gmail.com>'], 'steer'),
+    { accepted: true, duplicate: false, steering: true });
+  const renewed = await call(env, paired.token, 'renew', { jobId: claimed.jobId, leaseId: claimed.leaseId });
+  assert.equal(renewed.body.steers.length, 1);
+  assert.equal(renewed.body.steers[0].text, 'make it 10 days');
+  const steerId = renewed.body.steers[0].id;
+  // A second follow-up the run never takes becomes an ordinary queued job after it completes.
+  await send('steer-3', 'also Osaka', ['<steer-1@gmail.com>'], 'steer');
+  await call(env, paired.token, 'steered', { jobId: claimed.jobId, leaseId: claimed.leaseId, steerId, delivered: true });
+  assert.equal((await call(env, paired.token, 'renew', { jobId: claimed.jobId, leaseId: claimed.leaseId })).body.steers.length, 1);
+  assert.equal(sqlite.prepare("SELECT steer_state FROM jobs WHERE id = ?").get(steerId).steer_state, 'delivered');
+  const done = await call(env, paired.token, 'complete', { jobId: claimed.jobId, leaseId: claimed.leaseId,
+    result: { runtime: 'codex', state: 'completed', summary: 'Done', checks: ['ok'] } });
+  assert.equal(done.status, 200);
+  const next = await call(env, paired.token, 'claim');
+  assert.equal(envelope(next.body).request.body.includes('also Osaka'), true, 'the untaken follow-up runs as its own job');
+});

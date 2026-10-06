@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { stageAgentAttachments } from './agent-attachments.mjs';
 import { formatAgentAnswer } from './answer-result.mjs';
 import { CONNECTED_APPS, ownerToolsFor, TAGMAILS_EMAIL } from './email-context.mjs';
-import { keepClaim } from './claim-renew.mjs';
+import { keepClaim, steerPrompt } from './claim-renew.mjs';
 import { addRunEvent, claudeRunEvents, finishRunTranscript, runTranscript } from './run-transcript.mjs';
 
 const SESSION_ID = /^[0-9a-f-]{36}$/i;
@@ -171,7 +171,7 @@ async function runClaude(claim, workspace, sessionId, staged, write) {
   // --restricted still confines file tools to the workspace either way.
   const owner = claim.request?.fromOwner === true && process.env.TAGMAILS_OWNER_TOOLS !== 'off';
   const args = [
-    '--print', '--output-format', 'stream-json', '--verbose',
+    '--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
     ...(owner ? [] : ['--safe-mode']),
     ...(mode.restricted ? ['--restricted'] : []),
     ...(owner ? [] : ['--strict-mcp-config', '--disable-slash-commands']), '--no-chrome',
@@ -190,7 +190,11 @@ async function runClaude(claim, workspace, sessionId, staged, write) {
     cwd: workspace, env: claudeEnvironment(), stdio: ['pipe', 'pipe', 'pipe'],
   });
   child.stdin.on('error', () => {});
-  child.stdin.end(promptFor(claim, staged.prompt, write));
+  // stdin stays open so a follow-up email can join the running turn; it closes when the result arrives.
+  const userLine = (text, extra = {}) => `${JSON.stringify({ type: 'user', message: { role: 'user', content: text },
+    parent_tool_use_id: null, ...extra })}\n`;
+  let turnEnded = false;
+  child.stdin.write(userLine(promptFor(claim, staged.prompt, write)));
 
   const transcript = runTranscript(claim.request);
   const failed = (summary) => ({ result: { ...fail(summary, write), transcript } });
@@ -213,12 +217,19 @@ async function runClaude(claim, workspace, sessionId, staged, write) {
       boundaryDenied = true;
       addRunEvent(transcript, 'tool', 'File access outside the selected workspace was denied.');
     }
-    if (event.type === 'result') resultEvent = event;
+    if (event.type === 'result') { resultEvent = event; turnEnded = true; child.stdin.end(); }
   });
   child.stderr.resume();
   let leaseLost = false;
   let timedOut = false;
-  const stopRenewing = keepClaim(claim, () => { leaseLost = true; child.kill(); });
+  // priority 'next' folds the follow-up into the turn after the current tool call; 'now' would end the turn.
+  const onSteer = async (steer) => {
+    if (turnEnded || child.stdin.destroyed || !child.stdin.writable) return false;
+    child.stdin.write(userLine(steerPrompt(steer), { priority: 'next' }));
+    addRunEvent(transcript, 'request', steer.text);
+    return true;
+  };
+  const stopRenewing = keepClaim(claim, () => { leaseLost = true; child.kill(); }, { onSteer });
   // No time limit unless one is configured; the lease keeps long runs alive.
   const limit = Number(process.env.TAGMAILS_CLAUDE_TIMEOUT_MS || 0);
   const timeout = limit > 0 ? setTimeout(() => { timedOut = true; child.kill(); }, limit) : null;

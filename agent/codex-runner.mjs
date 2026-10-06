@@ -7,7 +7,7 @@ import { stageAgentAttachments } from './agent-attachments.mjs';
 import { formatAgentAnswer } from './answer-result.mjs';
 import { CONNECTED_APPS, ownerToolsFor, TAGMAILS_EMAIL } from './email-context.mjs';
 import { prepareCodexProfile, prepareOwnerCodexHome, PROFILE, WRITE_PROFILE, FULL_PROFILE } from './codex-profile.mjs';
-import { keepClaim } from './claim-renew.mjs';
+import { keepClaim, steerPrompt } from './claim-renew.mjs';
 import { addRunEvent, codexRunEvent, finishRunTranscript, runTranscript } from './run-transcript.mjs';
 
 const CODEX_MODEL_ID = /^[a-z][a-z0-9][a-z0-9._-]{0,62}$/;
@@ -275,13 +275,24 @@ async function runCodex(claim, workspace, home, sessionId, staged, write, full =
     const event = codexRunEvent(message);
     if (event && message.params?.item?.phase !== 'final_answer') addRunEvent(transcript, event.kind, event.text);
     if (message.method === 'thread/tokenUsage/updated') usage = reportedUsage(message.params?.tokenUsage?.last) ?? usage;
+    if (message.method === 'turn/completed') activeTurnId = null;
     if (message.method === 'turn/completed') finish(message.params?.turn?.status);
   });
   child.once('error', stop);
   child.once('close', (code) => stop(new Error(`Codex app-server exited with ${code}`)));
   let leaseLost = false;
   let timedOut = false;
-  const stopRenewing = keepClaim(claim, () => { leaseLost = true; child.kill(); });
+  let activeTurnId = null;
+  let threadForSteer = null;
+  // A follow-up email joins the turn in flight; once the turn ends it returns false and the relay queues it.
+  const onSteer = async (steer) => {
+    if (!activeTurnId || !threadForSteer) return false;
+    await request('turn/steer', { threadId: threadForSteer, expectedTurnId: activeTurnId,
+      input: [{ type: 'text', text: steerPrompt(steer) }] });
+    addRunEvent(transcript, 'request', steer.text);
+    return true;
+  };
+  const stopRenewing = keepClaim(claim, () => { leaseLost = true; child.kill(); }, { onSteer });
   // No time limit unless one is configured; the lease keeps long runs alive.
   const limit = Number(process.env.TAGMAILS_CODEX_TIMEOUT_MS || 0);
   const timeout = limit > 0 ? setTimeout(() => { timedOut = true; stop(new Error('Codex exceeded the configured time limit')); child.kill(); }, limit) : null;
@@ -316,6 +327,8 @@ async function runCodex(claim, workspace, home, sessionId, staged, write, full =
     const startedTurn = await request('turn/start', { threadId, cwd: workspace, model: claim.model.id, effort: claim.model.effort,
       serviceTierForTurn: tier,
       approvalPolicy, input: [{ type: 'text', text: promptFor(claim, staged.prompt, write, full) }] });
+    activeTurnId = startedTurn?.turn?.id ?? null;
+    threadForSteer = threadId;
     let status;
     try { status = await turnDone; }
     catch {

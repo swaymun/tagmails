@@ -189,7 +189,44 @@ async function renew(env, device, body) {
     WHERE id = ? AND device_id = ? AND lease_id = ? AND state = 'running'
       AND lease_until > CURRENT_TIMESTAMP RETURNING lease_until`)
     .bind(body.jobId, device.id, body.leaseId).first();
-  return row ? json({ renewed: true, leaseUntil: row.lease_until }) : json({ error: 'Lease expired or replaced' }, 409);
+  if (!row) return json({ error: 'Lease expired or replaced' }, 409);
+  return json({ renewed: true, leaseUntil: row.lease_until, steers: await pendingSteers(env, device, body.jobId) });
+}
+
+// Follow-up emails waiting to steer this run. The computer confirms each one
+// with /api/device/steered; until then it stays pending and is re-offered.
+async function pendingSteers(env, device, jobId) {
+  const { results = [] } = await env.DB.prepare(`SELECT s.id, m.object_key, m.message_id, m.agent_email FROM jobs s
+    JOIN messages m ON m.id = s.message_id
+    WHERE s.steer_of = ? AND s.steer_state = 'pending' ORDER BY s.rowid LIMIT 3`).bind(jobId).all();
+  const steers = [];
+  for (const item of results) {
+    try {
+      const object = await env.MAIL.get(item.object_key);
+      if (!object) continue;
+      const parsed = await parseInbound(await object.arrayBuffer(), item.agent_email, {
+        verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false });
+      if (parsed.messageId !== item.message_id) continue;
+      const text = currentText(parsed.body).trim();
+      if (text) steers.push({ id: item.id, from: parsed.from, text });
+    } catch { /* Left pending; it queues when the run ends. */ }
+  }
+  return steers;
+}
+
+async function steered(env, device, body) {
+  if (typeof body.jobId !== 'string' || typeof body.leaseId !== 'string' || typeof body.steerId !== 'string') {
+    return json({ error: 'Invalid steer' }, 400);
+  }
+  const run = await env.DB.prepare(`SELECT id FROM jobs WHERE id = ? AND device_id = ? AND lease_id = ? AND state = 'running'`)
+    .bind(body.jobId, device.id, body.leaseId).first();
+  if (!run) return json({ error: 'Lease expired or replaced' }, 409);
+  // Delivered stays completed with no reply. Undelivered becomes an ordinary queued job.
+  await env.DB.prepare(body.delivered === true
+    ? `UPDATE jobs SET steer_state = 'delivered' WHERE id = ? AND steer_of = ? AND steer_state = 'pending'`
+    : `UPDATE jobs SET state = 'queued', steer_state = NULL WHERE id = ? AND steer_of = ? AND steer_state = 'pending'`)
+    .bind(body.steerId, body.jobId).run();
+  return json({ ok: true });
 }
 
 async function started(env, device, body) {
@@ -298,6 +335,11 @@ async function complete(env, device, body) {
         AND j.state = ? AND m.sender_email LIKE '%@gmail.com'`)
       .bind(reactionStatus, body.jobId, device.id, body.leaseId, resultHash, state));
   }
+  // Follow-ups the run never took become ordinary queued jobs behind it.
+  statements.push(env.DB.prepare(`UPDATE jobs SET state = 'queued', steer_state = NULL
+    WHERE steer_of = ? AND steer_state = 'pending'
+      AND EXISTS (SELECT 1 FROM jobs WHERE id = ? AND lease_id = ? AND result_hash = ? AND state IN ('completed', 'failed'))`)
+    .bind(body.jobId, body.jobId, body.leaseId, resultHash));
   const updated = await env.DB.batch(statements);
   return (updated[1].meta?.changes ?? updated[1].changes) === 1
     ? json({ completed: true, duplicate: false }) : json({ error: 'Lease expired or replaced' }, 409);
@@ -306,7 +348,7 @@ async function complete(env, device, body) {
 export async function handleDeviceRequest(request, env) {
   const url = new URL(request.url);
   if (!((request.method === 'GET' && ['/api/device/attachment', '/api/device/status', '/api/device/push'].includes(url.pathname)) ||
-    (request.method === 'POST' && ['/api/device/claim', '/api/device/renew', '/api/device/started', '/api/device/complete', '/api/device/artifacts', '/api/device/models', '/api/device/projects'].includes(url.pathname)))) {
+    (request.method === 'POST' && ['/api/device/claim', '/api/device/renew', '/api/device/steered', '/api/device/started', '/api/device/complete', '/api/device/artifacts', '/api/device/models', '/api/device/projects'].includes(url.pathname)))) {
     return new Response('Not found', { status: 404 });
   }
   if (url.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(url.hostname)) return json({ error: 'HTTPS required' }, 403);
@@ -345,5 +387,6 @@ export async function handleDeviceRequest(request, env) {
     return json({ saved: true, count: projects.length });
   }
   if (url.pathname === '/api/device/renew') return renew(env, device, body);
+  if (url.pathname === '/api/device/steered') return steered(env, device, body);
   return url.pathname === '/api/device/started' ? started(env, device, body) : complete(env, device, body);
 }
