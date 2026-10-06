@@ -27,7 +27,7 @@ After a deploy, send one owner Gmail task and confirm: 👀 reaction (when enabl
 
 1. When Resend verifies sending, give the owner account an opaque `@tagmails.com` address (keep the `.resend.app` one as an alias), drop `RESEND_TEST_FROM`, and test: a new thread, a reply, an unauthorized sender, and Gmail reactions. Enable `STATUS_REACTIONS_ENABLED` only for that trial and disable it if Gmail shows fallback emails.
 2. Website cutover: add `https://tagmails.com` and `https://www.tagmails.com` to the Google OAuth client, switch the apex A records to `162.159.143.30` / `172.66.3.26` and `www` to `custom-domains.chatgpt.site.`, keep every mail record untouched, then update `SITE_ORIGIN` and the relay CORS list. Record the old values for rollback.
-3. Project routing in production: send a few emails that name a project, one that doesn't, and one standalone question; check the chosen folder in the footer, and that "which project?" replies resume correctly.
+3. Project routing in production: send a few emails that name a project, one that doesn't, and one standalone question; check the chosen folder in the footer, and that an unclear email runs in a chat folder that its replies keep.
 4. Publish the Homebrew tap and try a clean install on a second Mac and a Linux box.
 5. Before any customer: replace Resend for customer mail and stop keeping plaintext customer mail in R2. See [email-privacy.md](email-privacy.md).
 

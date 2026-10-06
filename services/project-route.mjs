@@ -155,6 +155,8 @@ export function explicitWorkspace(text, projects) {
 }
 
 /**
+ * When no project clearly fits, the email runs in a fresh chat folder (scratch)
+ * instead of asking. Only an explicit folder this machine doesn't have asks.
  * @returns {Promise<{kind:'project', id, name, path} | {kind:'scratch'} | {ask:string}>}
  */
 export async function routeProject(state, projects, { apiKey, fetcher = fetch } = {}) {
@@ -165,7 +167,7 @@ export async function routeProject(state, projects, { apiKey, fetcher = fetch } 
     const project = projects.find((item) => item.id === explicit);
     return { kind: 'project', id: project.id, name: project.name, path: project.path };
   }
-  if (!apiKey || !state.trim()) return { ask: projectQuestion(projects) };
+  if (!apiKey || !state.trim()) return { kind: 'scratch' };
   try {
     const response = await fetcher('https://api.typesafe.ai/v1/systemone', {
       method: 'POST',
@@ -177,10 +179,9 @@ export async function routeProject(state, projects, { apiKey, fetcher = fetch } 
     const choice = acceptSelection((await response.json()).answers?.folder, projects);
     if (choice === 'ad_hoc') return { kind: 'scratch' };
     const project = projects.find((item) => item.id === choice);
-    return project ? { kind: 'project', id: project.id, name: project.name, path: project.path }
-      : { ask: projectQuestion(projects) };
+    return project ? { kind: 'project', id: project.id, name: project.name, path: project.path } : { kind: 'scratch' };
   } catch (error) {
     console.error('Jev project routing failed', error);
-    return { ask: projectQuestion(projects) };
+    return { kind: 'scratch' };
   }
 }

@@ -77,13 +77,14 @@ test('only a confident, clearly leading folder choice is accepted', () => {
   assert.deepEqual(Object.keys(prompt.questions.folder.criteria), ['p_0000000002', 'p_0000000001', 'ad_hoc', 'ask']);
 });
 
-test('routing falls back to a question when Jev fails', async () => {
+test('routing falls back to a chat folder when Jev fails, and asks only about an unknown named folder', async () => {
   const projects = cleanProjectCatalog(PROJECTS);
   const failing = async () => new Response('down', { status: 503 });
   const original = console.error; console.error = () => {};
   try {
-    assert.match((await routeProject('Fix it', projects, { apiKey: 'k', fetcher: failing })).ask, /Which project/);
+    assert.deepEqual(await routeProject('Fix it', projects, { apiKey: 'k', fetcher: failing }), { kind: 'scratch' });
   } finally { console.error = original; }
+  assert.match((await routeProject('Work in /Users/me/code/elsewhere and fix it', projects, { apiKey: 'k', fetcher: failing })).ask, /Which project/);
   assert.deepEqual(await routeProject('Fix it', [], { apiKey: 'k', fetcher: failing }), { kind: 'scratch' });
 });
 
@@ -109,25 +110,17 @@ test('a new email runs in the chosen published folder and replies stay there', a
   assert.deepEqual(envelope(reply.body).workspace, { kind: 'project', path: '/Users/me/code/tagmails' });
 });
 
-test('standalone work uses scratch space and unclear work asks before running', async () => {
+test('standalone and unclear work both run in a chat folder instead of asking', async () => {
   const { env, sqlite } = bindings();
   env.TYPESAFE_API_KEY = 'jev-test';
   const token = device(sqlite);
   await call(env, token, 'projects', { projects: PROJECTS });
   await inbound(env, 'poem', 'Write a short poem about autumn.', [], jev('ad_hoc'));
   assert.deepEqual(envelope((await call(env, token, 'claim')).body).workspace, { kind: 'scratch' });
-
   await inbound(env, 'vague', 'Fix the app.', [], jev('ask'));
-  const asked = sqlite.prepare("SELECT model_json, workspace_json FROM jobs j JOIN messages m ON m.id = j.message_id WHERE m.provider_email_id = 'vague'").get();
-  assert.match(JSON.parse(asked.model_json).error, /Which project should I work in\? .*TagMails, PupCal/);
-  assert.match(JSON.parse(asked.workspace_json).pending, /Fix the app\./);
-
-  const seen = [];
-  await inbound(env, 'answer', 'PupCal', ['<vague@gmail.com>'], jev('p_0000000002', seen));
-  const state = seen.find((request) => request.questions.folder).state;
-  assert.match(state, /Fix the app\.[\s\S]*The agent asked which project to use\. The sender replied:\nPupCal/);
-  const answered = sqlite.prepare("SELECT workspace_json FROM jobs j JOIN messages m ON m.id = j.message_id WHERE m.provider_email_id = 'answer'").get();
-  assert.equal(JSON.parse(answered.workspace_json).path, '/Users/me/code/pupcal');
+  const vague = sqlite.prepare("SELECT model_json, workspace_json FROM jobs j JOIN messages m ON m.id = j.message_id WHERE m.provider_email_id = 'vague'").get();
+  assert.equal(JSON.parse(vague.model_json).error, undefined);
+  assert.deepEqual(JSON.parse(vague.workspace_json), { kind: 'scratch' });
 });
 
 test('a machine pinned to one folder clears its published projects', async () => {

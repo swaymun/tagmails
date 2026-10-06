@@ -23,7 +23,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_RELAY: &str = "https://tagmails-relay-dev.saimun-shahee.workers.dev";
 
 /// What a relay watcher needs. `workspace: None` means project routing: the
-/// relay picks one of this machine's published projects (or a scratch folder)
+/// relay picks one of this machine's published projects (or a chat folder)
 /// for each new email thread.
 struct Settings {
     relay: String,
@@ -302,7 +302,7 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
 
 /// Resolve the folder for a claimed job. A fixed workspace always wins. With
 /// project routing, the relay's choice must be a folder this machine published;
-/// anything else runs in a private per-thread scratch folder.
+/// anything else runs in the thread's chat folder (see chat_folder).
 fn job_workspace(settings: &Settings, claim: &Value) -> Result<PathBuf, Box<dyn Error>> {
     if let Some(workspace) = &settings.workspace {
         return Ok(workspace.clone());
@@ -329,9 +329,73 @@ fn job_workspace(settings: &Settings, claim: &Value) -> Result<PathBuf, Box<dyn 
     {
         return Err("Claim has an invalid thread ID".into());
     }
-    let scratch = paths::scratch_dir().join(thread);
-    create_private_dir(&scratch)?;
-    Ok(scratch.canonicalize()?)
+    chat_folder(claim, thread)
+}
+
+/// Where an email with no matching project runs: the folder the Codex app uses
+/// for chats without a project (~/Documents/Codex/<date>/<subject>), or for
+/// Claude Code, or when that folder doesn't exist, ~/.tagmails/chats/<date>/<subject>.
+/// A thread keeps its folder, so replies continue where the first email ran.
+fn chat_folder(claim: &Value, thread: &str) -> Result<PathBuf, Box<dyn Error>> {
+    let map_file = paths::data_dir().join("chat-folders.json");
+    let mut map: Value = fs::read(&map_file)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    if let Some(saved) = map[thread].as_str().map(PathBuf::from) {
+        if saved.is_dir() {
+            return Ok(saved.canonicalize()?);
+        }
+    }
+    let claude = claim["model"]["id"].as_str().is_some_and(|id| id.starts_with("claude-"));
+    let codex_chats = paths::home().join("Documents").join("Codex");
+    let base = if !claude && codex_chats.is_dir() {
+        codex_chats
+    } else {
+        paths::home().join(".tagmails").join("chats")
+    };
+    let day = base.join(today());
+    let slug = chat_slug(claim["request"]["subject"].as_str().unwrap_or(""));
+    let mut folder = day.join(&slug);
+    let mut suffix = 2;
+    while folder.exists() {
+        folder = day.join(format!("{slug}-{suffix}"));
+        suffix += 1;
+    }
+    fs::create_dir_all(&folder)?;
+    let folder = folder.canonicalize()?;
+    map[thread] = json!(folder.display().to_string());
+    create_private_dir(&paths::data_dir())?;
+    fs::write(&map_file, serde_json::to_vec(&map)?)?;
+    Ok(folder)
+}
+
+fn today() -> String {
+    Command::new("date")
+        .arg("+%Y-%m-%d")
+        .output()
+        .ok()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .filter(|day| day.len() == 10)
+        .unwrap_or_else(|| "today".into())
+}
+
+/// A short folder name from the subject, like the Codex app's chat folders.
+fn chat_slug(subject: &str) -> String {
+    let mut slug = String::new();
+    for character in subject.to_lowercase().chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character);
+        } else if !slug.ends_with('-') && !slug.is_empty() {
+            slug.push('-');
+        }
+        if slug.len() >= 40 {
+            break;
+        }
+    }
+    let slug = slug.trim_matches('-').to_owned();
+    if slug.is_empty() { "email".into() } else { slug }
 }
 
 fn verified_claim(response: &Value, token: &str) -> Result<Value, Box<dyn Error>> {
@@ -944,6 +1008,13 @@ fn run_relay(settings: &Settings, once: bool) -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn chat_folders_use_a_short_subject_name() {
+        assert_eq!(chat_slug("Re: Travel guide scripts!"), "re-travel-guide-scripts");
+        assert_eq!(chat_slug("   "), "email");
+        assert_eq!(chat_slug(&"a".repeat(80)).len(), 40);
+    }
+
+    #[test]
     fn website_permissions_never_exceed_the_machine_limit() {
         // By default every level is allowed; the website picks, else the start flag.
         assert_eq!(chosen(Some("full"), "write", "full", &ACCESS_ORDER), "full");
@@ -1162,8 +1233,23 @@ mod tests {
             published
         );
         assert!(job_workspace(&settings, &claim(json!({"kind":"project","path":other.display().to_string()}))).is_err());
-        let scratch = job_workspace(&settings, &claim(json!({"kind":"scratch"}))).unwrap();
-        assert!(scratch.ends_with("scratch/thread-1"));
+        // No project: Claude (or no Codex chats folder) uses ~/.tagmails/chats;
+        // a Codex email uses the Codex app's chats folder; a thread keeps its folder.
+        let real_home = env::var_os("HOME");
+        env::set_var("HOME", &root);
+        let chat = |id: &str, thread: &str| json!({"threadId":thread,"workspace":{"kind":"scratch"},
+            "model":{"id":id},"request":{"subject":"Travel guide scripts"}});
+        let scratch = job_workspace(&settings, &chat("claude-opus-5-5", "thread-1")).unwrap();
+        assert!(scratch.starts_with(root.canonicalize().unwrap().join(".tagmails/chats")));
+        assert!(scratch.ends_with("travel-guide-scripts"));
+        assert_eq!(job_workspace(&settings, &chat("claude-opus-5-5", "thread-1")).unwrap(), scratch);
+        fs::create_dir_all(root.join("Documents/Codex")).unwrap();
+        let codex = job_workspace(&settings, &chat("gpt-6-sol", "thread-2")).unwrap();
+        assert!(codex.starts_with(root.canonicalize().unwrap().join("Documents/Codex")));
+        match real_home {
+            Some(home) => env::set_var("HOME", home),
+            None => env::remove_var("HOME"),
+        }
         assert!(job_workspace(&settings, &json!({"threadId":"../escape"})).is_err());
         let fixed = Settings { workspace: Some(other.clone()), ..settings };
         assert_eq!(job_workspace(&fixed, &claim(json!({"kind":"scratch"}))).unwrap(), other);
@@ -1467,7 +1553,7 @@ fn command_start(args: &[String]) -> Result<(), Box<dyn Error>> {
     match config["workspace"].as_str() {
         Some(workspace) => println!("Access: {} in {workspace}", config["access"].as_str().unwrap_or("read")),
         None => println!(
-            "Access: {} in the project folder chosen for each email (or a private scratch folder).",
+            "Access: {} in the project folder chosen for each email (or a chat folder when none fits).",
             config["access"].as_str().unwrap_or("read")
         ),
     }

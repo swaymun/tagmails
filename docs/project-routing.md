@@ -1,6 +1,6 @@
 # Project routing
 
-A new email thread runs in one of the paired machine's project folders, in a private scratch folder, or after a "which project?" reply. Replies stay in the thread's folder. Code: `agent/project-inventory.mjs` (what the machine shares), `services/project-route.mjs` (the decision).
+A new email thread runs in one of the paired machine's project folders or, when none clearly fits, in a chat folder: `~/Documents/Codex/<date>/<subject>` for Codex (where the Codex app keeps chats without a project) and `~/.tagmails/chats/<date>/<subject>` for Claude Code or when that folder is missing. Only an explicit folder the machine doesn't have gets a "which project?" reply. Replies stay in the thread's folder. Code: `agent/project-inventory.mjs` (what the machine shares), `services/project-route.mjs` (the decision).
 
 ## How a folder is chosen
 

@@ -16,7 +16,7 @@ Gmail ──► Resend inbound ──► relay (Cloudflare Worker, D1, R2)
                 relay ──► Resend outbound ──► reply in the same Gmail thread
 ```
 
-- **Agent** (`crates/tagmails-daemon`, binary `tagmails`): pairs with the relay, runs as a launchd agent (macOS) or systemd user service (Linux), publishes the machine's model list and recent Codex/Claude project folders, claims jobs, and runs the Node adapters in `agent/`. It only runs in folders it published itself, or a private per-thread scratch folder.
+- **Agent** (`crates/tagmails-daemon`, binary `tagmails`): pairs with the relay, runs as a launchd agent (macOS) or systemd user service (Linux), publishes the machine's model list and recent Codex/Claude project folders, claims jobs, and runs the Node adapters in `agent/`. It only runs in folders it published itself, or, when no project fits, a chat folder (`~/Documents/Codex/<date>/<subject>` for Codex, `~/.tagmails/chats/…` otherwise) that the thread keeps.
 - **Relay** (`services/`): Resend webhooks, Google sign-in, pairing, the job queue, routing (`jev-route.mjs` for model, `project-route.mjs` for folder), the outbox, status reactions, test credits, and run artifacts.
 - **Site** (`site/`, a submodule): the landing page, `/setup`, and `/run`. Plain HTML/CSS/JS, no build step.
 - **Lab** (`apps/mock-inbox`): a local Gmail-like inbox for testing the whole loop without real mail. `mail.mjs` and `markdown.mjs` there are the email renderers the relay uses.
