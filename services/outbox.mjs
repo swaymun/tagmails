@@ -236,11 +236,17 @@ async function prepare(env, row) {
     : relayOrigin ? `${relayOrigin}/runs/${encodeURIComponent(row.job_id)}` : null;
   const participantTranscriptReady = siteOrigin && env.SITE_PARTICIPANT_TRANSCRIPTS === 'true';
   const sharedWithParticipant = [...to, ...cc].some((email) => email !== owner);
-  const runLinkLabel = result.runtime === 'relay' ? 'Run details' : 'Transcript';
+  const ownerOnly = to.length === 1 && to[0] === owner && cc.length === 0;
+  // Gmail drops codex:// and claude:// hrefs, so the owner's link goes through
+  // a Site page that hands off to the app that ran the session.
+  const session = ['codex', 'claude'].includes(result.session?.harness) &&
+    /^[0-9a-f-]{36}$/i.test(result.session?.id ?? '') ? result.session : null;
+  const openInApp = session && siteOrigin && ownerOnly;
+  const runLinkLabel = openInApp ? `Open in ${session.harness === 'claude' ? 'Claude' : 'Codex'}`
+    : result.runtime === 'relay' ? 'Run details' : 'Transcript';
   const selectedModel = selectedModelStatus(inbound.model_json);
   let projectName = null;
   try { projectName = JSON.parse(inbound.workspace_json ?? 'null')?.name ?? null; } catch { /* Older jobs have no folder. */ }
-  const ownerOnly = to.length === 1 && to[0] === owner && cc.length === 0;
   const attachments = [];
   const files = ownerOnly && result.state === 'completed'
     ? await selectedRunArtifacts(env, row.account_id, row.job_id, result.artifactIds) : [];
@@ -297,7 +303,7 @@ async function prepare(env, row) {
     checks: result.checks,
     links: transcriptUrl && result.runtime !== 'relay' && (ownerCanOpen || participantTranscriptReady)
       ? [{ label: sharedWithParticipant && !participantTranscriptReady ? `${runLinkLabel} (owner only)` : runLinkLabel,
-        url: transcriptUrl }] : [],
+        url: openInApp ? `${siteOrigin}/open.html#${session.harness}/${session.id.toLowerCase()}` : transcriptUrl }] : [],
     brandUrl: siteOrigin,
     note: result.runtime === 'relay' ? null
       : result.state === 'needs_approval'

@@ -261,6 +261,22 @@ test('the result email names the model recorded at receipt, including an explici
   assert.doesNotMatch(sent.text, /GPT-6\.1 Sol/);
 });
 
+test('the owner footer opens the run in the app that ran it', async () => {
+  const fixture = bindings();
+  const { env } = fixture;
+  env.SITE_ORIGIN = 'https://tagmails.example';
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  await env.MAIL.put('results/1.json', JSON.stringify({ runtime: 'claude-cli-write', state: 'completed',
+    summary: 'Done.', session: { harness: 'claude', id: 'AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA' } }));
+  let sent;
+  assert.equal((await sendNextOutbox(env, {
+    sendEmail: async (payload) => { sent = payload; return { data: { id: 'open-1' } }; },
+    getSentEmail: async () => ({ data: { message_id: '<open-1@tagmails.test>' } }),
+  })).state, 'sent');
+  assert.match(sent.html, /href="https:\/\/tagmails\.example\/open\.html#claude\/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"[^>]*>Open in Claude</);
+  assert.doesNotMatch(sent.text, /Transcript/);
+});
+
 test('a completed write turn reports the agent answer without claiming verified edits', async () => {
   const fixture = bindings();
   const { env } = fixture;
