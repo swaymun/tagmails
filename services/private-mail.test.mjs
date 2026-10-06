@@ -104,6 +104,26 @@ test('mail delivered by Cloudflare runs only when DKIM proves the owner sent it,
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM jobs').get().n, 1);
 });
 
+test('Cloudflare mail runs only when the agent is in a signed To or Cc', async () => {
+  const { env, sqlite } = bindings();
+  const { privateKey, resolveTxt } = keyRecord();
+  const deliver = async (raw) => (await handleEmail(emailMessage(raw, 'agent@wonder.test'), env, { resolveTxt, fetchModel: fetch })).json();
+  // Mail the owner sent to someone else, re-sent to the agent: DKIM passes, the recipient doesn't.
+  const replayed = signed(MESSAGE('owner@gmail.com', 'friend@example.com', 'Lunch?'), { privateKey });
+  assert.deepEqual(await deliver(replayed), { accepted: false, reason: 'agent not in signed To or Cc' });
+  // The agent in To, but To is not signed.
+  const unsignedTo = signed(MESSAGE('owner@gmail.com', 'agent@wonder.test'), { privateKey, names: ['from', 'subject', 'message-id'] });
+  assert.equal((await deliver(unsignedTo)).reason, 'agent not in signed To or Cc');
+  // A second To header added after signing.
+  const addedTo = replayed.replace('To: friend@example.com', 'To: agent@wonder.test\r\nTo: friend@example.com');
+  assert.equal((await deliver(addedTo)).accepted, false);
+  // Agent in a signed Cc is fine.
+  const cc = signed(MESSAGE('owner@gmail.com', 'friend@example.com').replace('To: friend@example.com', 'To: friend@example.com\r\nCc: agent@wonder.test'),
+    { privateKey, names: ['from', 'to', 'cc', 'subject', 'message-id'] });
+  assert.equal((await deliver(cc)).accepted, true);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM jobs').get().n, 1);
+});
+
 test('replies go out through the EMAIL binding with threading headers and attachments', async () => {
   const sent = [];
   const env = { EMAIL: { send: async (message) => { sent.push(message); return { messageId: '<cf-1@tagmails.com>' }; } } };

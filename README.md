@@ -59,7 +59,7 @@ Owner emails get the owner's own tool setup (MCP servers, connectors, skills). P
 
 ## Security model
 
-- A sender is the owner only if the mail passes DMARC (Resend path) or a DKIM signature from the From domain that covers From and the whole body (Cloudflare path). Anyone else must be a participant the owner put on that thread, and only on that thread.
+- A sender is the owner only if the mail passes DMARC (Resend path) or a DKIM signature from the From domain that covers From, the whole body, and a To or Cc that names the agent (Cloudflare path; Bcc to the agent is not accepted there). Anyone else must be a participant the owner put on that thread, and only on that thread.
 - The device token never leaves the machine; the relay stores its SHA-256. Each claim is HMAC-signed with it and the daemon rejects unsigned or altered claims.
 - The daemon only runs in folders it published itself or in a per-thread chat folder. Attachments are staged as fixed file names and labeled untrusted.
 - Follow-ups sent mid-run join the live turn only when they come from the same sender as the running email.

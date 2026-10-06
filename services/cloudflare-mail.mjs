@@ -51,6 +51,12 @@ export async function inspectCloudflareInbound(message, { resolveAgentAddress, r
   // Only a valid signature from the sender's own domain proves who sent it.
   const dkim = await verifyDkim(raw, parsed.from, resolveTxt ? { resolveTxt } : {});
   if (!dkim.pass) return { ignored: true, reason: 'sender authentication failed' };
+  // The sender must have addressed the agent in a signed To or Cc. Otherwise
+  // any mail the owner sent elsewhere could be re-sent here and pass DKIM.
+  // Bcc to the agent is therefore not supported on this path.
+  const signedTo = dkim.signedHeaders.includes('to') && (parsed.to ?? []).includes(agent);
+  const signedCc = dkim.signedHeaders.includes('cc') && (parsed.cc ?? []).includes(agent);
+  if (!signedTo && !signedCc) return { ignored: true, reason: 'agent not in signed To or Cc' };
   return {
     agentAddress: agent,
     providerEmailId: `cf-${(await digest(raw)).slice(0, 32)}`,

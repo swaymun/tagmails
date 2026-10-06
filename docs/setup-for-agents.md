@@ -109,7 +109,7 @@ Run from the repo root. `$ORIGIN` is the Worker origin.
 
 ## Cloudflare mail instead of Resend
 
-The pilot relay receives at the Worker's `email()` handler and sends through the Email Sending binding, so no third party holds message bodies. To do the same: put the domain on Cloudflare, enable Email Routing with a rule (or catch-all) that sends to the Worker, add `"send_email": [{ "name": "EMAIL" }]` to the config, and verify the domain for Email Sending. The relay then trusts a sender only on a DKIM signature from the From domain that covers From and the whole body. `RESEND_*` can be left unset; replies with an uncertain outcome are then held for manual review.
+The pilot relay receives at the Worker's `email()` handler and sends through the Email Sending binding, so no third party holds message bodies. To do the same: put the domain on Cloudflare, enable Email Routing with a rule (or catch-all) that sends to the Worker, add `"send_email": [{ "name": "EMAIL" }]` to the config, and verify the domain for Email Sending. The relay then trusts a sender only on a DKIM signature from the From domain that covers From, the whole body, and a To or Cc naming the agent address. Mail that reaches the agent only by Bcc, or a re-sent copy of mail addressed to someone else, is ignored. `RESEND_*` can be left unset; replies with an uncertain outcome are then held for manual review.
 
 ## Setup prompt
 

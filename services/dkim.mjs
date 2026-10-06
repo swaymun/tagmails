@@ -78,7 +78,8 @@ export async function dohTxt(name, fetcher = fetch) {
 
 async function verifySignature(signatureHeader, headers, body, resolveTxt) {
   const t = tags(signatureHeader.value);
-  const result = { domain: (t.d ?? '').toLowerCase(), selector: t.s ?? '', pass: false };
+  const result = { domain: (t.d ?? '').toLowerCase(), selector: t.s ?? '', pass: false,
+    signedHeaders: (t.h ?? '').toLowerCase().split(':').map((item) => item.trim()).filter(Boolean) };
   if (t.v !== '1' || t.a !== 'rsa-sha256' || !t.d || !t.s || !t.b || !t.bh || !t.h) return { ...result, reason: 'unsupported signature' };
   if (t.x && Number(t.x) * 1000 < Date.now()) return { ...result, reason: 'expired' };
   // RFC 6376 requires From to be signed; without it the signature says nothing about the sender.
@@ -122,20 +123,24 @@ export function aligned(signingDomain, fromDomain) {
 }
 
 /**
- * Returns { pass, domain } when a signature from the From domain verifies.
+ * Returns { pass, domain, signedHeaders } when a signature from the From domain verifies.
  */
 export async function verifyDkim(raw, fromAddress, { resolveTxt = (name) => dohTxt(name) } = {}) {
   const { head, body } = splitMessage(raw);
   const headers = parseHeaders(head);
   const fromDomain = String(fromAddress ?? '').split('@').pop().toLowerCase();
-  // Two From headers make "who signed" and "who it's from" ambiguous between parsers.
-  if (headers.filter((header) => header.name === 'from').length !== 1) return { pass: false, results: [] };
+  // Two From headers make "who signed" and "who it's from" ambiguous between
+  // parsers; the same goes for To and Cc, which decide who the mail was for.
+  if (headers.filter((header) => header.name === 'from').length !== 1 ||
+      ['to', 'cc'].some((name) => headers.filter((header) => header.name === name).length > 1)) return { pass: false, results: [] };
   const signatures = headers.filter((header) => header.name === 'dkim-signature').slice(0, 5);
   const results = [];
   for (const signature of signatures) {
     const result = await verifySignature(signature, headers, body, resolveTxt);
     results.push(result);
-    if (result.pass && aligned(result.domain, fromDomain)) return { pass: true, domain: result.domain, results };
+    if (result.pass && aligned(result.domain, fromDomain)) {
+      return { pass: true, domain: result.domain, signedHeaders: result.signedHeaders, results };
+    }
   }
   return { pass: false, results };
 }
