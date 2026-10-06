@@ -303,7 +303,7 @@ async function prepare(env, row) {
     checks: result.checks,
     links: transcriptUrl && result.runtime !== 'relay' && (ownerCanOpen || participantTranscriptReady)
       ? [{ label: sharedWithParticipant && !participantTranscriptReady ? `${runLinkLabel} (owner only)` : runLinkLabel,
-        url: openInApp ? `${siteOrigin}/open.html#${session.harness}/${session.id.toLowerCase()}` : transcriptUrl }] : [],
+        url: openInApp ? `${siteOrigin}/open#${session.harness}/${session.id.toLowerCase()}` : transcriptUrl }] : [],
     brandUrl: siteOrigin,
     note: result.runtime === 'relay' ? null
       : result.state === 'needs_approval'
