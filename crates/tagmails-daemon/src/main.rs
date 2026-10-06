@@ -244,10 +244,11 @@ fn publish_model_catalog(
     if defaults.is_object() {
         catalog["defaults"] = defaults.clone();
     }
-    // The most this machine allows; a website choice is capped at these.
+    // The most this machine allows (everything, unless locked with
+    // --max-access / --max-claude-permission); a website choice is capped here.
     catalog["limits"] = json!({
-        "access": config["access"].as_str().unwrap_or("read"),
-        "claudePermission": config["claudePermission"].as_str().unwrap_or("acceptEdits"),
+        "access": max_access(&config),
+        "claudePermission": max_claude_permission(&config),
     });
     let response = relay_post(client, base, "/api/device/models", token, catalog)?;
     if response["saved"] != true {
@@ -673,13 +674,25 @@ fn upload_file(
     Ok(())
 }
 
-/// A website permission choice applies only up to this machine's limit.
-fn capped<'a>(choice: Option<&'a str>, limit: &'a str, order: &[&str]) -> &'a str {
+/// The website's choice when it is within this machine's maximum, otherwise
+/// the machine's own default (from `tagmails start --access ...`), never
+/// above the maximum.
+fn chosen<'a>(choice: Option<&'a str>, default: &'a str, max: &'a str, order: &[&'a str]) -> &'a str {
     let rank = |value: &str| order.iter().position(|item| *item == value);
-    match (choice, rank(limit)) {
-        (Some(choice), Some(max)) if rank(choice).is_some_and(|wanted| wanted <= max) => choice,
-        _ => limit,
+    let top = rank(max).unwrap_or(order.len() - 1);
+    match choice {
+        Some(choice) if rank(choice).is_some_and(|wanted| wanted <= top) => choice,
+        _ if rank(default).is_some_and(|value| value <= top) => default,
+        _ => order[top],
     }
+}
+
+fn max_access(config: &Value) -> &str {
+    config["maxAccess"].as_str().filter(|value| ACCESS_ORDER.contains(value)).unwrap_or("full")
+}
+
+fn max_claude_permission(config: &Value) -> &str {
+    config["maxClaudePermission"].as_str().filter(|value| CLAUDE_ORDER.contains(value)).unwrap_or("bypassPermissions")
 }
 
 const ACCESS_ORDER: [&str; 3] = ["read", "write", "full"];
@@ -703,11 +716,14 @@ fn relay_iteration(client: &Client, settings: &Settings) -> Result<bool, Box<dyn
         .to_owned();
     claim["claimId"] = json!(lease_id);
     claim["claimed"] = json!(true);
-    let access = capped(claim["permissions"]["codexAccess"].as_str(), settings.access.as_str(), &ACCESS_ORDER).to_owned();
+    let config = load_config();
+    let access = chosen(claim["permissions"]["codexAccess"].as_str(), settings.access.as_str(),
+        max_access(&config), &ACCESS_ORDER).to_owned();
     let access = access.as_str();
-    let claude_permission = capped(
+    let claude_permission = chosen(
         claim["permissions"]["claudePermission"].as_str(),
         settings.claude_permission.as_str(),
+        max_claude_permission(&config),
         &CLAUDE_ORDER,
     )
     .to_owned();
@@ -927,12 +943,16 @@ fn run_relay(settings: &Settings, once: bool) -> Result<(), Box<dyn Error>> {
 mod tests {
     #[test]
     fn website_permissions_never_exceed_the_machine_limit() {
-        assert_eq!(capped(Some("read"), "write", &ACCESS_ORDER), "read");
-        assert_eq!(capped(Some("full"), "write", &ACCESS_ORDER), "write");
-        assert_eq!(capped(None, "write", &ACCESS_ORDER), "write");
-        assert_eq!(capped(Some("bogus"), "write", &ACCESS_ORDER), "write");
-        assert_eq!(capped(Some("bypassPermissions"), "auto", &CLAUDE_ORDER), "auto");
-        assert_eq!(capped(Some("manual"), "auto", &CLAUDE_ORDER), "manual");
+        // By default every level is allowed; the website picks, else the start flag.
+        assert_eq!(chosen(Some("full"), "write", "full", &ACCESS_ORDER), "full");
+        assert_eq!(chosen(None, "write", "full", &ACCESS_ORDER), "write");
+        assert_eq!(chosen(Some("bogus"), "read", "full", &ACCESS_ORDER), "read");
+        assert_eq!(chosen(Some("bypassPermissions"), "acceptEdits", "bypassPermissions", &CLAUDE_ORDER), "bypassPermissions");
+        // A machine locked with --max-access never goes above it.
+        assert_eq!(chosen(Some("full"), "write", "write", &ACCESS_ORDER), "write");
+        assert_eq!(chosen(None, "full", "write", &ACCESS_ORDER), "write");
+        assert_eq!(max_access(&json!({})), "full");
+        assert_eq!(max_claude_permission(&json!({"maxClaudePermission": "auto"})), "auto");
     }
 
     #[test]
@@ -1248,7 +1268,10 @@ Usage:
                  [--claude-permission manual|accept-edits|auto|bypass]
                  [--routing-context full|files]
                  [--model ID] [--effort LEVEL] [--speed standard|fast]
-                 [--clear-defaults]                Save settings and run in the background
+                 [--clear-defaults]
+                 [--max-access read|write|full]
+                 [--max-claude-permission manual|accept-edits|auto|bypass]
+                                                   Save settings and run in the background
   tagmails status                                  Show settings, connection and service state
   tagmails stop                                    Stop the background service
   tagmails logs                                    Follow the service log
@@ -1256,6 +1279,10 @@ Usage:
   tagmails run [--once]                            Run in the foreground (what the service runs)
   tagmails uninstall                               Remove the background service
   tagmails --version
+
+--access and --claude-permission set this machine's default permission. Permissions
+chosen on tagmails.com override it, up to --max-access / --max-claude-permission
+(everything by default).
 
 --model, --effort and --speed set this machine's default for emails that don't ask for
 one; a default saved on tagmails.com overrides them.
@@ -1372,6 +1399,22 @@ fn command_start(args: &[String]) -> Result<(), Box<dyn Error>> {
             _ => return Err("--claude-permission must be manual, accept-edits, auto or bypass".into()),
         };
         config["claudePermission"] = json!(mode);
+    }
+    if let Some(max) = option(args, "--max-access")? {
+        if !ACCESS_ORDER.contains(&max.as_str()) {
+            return Err("--max-access must be read, write, or full".into());
+        }
+        config["maxAccess"] = json!(max);
+    }
+    if let Some(max) = option(args, "--max-claude-permission")? {
+        let mode = match max.as_str() {
+            "manual" => "manual",
+            "accept-edits" | "acceptEdits" => "acceptEdits",
+            "auto" => "auto",
+            "bypass" | "bypassPermissions" => "bypassPermissions",
+            _ => return Err("--max-claude-permission must be manual, accept-edits, auto or bypass".into()),
+        };
+        config["maxClaudePermission"] = json!(mode);
     }
     if let Some(context) = option(args, "--routing-context")? {
         if !["full", "files"].contains(&context.as_str()) {
