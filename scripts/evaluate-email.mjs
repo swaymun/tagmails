@@ -9,7 +9,7 @@ const fixtures = [
     result: { state: 'completed', summary: 'The beta decision is to start with Gmail and one Mac workspace.',
       details: ['Codex read the selected plan.\nThe domain purchase still needs an owner.'],
       meta: ['GPT-6 Sol High', 'Fast', 'Balance $9.25'],
-      brandUrl: 'https://tagmails.saimun-h-shahee.chatgpt.site',
+      brandUrl: 'https://tagmails.com',
       checks: ['No domain was purchased.'],
       links: [{ label: 'Transcript', url: 'https://example.test/runs/1' }],
       note: 'Reply with the next decision.' },

@@ -22,7 +22,7 @@ Migrations go in `services/migrations/NNNN_name.sql`; the test fixture applies t
 
 ## The Site
 
-`site/` is the private `swaymun/tagmails-site` repo (static `dist/`), hosted as the Cloudflare Worker `tagmails-site` at `https://tagmails-site.saimun-shahee.workers.dev`, private behind Cloudflare Access (owner email only). Pushing to its `main` deploys via its own workflow, which needs `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets in that repo. Locally: `cd site && npx wrangler deploy`. The relay's `SITE_ORIGIN` secret (CORS and the footer hand-off link) and the Google OAuth client's authorized JavaScript origins must both list the Site's origin. After committing in `site/`, push it, then commit the submodule pointer here.
+`site/` is the private `swaymun/tagmails-site` repo (static `dist/`), hosted as the Cloudflare Worker `tagmails-site` served publicly at `tagmails.com` and `www.tagmails.com`. Pushing to its `main` deploys via its own workflow, which needs `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets in that repo. Locally: `cd site && npx wrangler deploy`. The relay's `SITE_ORIGIN` secret (CORS and the footer hand-off link, set to `https://tagmails.com`) and the Google OAuth client's authorized JavaScript origins must both list the Site's origin. After committing in `site/`, push it, then commit the submodule pointer here.
 
 ## The Mac daemon
 

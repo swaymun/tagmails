@@ -5,7 +5,7 @@ Owner-only development pilot: the owner's Gmail, the `tagmails-relay-dev` Worker
 ## What is live
 
 - **Relay**: `https://tagmails-relay-dev.saimun-shahee.workers.dev` (Worker `tagmails-relay-dev`, D1 `tagmails-relay-dev`, R2 `tagmails-relay-mail-dev`, Durable Object `DevicePush`). Config is the `dev` env in `wrangler.jsonc`.
-- **Site**: Cloudflare Worker `tagmails-site` at `https://tagmails-site.saimun-shahee.workers.dev`, private behind Cloudflare Access (owner only). Source is the `site` submodule (`swaymun/tagmails-site`); the relay's `SITE_ORIGIN` points at it. `tagmails.com` is not yet pointed at it.
+- **Site**: Cloudflare Worker `tagmails-site` served at `tagmails.com` and `www.tagmails.com`, public. Source is the `site` submodule (`swaymun/tagmails-site`); the relay's `SITE_ORIGIN` points at it.
 - **Mail**: agent addresses on `tagmails.com`. Inbound arrives through Cloudflare Email Routing at the Worker's `email()` handler and is trusted only on a DKIM signature from the sender's domain; replies and status reactions go out through the Email Sending binding. The Resend webhook route stays for self-hosted relays.
 - **Routing**: Jev (`TYPESAFE_API_KEY`) picks model, effort and speed from plain language, the project folder for new threads, and whether a mid-run follow-up steers the live turn. Replies inherit model and folder.
 - **Billing**: `BILLING_LIVE` is set; a charge needs a live Stripe key and webhook secret as well. See [pricing.md](pricing.md).
