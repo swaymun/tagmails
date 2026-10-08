@@ -1,6 +1,6 @@
 {
   "name": "tagmails-agent",
-  "version": "0.2.16",
+  "version": "0.2.17",
   "private": true,
   "description": "Codex and Claude Code adapters run by the tagmails binary",
   "type": "module",
