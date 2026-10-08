@@ -829,6 +829,11 @@ fn relay_iteration(client: &Client, settings: &Settings) -> Result<bool, Box<dyn
             json!({"runtime":"tagmails-router","state":"failed","summary":"This machine could not open the project folder chosen for this email. Reply with the folder name, or run `tagmails status` on the machine to check its project list."})
         }
         (Ok(_), Ok(workspace)) => {
+            println!(
+                "{job_id}: running {} in {} (Codex {access}, Claude {claude_permission})",
+                claim["model"]["id"].as_str().unwrap_or("unknown model"),
+                workspace.display()
+            );
             if let Err(error) = relay_post(
                 client,
                 base,
