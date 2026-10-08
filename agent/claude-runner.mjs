@@ -168,12 +168,15 @@ async function runClaude(claim, workspace, sessionId, staged, write) {
   const mode = MODES[selectedMode()];
   // Owner emails get the owner's Claude Code setup (MCP servers, claude.ai
   // connectors, plugins, skills, CLAUDE.md). Everyone else gets none of it.
-  // --restricted still confines file tools to the workspace either way.
+  // --restricted confines file tools to the workspace and drops Bash. Owner
+  // auto turns skip it and run as Claude Code does, with no sandbox: the auto
+  // classifier decides what is safe (git, npm, gh, local servers).
   const owner = claim.request?.fromOwner === true && process.env.TAGMAILS_OWNER_TOOLS !== 'off';
+  const restricted = mode.restricted && !(owner && selectedMode() === 'auto');
   const args = [
     '--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
     ...(owner ? [] : ['--safe-mode']),
-    ...(mode.restricted ? ['--restricted'] : []),
+    ...(restricted ? ['--restricted'] : []),
     ...(owner ? [] : ['--strict-mcp-config', '--disable-slash-commands']), '--no-chrome',
     ...(mode.tools ? ['--tools', mode.tools] : []),
     // Nobody can approve a tool mid-email, so the owner's connectors are

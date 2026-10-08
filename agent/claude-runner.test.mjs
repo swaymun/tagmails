@@ -152,6 +152,15 @@ function run(prompt) {
   assert.deepEqual(ownerArgs.slice(ownerArgs.indexOf('--disallowedTools'), ownerArgs.indexOf('--disallowedTools') + 3),
     ['--disallowedTools', 'mcp__*__trash*', 'mcp__*__delete*']);
   assert.ok(ownerArgs.includes('--restricted') && ownerArgs.includes('--no-chrome'));
+  // Auto mode: the owner gets Claude Code's own behavior (Bash, no --restricted); participants stay restricted.
+  process.env.TAGMAILS_CLAUDE_PERMISSION = 'auto';
+  try {
+    await runClaim({ ...ownerClaim, jobId: 'job-owner-auto' });
+    await runClaim(claim('job-participant-auto', 'Run the tests.'));
+  } finally { delete process.env.TAGMAILS_CLAUDE_PERMISSION; }
+  const [ownerAuto, participantAuto] = fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).slice(-2).map((call) => call.args);
+  assert.ok(ownerAuto.includes('auto') && !ownerAuto.includes('--restricted') && !ownerAuto.includes('--tools'));
+  assert.ok(participantAuto.includes('auto') && participantAuto.includes('--restricted'));
   assert.equal((await runClaim(claim('job-2', 'Continue.'))).runtime, 'claude-cli-write');
   const resumedWrite = fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).at(-1);
   assert.ok(resumedWrite.args.includes('33333333-3333-4333-8333-333333333333'));
