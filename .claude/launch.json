@@ -4,8 +4,22 @@
     {
       "name": "site",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "4190", "--directory", "site/dist"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "4190",
+        "--directory",
+        "site/dist"
+      ],
       "port": 4190
+    },
+    {
+      "name": "comic-maker",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "/Users/saimun/CodexProjects/personal-monorepo/projects/comic-maker/server.mjs"
+      ],
+      "port": 4310
     }
   ]
 }
