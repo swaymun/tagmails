@@ -31,8 +31,16 @@ export function attachmentsFrom(answer) {
   return { text, paths };
 }
 
+// Agents link files the way their desktop apps render them ([a.mjs](/Users/…/a.mjs)).
+// Those paths mean nothing in a mail client, so keep the name as code.
+export function unlinkLocalPaths(text) {
+  return text.replace(/\[([^\]\n]+)\]\(<?(?:file:\/\/|\/|~\/)[^)\n]*>?\)/g,
+    (_, label) => (/^`.*`$/.test(label) ? label : `\`${label}\``));
+}
+
 export function formatAgentAnswer(rawAnswer) {
-  const { text: answer, paths: attach } = attachmentsFrom(rawAnswer);
+  const { text: linked, paths: attach } = attachmentsFrom(rawAnswer);
+  const answer = unlinkLocalPaths(linked);
   let remaining = answer.trim().replace(/\r\n/g, '\n');
   if (!remaining) return null;
   let summary;

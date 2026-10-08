@@ -34,3 +34,8 @@ test('the agent names files to attach and those lines leave the email', () => {
   assert.equal(formatAgentAnswer('No files here.').attach, undefined);
   assert.equal(attachmentsFrom(Array.from({ length: 8 }, (_, i) => `TagMails-Attach: f${i}.md`).join('\n')).paths.length, 5);
 });
+
+test('local file links become code names, web links stay', () => {
+  const formatted = formatAgentAnswer('Edited [layouts.mjs](/Users/me/p/lib/layouts.mjs), [`server.mjs`](file:///Users/me/p/server.mjs:12) and [docs](https://example.com/docs).');
+  assert.equal(formatted.answer, 'Edited `layouts.mjs`, `server.mjs` and [docs](https://example.com/docs).');
+});
