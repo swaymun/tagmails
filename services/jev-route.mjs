@@ -188,8 +188,11 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
     const selected = route ? { ...route, effort: defaultEffort, source: 'classified' } : { ...fallback };
     if (defaultSpeed !== 'standard') selected.speed = defaultSpeed;
     if (route && knownPrior && route.id === priorModel.id) selected.effort = priorModel.effort;
+    // A follow-up on the thread's model keeps the thread's effort unless it asks for one;
+    // the complexity guess only sets effort for a new thread or a changed model.
     const effort = confidentChoice(answers?.effort, 0.7);
-    if (EFFORTS.has(effort)) selected.effort = effort;
+    const keepsThread = knownPrior && selected.id === priorModel.id;
+    if (EFFORTS.has(effort) && !keepsThread) selected.effort = effort;
     const requestedEffort = confidentChoice(answers?.requestedEffort, 0.6);
     if (EFFORTS.has(requestedEffort)) selected.effort = requestedEffort;
     const speed = confidentChoice(answers?.speed, 0.75);

@@ -224,3 +224,15 @@ test('Jev sees common dictation variants next to each model name', async () => {
   assert.match(criteria.model2, /"high cool"/);
   assert.match(criteria.claude, /"Cloud"/);
 });
+
+test('a reply on the thread model keeps its effort unless the sender asks for another', async () => {
+  const priorModel = { id: 'gpt-6-luna', effort: 'low', source: 'classified' };
+  const answers = (extra) => async () => Response.json({ answers: {
+    route: { type: 'choice', choice: 'none', probabilities: { none: 0.95 } },
+    effort: { type: 'choice', choice: 'high', probabilities: { high: 0.9 } }, ...extra } });
+  assert.deepEqual(await routeModel('Run the tests, then open the PR.', 'gpt-6.1-sol', {
+    priorModel, apiKey: 'test-key', fetcher: answers({}) }), { id: 'gpt-6-luna', effort: 'low', source: 'thread' });
+  assert.deepEqual(await routeModel('Think harder about this one, use high effort.', 'gpt-6.1-sol', {
+    priorModel, apiKey: 'test-key', fetcher: answers({ requestedEffort: { type: 'choice', choice: 'high', probabilities: { high: 0.9 } } }) }),
+  { id: 'gpt-6-luna', effort: 'high', source: 'thread' });
+});
