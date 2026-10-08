@@ -666,22 +666,68 @@ fn upload_id(lease_id: &str, index: usize) -> String {
     format!("{}{last:02x}", &lease_id[..34])
 }
 
-fn workspace_file_bytes(workspace: &Path, name: &str) -> Result<Vec<u8>, Box<dyn Error>> {
-    // The relay streams files up to 95 MB into storage when it gets their hash.
-    const MAX_FILE_BYTES: u64 = 95_000_000;
+/// Largest file the relay stores (and so can attach or link); bigger files go to Drive.
+const RELAY_FILE_BYTES: u64 = 95_000_000;
+const DRIVE_FILE_BYTES: u64 = 2_000_000_000;
+
+/// A file inside the workspace and its size.
+fn workspace_file(workspace: &Path, name: &str) -> Result<(PathBuf, u64), Box<dyn Error>> {
     let root = workspace.canonicalize()?;
     let source = root.join(name).canonicalize()?;
     if !source.starts_with(&root) || !source.is_file() {
         return Err("Requested file is outside the selected workspace or is not a file".into());
     }
+    let size = fs::metadata(&source)?.len();
+    if size == 0 || size > DRIVE_FILE_BYTES {
+        return Err("Requested file is empty or exceeds 2 GB".into());
+    }
+    Ok((source, size))
+}
+
+fn read_capped(path: &Path, size: u64) -> Result<Vec<u8>, Box<dyn Error>> {
+    if size > RELAY_FILE_BYTES {
+        return Err("File exceeds 95 MB".into());
+    }
     let mut bytes = Vec::new();
-    fs::File::open(source)?
-        .take(MAX_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.is_empty() || bytes.len() as u64 > MAX_FILE_BYTES {
-        return Err("Requested file is empty or exceeds 95 MB".into());
+    fs::File::open(path)?.take(RELAY_FILE_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 != size {
+        return Err("File changed while it was being sent".into());
     }
     Ok(bytes)
+}
+
+/// Streams the file to the owner's Drive through the relay-opened resumable
+/// session, then has the relay confirm and record it. Returns the Drive file ID.
+fn upload_to_drive(
+    client: &Client,
+    base: &str,
+    token: &str,
+    job_id: &str,
+    lease_id: &str,
+    path: &Path,
+    size: u64,
+    mime_type: &str,
+    upload_url: &str,
+) -> Result<String, Box<dyn Error>> {
+    if !upload_url.starts_with("https://www.googleapis.com/upload/drive/") {
+        return Err("Relay returned an unexpected Drive upload URL".into());
+    }
+    let body = reqwest::blocking::Body::sized(fs::File::open(path)?, size);
+    let file: Value = client
+        .put(upload_url)
+        .timeout(Duration::from_secs(120 + size / 250_000))
+        .header("Content-Type", mime_type)
+        .body(body)
+        .send()?
+        .error_for_status()?
+        .json()?;
+    let id = file["id"].as_str().ok_or("Drive returned no file ID")?.to_owned();
+    let recorded = relay_post(client, base, "/api/device/drive-complete", token,
+        json!({"jobId": job_id, "leaseId": lease_id, "fileId": id, "size": size}))?;
+    if recorded["id"] != id.as_str() {
+        return Err("Relay did not record the Drive file".into());
+    }
+    Ok(id)
 }
 
 fn workspace_file_type(name: &str) -> &'static str {
@@ -905,26 +951,53 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
                 }
             }
             let mut ids = Vec::new();
+            let mut drive_ids = Vec::new();
+            let mut unsent: Vec<Value> = Vec::new();
             let mut skipped = Vec::new();
             for (name, required) in names {
-                let bytes = if valid_workspace_name(&name) {
-                    workspace_file_bytes(workspace, &name)
+                let filename = Path::new(&name).file_name().and_then(|value| value.to_str()).unwrap_or("file").to_owned();
+                let mime_type = workspace_file_type(&filename);
+                let file = if valid_workspace_name(&name) {
+                    workspace_file(workspace, &name)
                 } else {
                     Err("not a simple relative path".into())
                 };
-                let filename = Path::new(&name).file_name().and_then(|value| value.to_str()).unwrap_or("file");
-                let id = upload_id(&lease_id, ids.len());
-                let uploaded = bytes.and_then(|bytes| {
-                    upload_file(client, base, token, &job_id, &lease_id, &id, filename, workspace_file_type(filename), bytes)
+                // The relay decides: small mail-safe files go through it into the
+                // email; the owner's larger files go straight to their Drive.
+                let route = file.as_ref().ok().map(|(_, size)| {
+                    relay_post(client, base, "/api/device/file-route", token,
+                        json!({"jobId": job_id, "leaseId": lease_id, "name": filename, "mimeType": mime_type, "size": size}))
+                        .unwrap_or_else(|_| json!({"route": "relay"}))
                 });
-                match uploaded {
-                    Ok(()) => ids.push(id),
+                let sent: Result<(), Box<dyn Error>> = match (file, route) {
+                    (Err(error), _) => Err(error),
+                    (Ok((path, size)), Some(route)) if route["route"] == "drive" => {
+                        upload_to_drive(client, base, token, &job_id, &lease_id, &path, size, mime_type,
+                            route["uploadUrl"].as_str().unwrap_or(""))
+                            .map(|id| drive_ids.push(id))
+                    }
+                    (Ok(_), Some(route)) if route["route"] == "none" => {
+                        let reason = route["reason"].as_str().unwrap_or("failed").to_owned();
+                        unsent.push(json!({"name": filename, "reason": reason}));
+                        if required { Err(format!("not sent ({reason})").into()) } else { Ok(()) }
+                    }
+                    (Ok((path, size)), _) => {
+                        let id = upload_id(&lease_id, ids.len());
+                        read_capped(&path, size)
+                            .and_then(|bytes| upload_file(client, base, token, &job_id, &lease_id, &id, &filename, mime_type, bytes))
+                            .map(|()| ids.push(id))
+                    }
+                };
+                match sent {
+                    Ok(()) => {}
                     Err(error) if required => {
                         eprintln!("Requested file could not be exported: {error}");
                         result["state"] = json!("failed");
-                        result["summary"] = json!("The requested file was missing, empty, outside the selected workspace, or over 95 MB.");
+                        result["summary"] = json!("The requested file was missing, empty, outside the selected workspace, or too large to send. Files over 3.5 MB need Google Drive connected in TagMails settings.");
                         result["checks"] = json!(["No file was uploaded. Local edits from this turn may remain."]);
                         ids.clear();
+                        drive_ids.clear();
+                        unsent.clear();
                         break;
                     }
                     Err(error) => {
@@ -932,6 +1005,12 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
                         skipped.push(name);
                     }
                 }
+            }
+            if !drive_ids.is_empty() {
+                result["driveFileIds"] = json!(drive_ids);
+            }
+            if !unsent.is_empty() {
+                result["unsentFiles"] = json!(unsent);
             }
             if !ids.is_empty() {
                 result["artifactIds"] = json!(ids);
