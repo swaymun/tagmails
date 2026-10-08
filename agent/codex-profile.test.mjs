@@ -3,7 +3,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { prepareCodexProfile, sameConfig, WRITE_CODEX_CONFIG } from './codex-profile.mjs';
+import { execFileSync } from 'node:child_process';
+import { ownerOverrides, prepareCodexProfile, sameConfig, WRITE_CODEX_CONFIG } from './codex-profile.mjs';
 
 test('the runtime config accepts project trust that Codex records, and nothing else', () => {
   const trusted = `${WRITE_CODEX_CONFIG}\n[projects."/Users/me/code/travel-guides"]\ntrust_level = "trusted"\n`;
@@ -48,7 +49,7 @@ test('an owner run uses the owner Codex home and passes its permission profile a
     assert.equal(home, await fs.realpath(desktop));
     assert.equal(storeDir, await fs.realpath(path.join(root, 'store')));
     const overrides = args.filter((_, index) => index % 2 === 1);
-    assert.ok(overrides.some((value) => value.startsWith('permissions.tagmails-write={') && value.includes('"."="write"') && value.includes('":root"="read"') && value.includes('network={enabled=true}')));
+    assert.ok(overrides.some((value) => value.startsWith('permissions.tagmails-write={') && value.includes('"."="write"') && value.includes('":root"="read"') && value.includes('".git"="write"') && value.includes('network={enabled=true}')));
     assert.ok(overrides.some((value) => value.startsWith('plugins={') && value.includes('"computer-use@openai-bundled"={enabled=false}')));
     assert.ok(overrides.includes('notify=[]'));
     await assert.rejects(prepareOwnerCodexHome(await fs.realpath(desktop), 'write'), /outside the selected workspace/);
@@ -57,4 +58,16 @@ test('an owner run uses the owner Codex home and passes its permission profile a
     delete process.env.TAGMAILS_CODEX_OWNER_HOME;
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test('owner write turns in a repository subfolder may write that repository\'s git folder', async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tagmails-subrepo-')));
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    await fs.mkdir(path.join(root, 'app'));
+    const override = ownerOverrides('write', path.join(root, 'app')).find((value) => value.startsWith('permissions.'));
+    assert.ok(override.includes(`${JSON.stringify(path.join(root, '.git'))}="write"`));
+    const atRoot = ownerOverrides('write', root).find((value) => value.startsWith('permissions.'));
+    assert.ok(!atRoot.includes(JSON.stringify(path.join(root, '.git'))));
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

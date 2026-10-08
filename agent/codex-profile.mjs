@@ -92,21 +92,32 @@ export async function prepareCodexProfile(workspace, access = false) {
 // Owner write turns work like the Codex app: commands can read this Mac (the
 // toolchain, ~/.gitconfig), write the workspace and temp folders, and use the
 // network for git and gh. Participants never get this profile.
-function profileOverride(profile, access) {
+// Codex keeps .git read-only inside a writable root, so name it (and the
+// repository's own git folder when the workspace is a subfolder) explicitly.
+function gitDir(workspace) {
+  try {
+    return execFileSync('git', ['-C', workspace, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
+  } catch { return null; }
+}
+
+function profileOverride(profile, access, workspace) {
   if (access === 'write') {
-    return `permissions.${profile}={extends=":read-only",filesystem={":root"="read",":tmpdir"="write",":slash_tmp"="write",":workspace_roots"={"."="write"}},network={enabled=true}}`;
+    const git = workspace ? gitDir(workspace) : null;
+    const repository = git && git !== path.join(workspace, '.git') ? `,${JSON.stringify(git)}="write"` : '';
+    return `permissions.${profile}={extends=":read-only",filesystem={":root"="read",":tmpdir"="write",":slash_tmp"="write",":workspace_roots"={"."="write",".git"="write"}${repository}},network={enabled=true}}`;
   }
   return `permissions.${profile}={extends=":read-only",filesystem={":root"="deny",":minimal"="read",":tmpdir"="deny",":slash_tmp"="deny",":workspace_roots"={"."="${access}"}},network={enabled=false}}`;
 }
 
-export function ownerOverrides(access) {
+export function ownerOverrides(access, workspace = null) {
   // Inline table: Codex ignores dotted -c keys with quoted plugin names, and
   // session flags merge into the owner's plugin table rather than replace it.
   const values = ['notify=[]',
     'plugins={"unified-computer-use@openai-bundled"={enabled=false},"computer-use@openai-bundled"={enabled=false}}'];
   if (access !== 'full') {
     const write = access === true || access === 'write';
-    values.push(profileOverride(write ? WRITE_PROFILE : PROFILE, write ? 'write' : 'read'));
+    values.push(profileOverride(write ? WRITE_PROFILE : PROFILE, write ? 'write' : 'read', workspace));
   }
   return values.flatMap((value) => ['-c', value]);
 }
@@ -126,5 +137,5 @@ export async function prepareOwnerCodexHome(workspace, access = false) {
       throw new Error('Codex homes must be outside the selected workspace');
     }
   }
-  return { home, storeDir, args: ownerOverrides(full ? 'full' : write) };
+  return { home, storeDir, args: ownerOverrides(full ? 'full' : write, workspace) };
 }
