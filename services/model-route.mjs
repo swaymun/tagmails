@@ -8,6 +8,9 @@ const EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'm
 
 function modelLabel(id) {
   if (MODEL_LABELS[id]) return MODEL_LABELS[id];
+  // Any Claude model from the Mac's catalog: claude-opus-5-5 is "Claude Code Opus 5.5".
+  const claude = /^claude-([a-z]+)-(\d+)(?:-(\d+))?$/.exec(id ?? '');
+  if (claude) return `Claude Code ${claude[1].charAt(0).toUpperCase()}${claude[1].slice(1)} ${claude[2]}${claude[3] ? `.${claude[3]}` : ''}`;
   if (!/^gpt-[a-z0-9][a-z0-9._-]{0,62}$/.test(id ?? '')) return null;
   return `Codex ${id.split('-').map((part, index) => index === 0 ? 'GPT' :
     part.charAt(0).toUpperCase() + part.slice(1)).join('-').replace(/-([A-Z][a-z]+)$/, ' $1')}`;

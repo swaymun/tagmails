@@ -23,3 +23,8 @@ test('the receipt names a newer model reported by the Mac', () => {
   assert.match(selectedModelDetail(JSON.stringify({ id: 'gpt-6-astra', effort: 'high',
     source: 'classified' })), /Codex GPT-6 Astra/);
 });
+
+test('Claude models from the Mac catalog get a readable status label', () => {
+  assert.equal(selectedModelStatus(JSON.stringify({ id: 'claude-opus-5-5', effort: 'low', source: 'classified' })), 'Claude Opus 5.5 Low');
+  assert.equal(selectedModelStatus(JSON.stringify({ id: 'claude-haiku-5-5', effort: 'medium', source: 'thread' })), 'Claude Haiku 5.5 Medium');
+});
