@@ -1810,8 +1810,20 @@ fn command_logs() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[cfg(unix)]
+extern "C" {
+    fn signal(signum: i32, handler: usize) -> usize;
+}
+
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
+    // `tagmails status | head` should end quietly, as other CLIs do. The
+    // service keeps Rust's default so a closed socket is an error, not an exit.
+    #[cfg(unix)]
+    if args.first().map(String::as_str) != Some("run") {
+        // SIGPIPE is 13 on macOS and Linux; 0 is SIG_DFL.
+        unsafe { signal(13, 0) };
+    }
     let result = match args.first().map(String::as_str) {
         Some("pair") => command_pair(&args),
         Some("start") => command_start(&args),
