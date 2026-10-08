@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { readStore, updateStore } from './session-store.mjs';
 import { stageAgentAttachments } from './agent-attachments.mjs';
 import { formatAgentAnswer } from './answer-result.mjs';
 import { CONNECTED_APPS, ownerToolsFor, TAGMAILS_EMAIL } from './email-context.mjs';
@@ -53,23 +54,6 @@ async function readClaim() {
   return JSON.parse(input);
 }
 
-async function readStore(file) {
-  try {
-    const value = JSON.parse(await fs.readFile(file, 'utf8'));
-    if (value.version !== 1 || !value.threads || !value.jobs) throw new Error('Unsupported Claude session store');
-    return value;
-  } catch (error) {
-    if (error.code === 'ENOENT') return { version: 1, threads: {}, jobs: {} };
-    throw error;
-  }
-}
-
-async function saveStore(file, value) {
-  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  const temporary = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(temporary, JSON.stringify(value, null, 2), { mode: 0o600 });
-  await fs.rename(temporary, file);
-}
 
 function claudeEnvironment() {
   const allowed = ['HOME', 'USER', 'LOGNAME', 'PATH', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'SSL_CERT_FILE'];
@@ -289,27 +273,26 @@ export async function runClaim(claim) {
   try {
     if ((await fs.lstat(storeFile)).isSymbolicLink()) throw new Error('Claude session store cannot be a symlink');
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const store = await readStore(storeFile);
+  const store = await readStore(storeFile, 'Claude session');
   if (Object.hasOwn(store.jobs, claim.jobId)) return store.jobs[claim.jobId];
   const existing = Object.hasOwn(store.threads, claim.threadId) ? store.threads[claim.threadId] : null;
   if (existing && existing.workspace !== workspace) return fail('This email thread was paired with a different workspace.', write);
   const staged = await stageAgentAttachments(claim.request.attachments, workspace);
   try {
     if (write) {
-      store.jobs[claim.jobId] = fail('A previous local write attempt stopped before TagMails recorded its result. Inspect the workspace before sending a new request.', true);
-      await saveStore(storeFile, store);
+      await updateStore(storeFile, (saved) => { saved.jobs[claim.jobId] = fail('A previous local write attempt stopped before TagMails recorded its result. Inspect the workspace before sending a new request.', true); }, 'Claude session');
     }
     const { result, sessionId } = await runClaude(claim, workspace, existing?.sessionId, staged, write);
     if (SESSION_ID.test(sessionId || '')) result.session = { harness: 'claude', id: sessionId };
     if (result.state === 'completed') {
-      store.threads[claim.threadId] = { sessionId, workspace };
-      store.jobs[claim.jobId] = result;
-      await saveStore(storeFile, store);
+      await updateStore(storeFile, (saved) => {
+        saved.threads[claim.threadId] = { sessionId, workspace };
+        saved.jobs[claim.jobId] = result;
+      }, 'Claude session');
     } else if (write || result.usage) {
       // A failed turn can still consume model tokens. Reuse that terminal result
       // if relay completion is retried, rather than paying for the same job twice.
-      store.jobs[claim.jobId] = result;
-      await saveStore(storeFile, store);
+      await updateStore(storeFile, (saved) => { saved.jobs[claim.jobId] = result; }, 'Claude session');
     }
     return result;
   } finally {
