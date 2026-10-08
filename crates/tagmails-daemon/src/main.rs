@@ -26,6 +26,7 @@ const DEFAULT_RELAY: &str = "https://tagmails-relay-dev.saimun-shahee.workers.de
 /// What a relay watcher needs. `workspace: None` means project routing: the
 /// relay picks one of this machine's published projects (or a chat folder)
 /// for each new email thread.
+#[derive(Clone)]
 struct Settings {
     relay: String,
     token: String,
@@ -337,7 +338,11 @@ fn job_workspace(settings: &Settings, claim: &Value) -> Result<PathBuf, Box<dyn 
 /// for chats without a project (~/Documents/Codex/<date>/<subject>), or for
 /// Claude Code, or when that folder doesn't exist, ~/.tagmails/chats/<date>/<subject>.
 /// A thread keeps its folder, so replies continue where the first email ran.
+/// Jobs run on several threads; the thread-to-folder map is read and rewritten whole.
+static CHAT_FOLDERS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn chat_folder(claim: &Value, thread: &str) -> Result<PathBuf, Box<dyn Error>> {
+    let _guard = CHAT_FOLDERS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let map_file = paths::data_dir().join("chat-folders.json");
     let mut map: Value = fs::read(&map_file)
         .ok()
@@ -790,13 +795,30 @@ const ACCESS_ORDER: [&str; 3] = ["read", "write", "full"];
 const CLAUDE_ORDER: [&str; 5] = ["readonly", "manual", "acceptEdits", "auto", "bypassPermissions"];
 
 fn relay_iteration(client: &Client, settings: &Settings) -> Result<bool, Box<dyn Error>> {
+    match claim_next(client, settings, &[])? {
+        Some(claim) => run_claim(client, settings, claim).map(|()| true),
+        None => Ok(false),
+    }
+}
+
+/// Claim the next job, skipping project folders other running jobs are using.
+fn claim_next(client: &Client, settings: &Settings, busy: &[String]) -> Result<Option<Value>, Box<dyn Error>> {
+    let token = settings.token.as_str();
+    let response = relay_post(client, &settings.relay, "/api/device/claim", token, json!({"busyFolders": busy}))?;
+    if response["claimed"] != true {
+        return Ok(None);
+    }
+    Ok(Some(verified_claim(&response, token)?))
+}
+
+/// The project folder a claim will run in, if the relay chose one.
+fn claim_folder(claim: &Value) -> Option<String> {
+    (claim["workspace"]["kind"] == "project").then(|| claim["workspace"]["path"].as_str().map(str::to_owned)).flatten()
+}
+
+fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(), Box<dyn Error>> {
     let base = settings.relay.as_str();
     let token = settings.token.as_str();
-    let response = relay_post(client, base, "/api/device/claim", token, json!({}))?;
-    if response["claimed"] != true {
-        return Ok(false);
-    }
-    let mut claim = verified_claim(&response, token)?;
     let job_id = claim["jobId"]
         .as_str()
         .ok_or("Claim has no job ID")?
@@ -928,7 +950,7 @@ fn relay_iteration(client: &Client, settings: &Settings) -> Result<bool, Box<dyn
         "{job_id}: {} result stored in the relay",
         result["state"].as_str().unwrap_or("unknown")
     );
-    Ok(true)
+    Ok(())
 }
 
 fn read_token(path: &Path) -> Result<String, Box<dyn Error>> {
@@ -990,6 +1012,13 @@ fn run_relay(settings: &Settings, once: bool) -> Result<(), Box<dyn Error>> {
     let mut next_model_probe = Instant::now();
     let mut next_project_probe = Instant::now();
     let push = (!once).then(|| push::Push::start(&settings.relay, &settings.token));
+    // Jobs run in parallel across threads and folders (the relay keeps each
+    // thread in order and skips folders named busy). A pinned workspace runs one at a time.
+    let max_jobs = if settings.workspace.is_some() { 1 } else {
+        env::var("TAGMAILS_MAX_JOBS").ok().and_then(|value| value.parse().ok()).filter(|n| (1..=8).contains(n)).unwrap_or(3)
+    };
+    let mut running: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
+    let (done_sender, done_receiver) = std::sync::mpsc::channel::<String>();
     loop {
         if Instant::now() >= next_model_probe {
             next_model_probe = Instant::now() + Duration::from_secs(120);
@@ -1015,25 +1044,49 @@ fn run_relay(settings: &Settings, once: bool) -> Result<(), Box<dyn Error>> {
                 Err(error) => eprintln!("Project list refresh unavailable: {error}"),
             }
         }
-        let claimed = match relay_iteration(&client, settings) {
-            Ok(false) if once => {
-                println!("No queued relay mail.");
-                false
-            }
-            Ok(claimed) => claimed,
-            Err(error) if once => return Err(error),
-            Err(error) => {
-                eprintln!("Relay unavailable: {error}");
-                false
-            }
-        };
         if once {
+            if !relay_iteration(&client, settings)? {
+                println!("No queued relay mail.");
+            }
             return Ok(());
         }
+        while let Ok(finished) = done_receiver.try_recv() {
+            running.remove(&finished);
+        }
+        let mut claimed = false;
+        if running.len() < max_jobs {
+            let busy: Vec<String> = running.values().flatten().cloned().collect();
+            match claim_next(&client, settings, &busy) {
+                Ok(Some(claim)) => {
+                    claimed = true;
+                    let job_id = claim["jobId"].as_str().unwrap_or("").to_owned();
+                    running.insert(job_id.clone(), claim_folder(&claim));
+                    let (client, settings) = (client.clone(), settings.clone());
+                    let (done, waker) = (done_sender.clone(), push.as_ref().map(push::Push::waker));
+                    thread::spawn(move || {
+                        if let Err(error) = run_claim(&client, &settings, claim) {
+                            eprintln!("{job_id}: {error}");
+                        }
+                        let _ = done.send(job_id);
+                        if let Some(waker) = waker {
+                            let _ = waker.send(());
+                        }
+                    });
+                }
+                Ok(None) => {}
+                Err(error) => eprintln!("Relay unavailable: {error}"),
+            }
+        }
         if !claimed {
-            match &push {
-                Some(push) => push.wait(),
-                None => thread::sleep(push::POLL_EVERY),
+            match (&push, running.len() >= max_jobs) {
+                // At capacity, only a finished job frees a slot.
+                (_, true) => {
+                    if let Ok(finished) = done_receiver.recv_timeout(push::POLL_EVERY) {
+                        running.remove(&finished);
+                    }
+                }
+                (Some(push), false) => push.wait(),
+                (None, false) => thread::sleep(push::POLL_EVERY),
             }
         }
     }

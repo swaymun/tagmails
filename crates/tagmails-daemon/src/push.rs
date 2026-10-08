@@ -27,6 +27,7 @@ const UNSUPPORTED_BACKOFF: Duration = Duration::from_secs(3600);
 pub struct Push {
     connected: Arc<AtomicBool>,
     wake: Receiver<()>,
+    waker: Sender<()>,
 }
 
 impl Push {
@@ -36,8 +37,14 @@ impl Push {
         let url = push_url(relay);
         let token = token.to_owned();
         let flag = connected.clone();
+        let waker = sender.clone();
         thread::spawn(move || run(&url, &token, &flag, &sender));
-        Push { connected, wake }
+        Push { connected, wake, waker }
+    }
+
+    /// A handle that wakes `wait`, used when a running job finishes.
+    pub fn waker(&self) -> Sender<()> {
+        self.waker.clone()
     }
 
     /// Waits for a relay notice, a connection change, or the poll interval.
