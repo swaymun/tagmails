@@ -4,6 +4,7 @@ import { runReceiptPage } from './account-page.mjs';
 import { selectedModelDetail, selectedModelStatus } from './model-route.mjs';
 import { addressDomain, checkAddress, chooseAddress, claimInitialAddress, changesLeft } from './agent-username.mjs';
 import { openText } from './storage-crypto.mjs';
+import { connectDrive, disconnectDrive, driveConnected } from './google-drive.mjs';
 import { artifactForDownload, selectedRunArtifacts } from './run-artifacts.mjs';
 import { knownAgentAddresses } from './agent-addresses.mjs';
 import { accountPreferences, clearAccountPreferences, saveAccountPreferences } from './account-preferences.mjs';
@@ -343,7 +344,16 @@ async function siteAccountRequest(request, env, pathname, verifyIdentity) {
     const changes = await env.DB.prepare('SELECT address_changes FROM accounts WHERE id = ?').bind(account.id).first();
     return json({ ownerEmail: account.owner_email, agentEmail: account.agent_email,
       defaultModel: account.default_model, deliveryReady: env.MAIL_DELIVERY_READY === 'true',
-      addressDomain: addressDomain(env), addressChangesLeft: changesLeft(changes) }, 200, headers);
+      addressDomain: addressDomain(env), addressChangesLeft: changesLeft(changes),
+      driveConnected: await driveConnected(env, account.id) }, 200, headers);
+  }
+  if (pathname === '/api/site/drive' && request.method === 'POST') {
+    let body;
+    try { body = await request.json(); } catch { return json({ error: 'Invalid request' }, 400, headers); }
+    if (body?.disconnect === true) { await disconnectDrive(env, account.id); return json({ driveConnected: false }, 200, headers); }
+    try { await connectDrive(env, account.id, body?.code); }
+    catch (error) { return json({ error: error.message }, 400, headers); }
+    return json({ driveConnected: true }, 200, headers);
   }
   if (pathname === '/api/site/address' && request.method === 'GET') {
     return json(await checkAddress(env, account, new URL(request.url).searchParams.get('name')), 200, headers);
@@ -601,7 +611,8 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
   }
   if (pathname === '/api/account/me' && request.method === 'GET') {
     return account ? json({ ownerEmail: account.owner_email, agentEmail: account.agent_email,
-      defaultModel: account.default_model, deliveryReady: env.MAIL_DELIVERY_READY === 'true' }) : json({ error: 'Sign in required' }, 401);
+      defaultModel: account.default_model, deliveryReady: env.MAIL_DELIVERY_READY === 'true'
+      }) : json({ error: 'Sign in required' }, 401);
   }
   if (pathname === '/api/account/devices' && request.method === 'GET') {
     if (!account) return json({ error: 'Sign in required' }, 401);

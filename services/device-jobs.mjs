@@ -1,8 +1,9 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.mjs';
 import { chooseModel } from '../apps/mock-inbox/model.mjs';
-import { testBillingEnabled } from './email-charges.mjs';
-import { ARTIFACT_ID, selectedRunArtifacts, uploadRunArtifact } from './run-artifacts.mjs';
+import { ATTACHABLE_BYTES, testBillingEnabled } from './email-charges.mjs';
+import { DRIVE_FILE_ID, DriveNotConnected, MAX_DRIVE_FILE_BYTES, recordDriveFile, startDriveUpload } from './google-drive.mjs';
+import { ARTIFACT_ID, EMAIL_SAFE_FILE, selectedRunArtifacts, uploadRunArtifact } from './run-artifacts.mjs';
 import { catalogFromDevice, deviceDefaults, deviceLimits } from './model-catalog.mjs';
 import { cleanProjectCatalog } from './project-route.mjs';
 import { currentText } from './jev-route.mjs';
@@ -275,6 +276,11 @@ function validResult(value) {
         typeof event.text === 'string' && event.text.length > 0 &&
         event.text.length <= (index === transcript.events.length - 1 && event.kind === 'assistant' &&
           event.phase !== 'commentary' ? 8000 : 800)))) &&
+    (value.driveFileIds === undefined || (Array.isArray(value.driveFileIds) && value.driveFileIds.length <= 5 &&
+      value.driveFileIds.every((id) => typeof id === 'string' && DRIVE_FILE_ID.test(id)))) &&
+    (value.unsentFiles === undefined || (Array.isArray(value.unsentFiles) && value.unsentFiles.length <= 5 &&
+      value.unsentFiles.every((file) => typeof file?.name === 'string' && file.name.length <= 120 &&
+        ['drive-not-connected', 'drive-unavailable', 'too-large', 'failed'].includes(file.reason)))) &&
     (artifactIds === undefined || (Array.isArray(artifactIds) && artifactIds.length <= 5 &&
       artifactIds.every((id) => typeof id === 'string' && ARTIFACT_ID.test(id)) &&
       new Set(artifactIds).size === artifactIds.length)) &&
@@ -292,6 +298,51 @@ function validResult(value) {
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.session?.id ?? ''))) &&
     (value.reportedListCostUsd === undefined || (typeof value.reportedListCostUsd === 'number' &&
       Number.isFinite(value.reportedListCostUsd) && value.reportedListCostUsd >= 0 && value.reportedListCostUsd <= 1000));
+}
+
+async function leasedJob(env, device, body) {
+  if (!ARTIFACT_ID.test(body?.jobId ?? '') || !ARTIFACT_ID.test(body?.leaseId ?? '')) return null;
+  return env.DB.prepare(`SELECT j.id, m.sender_email = a.owner_email AS from_owner,
+      (SELECT COALESCE(SUM(byte_size), 0) FROM run_artifacts r WHERE r.job_id = j.id) AS stored_bytes
+    FROM jobs j JOIN threads t ON t.id = j.thread_id JOIN messages m ON m.id = j.message_id
+    JOIN accounts a ON a.id = t.account_id
+    WHERE j.id = ? AND j.lease_id = ? AND j.device_id = ? AND t.account_id = ?
+      AND j.state = 'running' AND j.lease_until > CURRENT_TIMESTAMP LIMIT 1`)
+    .bind(body.jobId, body.leaseId, device.id, device.account_id).first();
+}
+
+// Where a file the agent attached should go. Small files a mail client can
+// open ride in the email (through relay storage); the owner's larger files go
+// straight from the Mac to their Google Drive. Without Drive they are named in
+// the reply with a prompt to connect it. Participant runs keep relay storage.
+async function fileRoute(env, device, body) {
+  const job = await leasedJob(env, device, body);
+  if (!job) return json({ error: 'Lease expired or replaced' }, 409);
+  const name = typeof body.name === 'string' ? body.name : '';
+  const size = body.size;
+  const mimeType = typeof body.mimeType === 'string' && /^[\w.+-]+\/[\w.+-]+$/.test(body.mimeType) ? body.mimeType : 'application/octet-stream';
+  if (!name || name.length > 120 || /[\\/\x00-\x1f\x7f]/.test(name) || !Number.isSafeInteger(size) || size < 1) {
+    return json({ error: 'Invalid file' }, 400);
+  }
+  if (!job.from_owner || (EMAIL_SAFE_FILE.test(name) && job.stored_bytes + size <= ATTACHABLE_BYTES)) {
+    return json({ route: 'relay' });
+  }
+  if (size > MAX_DRIVE_FILE_BYTES) return json({ route: 'none', reason: 'too-large' });
+  try {
+    return json({ route: 'drive', uploadUrl: await startDriveUpload(env, device.account_id, { name, mimeType, size }) });
+  } catch (error) {
+    if (error instanceof DriveNotConnected) return json({ route: 'none', reason: 'drive-not-connected' });
+    console.error('Drive upload could not start', error.message);
+    return json({ route: 'none', reason: 'drive-unavailable' });
+  }
+}
+
+async function driveComplete(env, device, body) {
+  const job = await leasedJob(env, device, body);
+  if (!job?.from_owner) return json({ error: 'Lease expired or replaced' }, 409);
+  if (!DRIVE_FILE_ID.test(body.fileId ?? '') || !Number.isSafeInteger(body.size)) return json({ error: 'Invalid Drive file' }, 400);
+  try { return json(await recordDriveFile(env, device.account_id, job.id, body.fileId, body.size)); }
+  catch (error) { return json({ error: error.message }, error instanceof DriveNotConnected ? 409 : 400); }
 }
 
 async function complete(env, device, body) {
@@ -364,7 +415,7 @@ async function complete(env, device, body) {
 export async function handleDeviceRequest(request, env) {
   const url = new URL(request.url);
   if (!((request.method === 'GET' && ['/api/device/attachment', '/api/device/status', '/api/device/push'].includes(url.pathname)) ||
-    (request.method === 'POST' && ['/api/device/claim', '/api/device/renew', '/api/device/steered', '/api/device/started', '/api/device/complete', '/api/device/artifacts', '/api/device/models', '/api/device/projects'].includes(url.pathname)))) {
+    (request.method === 'POST' && ['/api/device/claim', '/api/device/renew', '/api/device/steered', '/api/device/started', '/api/device/complete', '/api/device/artifacts', '/api/device/models', '/api/device/projects', '/api/device/file-route', '/api/device/drive-complete'].includes(url.pathname)))) {
     return new Response('Not found', { status: 404 });
   }
   if (url.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(url.hostname)) return json({ error: 'HTTPS required' }, 403);
@@ -383,6 +434,8 @@ export async function handleDeviceRequest(request, env) {
   let body;
   try { body = await boundedJson(request); }
   catch { return json({ error: 'Invalid or oversized JSON body' }, 400); }
+  if (url.pathname === '/api/device/file-route') return fileRoute(env, device, body);
+  if (url.pathname === '/api/device/drive-complete') return driveComplete(env, device, body);
   if (url.pathname === '/api/device/models') {
     let models;
     try { models = catalogFromDevice(body); }

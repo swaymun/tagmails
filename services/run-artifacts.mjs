@@ -10,6 +10,8 @@ export const MAX_STREAMED_FILE_BYTES = 95_000_000;
 const MAX_RUN_BYTES = 200_000_000;
 const SHA256 = /^[0-9a-f]{64}$/;
 const MAX_FILES = 5;
+// Files a mail client opens directly; anything else goes out as a link.
+export const EMAIL_SAFE_FILE = /\.(pdf|txt|md|csv|tsv|json|html?|rtf|docx|xlsx|pptx|odt|ods|odp|png|jpe?g|gif|webp|heic|svg|mp3|m4a|wav|mp4|mov|ics)$/i;
 const MIME_TYPE = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/i;
 
 function json(value, status = 200) { return Response.json(value, { status }); }

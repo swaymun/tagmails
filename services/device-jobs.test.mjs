@@ -578,3 +578,19 @@ test('a Mac running several jobs is not handed a second thread in a busy project
   // An older daemon sends no list and still gets the queued job.
   assert.equal(envelope((await call(env, mac.token, 'claim', {})).body).workspace.path, '/Users/me/comic');
 });
+
+test('the relay routes small mail-safe files into the email and large owner files to Drive', async () => {
+  const { env, sqlite } = bindings();
+  const mac = device(sqlite);
+  await inbound(env);
+  const lease = envelope((await call(env, mac.token, 'claim')).body);
+  const route = async (name, size) => (await call(env, mac.token, 'file-route', { jobId: lease.jobId, leaseId: lease.leaseId, name, mimeType: 'application/pdf', size })).body;
+  assert.deepEqual(await route('summary.pdf', 200_000), { route: 'relay' });
+  // Too big for email and Drive isn't connected: nothing is uploaded, the reply asks to connect.
+  assert.deepEqual(await route('tokyo.pdf', 65_364_035), { route: 'none', reason: 'drive-not-connected' });
+  assert.deepEqual(await route('scripts.zip', 2_000), { route: 'none', reason: 'drive-not-connected' });
+  assert.equal((await call(env, mac.token, 'file-route', { jobId: lease.jobId, leaseId: 'nope', name: 'a.pdf', size: 1 })).status, 409);
+  // A completion can name files that could not be sent.
+  assert.equal((await call(env, mac.token, 'complete', { jobId: lease.jobId, leaseId: lease.leaseId,
+    result: { state: 'completed', summary: 'Here are the guides.', unsentFiles: [{ name: 'tokyo.pdf', reason: 'drive-not-connected' }] } })).status, 200);
+});

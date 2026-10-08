@@ -9,11 +9,11 @@ import { openText, sealText } from './storage-crypto.mjs';
 import { renderResult } from '../apps/mock-inbox/mail.mjs';
 import { ATTACHABLE_BYTES, releaseFailedPrimaryTestEmail, releaseTestEmail, settleTestEmail, testBillingEnabled, testWalletSnapshot } from './email-charges.mjs';
 import { selectedModelStatus } from './model-route.mjs';
-import { artifactForDownload, selectedRunArtifacts } from './run-artifacts.mjs';
+import { artifactForDownload, EMAIL_SAFE_FILE, selectedRunArtifacts } from './run-artifacts.mjs';
+import { jobDriveFiles } from './google-drive.mjs';
 
 // Gmail rejects whole messages (552 5.7.0) for archives and executables, so
 // only documents, media and text ride along; anything else becomes a link.
-const EMAIL_SAFE_FILE = /\.(pdf|txt|md|csv|tsv|json|html?|rtf|docx|xlsx|pptx|odt|ods|odp|png|jpe?g|gif|webp|heic|svg|mp3|m4a|wav|mp4|mov|ics)$/i;
 
 const MESSAGE_ID = /^<[^<>\s]+@[^<>\s]+>$/;
 
@@ -275,6 +275,20 @@ async function prepare(env, row) {
       : `Download ${leftOut.length} more files (7 days)`,
     url: `${siteOrigin}/?run=${encodeURIComponent(row.job_id)}#files`,
   }] : [];
+  // Large files the Mac put in the owner's Drive, and ones it could not send.
+  const driveFiles = ownerOnly && result.state === 'completed'
+    ? await jobDriveFiles(env, row.account_id, row.job_id, result.driveFileIds) : [];
+  const driveLinks = driveFiles.map((file) => ({ label: `${file.name} (${(file.byte_size / 1e6).toFixed(1)} MB) in Google Drive`, url: file.web_link }));
+  const unsent = ownerOnly && Array.isArray(result.unsentFiles) ? result.unsentFiles : [];
+  const needsDrive = unsent.filter((file) => file.reason === 'drive-not-connected').map((file) => file.name);
+  const driveNote = needsDrive.length
+    ? `${needsDrive.join(', ')} ${needsDrive.length === 1 ? 'is' : 'are'} too large for email. Connect Google Drive in TagMails settings${siteOrigin ? ` (${siteOrigin}/#drive)` : ''} and reply to receive ${needsDrive.length === 1 ? 'it' : 'them'} there.`
+    : null;
+  const otherUnsent = unsent.filter((file) => file.reason !== 'drive-not-connected').map((file) => file.name);
+  if (driveNote || otherUnsent.length) {
+    result.checks = [...(result.checks ?? []), ...(driveNote ? [driveNote] : []),
+      ...(otherUnsent.length ? [`Could not send ${otherUnsent.join(', ')}.`] : [])];
+  }
   const balance = ownerOnly && testBillingEnabled(env)
     ? await testWalletSnapshot(env, row.account_id) : null;
   const charge = balance
@@ -306,7 +320,7 @@ async function prepare(env, row) {
       ? selectedModel.split(' · ') : []), ...(projectName ? [`in ${projectName}`] : []), ...fileNote, ...(noChargeDetail ? [noChargeDetail] : []),
       ...(balanceDetail ? [balanceDetail] : []), ...allowanceDetail],
     checks: result.checks,
-    links: [...fileLinks, ...(transcriptUrl && result.runtime !== 'relay' && (ownerCanOpen || participantTranscriptReady)
+    links: [...driveLinks, ...fileLinks, ...(transcriptUrl && result.runtime !== 'relay' && (ownerCanOpen || participantTranscriptReady)
       ? [{ label: sharedWithParticipant && !participantTranscriptReady ? `${runLinkLabel} (owner only)` : runLinkLabel,
         url: openInApp ? `${siteOrigin}/open#${session.harness}/${session.id.toLowerCase()}` : transcriptUrl }] : [])],
     brandUrl: siteOrigin,
