@@ -32,6 +32,27 @@ Migrations go in `services/migrations/NNNN_name.sql`; the test fixture applies t
 - **Release:** bump the version in both `agent/package.json` and `crates/tagmails-daemon/Cargo.toml`, run `node scripts/package-agent.mjs` (cross-builds with cargo-zigbuild; install zig first), upload to the `swaymun/homebrew-tagmails` release, update `Formula/tagmails.rb`, then `brew upgrade tagmails && tagmails status`. A relay change that needs a newer daemon must degrade gracefully for older ones (e.g. extra response fields are ignored).
 - Logs: `tagmails logs`. Reinstall the service: `tagmails uninstall && tagmails start ...`.
 
+## Working method
+
+- Define done as a check that can pass or fail, plus the evidence: test output, the stored row, the log line, or the real email in Gmail. Say whether a claim is measured, inferred or guessed. Never hand the owner a check you could run.
+- Reproduce a defect on the surface where it happens (a real email to the pilot agent, or `npm run lab`) before fixing it, then fix the root cause. After two fixes sharing one premise fail, question the premise.
+- When a question can be settled by running something (routing, timing, rendering in Gmail), try it and let the result decide. Ask only for product calls and actions this file doesn't authorize.
+- Fix a repeated mistake at the strongest layer: one owner in the code, then a test whose failure names the fix. Add a rule here only for judgment calls.
+- For repetitive audits or checks, write a rerunnable script under `scripts/` instead of working by hand.
+- You own delegated work: read a subagent's diff and evidence yourself.
+- For long or unattended runs, keep a short decision log under `.local/` and report the decisions that changed the outcome.
+
+## Tests
+
+- Before adding a test, name the contract and the regression it guards, and extend the existing owner (its fixture or table) when that covers it. Don't test copies of source strings or a mock's own behavior.
+- Remove dead production paths together with their tests and docs.
+- Live checks email only the owner's own agent address and touch only threads the check created.
+
+## Delivery
+
+- Commit verified, coherent changes and push. Stage only intended paths; never reset, stash or force-push over concurrent work.
+- For browser or Mac UI checks prefer the Codex computer-use MCP (`cua_repl`); for Gmail, the Gmail connector.
+
 ## Conventions
 
 - Emails: lead with the answer; plain call4.me-style pages, no decoration.
