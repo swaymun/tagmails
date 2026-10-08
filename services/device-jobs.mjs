@@ -47,7 +47,17 @@ async function boundedJson(request) {
   catch { throw new Error('Invalid JSON body'); }
 }
 
-async function claim(env, device) {
+// A daemon running several jobs names the project folders it is busy in, so a
+// second thread never lands in a checkout another job is using. Older daemons
+// send {} and keep one job at a time.
+async function busyFolders(request) {
+  try {
+    const folders = (await boundedJson(request))?.busyFolders;
+    return Array.isArray(folders) ? folders.filter((folder) => typeof folder === 'string' && folder.length <= 1024).slice(0, 16) : [];
+  } catch { return []; }
+}
+
+async function claim(env, device, busy = []) {
   // Claims also come from idle polls (every 15s without push, every 10 minutes
   // with it), so most find the queue empty. Throttle the last-seen write.
   await env.DB.prepare(`UPDATE devices SET last_seen_at = CURRENT_TIMESTAMP
@@ -65,7 +75,9 @@ async function claim(env, device) {
     AND (m.sender_email = a.owner_email OR EXISTS (
       SELECT 1 FROM participants p WHERE p.thread_id = t.id AND p.email = m.sender_email AND p.revoked_at IS NULL))
     AND NOT EXISTS (SELECT 1 FROM jobs earlier WHERE earlier.thread_id = j.thread_id
-      AND earlier.state IN ('queued', 'running') AND earlier.rowid < j.rowid)`;
+      AND earlier.state IN ('queued', 'running') AND earlier.rowid < j.rowid)
+    AND (json_extract(j.workspace_json, '$.kind') IS NOT 'project'
+      OR json_extract(j.workspace_json, '$.path') NOT IN (SELECT value FROM json_each(?)))`;
   // Pin the thread before claiming its first job. A second Mac cannot claim a
   // later turn, and a lease retry stays on the Mac with the local session.
   await env.DB.prepare(`UPDATE threads SET device_id = ? WHERE id = (
@@ -73,7 +85,7 @@ async function claim(env, device) {
     JOIN messages m ON m.id = j.message_id JOIN accounts a ON a.id = t.account_id
     WHERE t.account_id = ? AND t.device_id IS NULL AND ${eligible}
     ORDER BY j.created_at, j.rowid LIMIT 1
-  ) AND device_id IS NULL`).bind(device.id, device.account_id).run();
+  ) AND device_id IS NULL`).bind(device.id, device.account_id, JSON.stringify(busy)).run();
   const row = await env.DB.prepare(`UPDATE jobs SET
     state = 'running', device_id = ?, lease_id = ?,
     lease_until = datetime('now', '+${LEASE_SECONDS} seconds'), attempts = attempts + 1
@@ -83,7 +95,7 @@ async function claim(env, device) {
       WHERE t.account_id = ? AND t.device_id = ? AND ${eligible}
       ORDER BY j.created_at, j.rowid LIMIT 1
     ) RETURNING id, thread_id, message_id, lease_until, model_json, workspace_json`)
-    .bind(device.id, leaseId, device.account_id, device.id).first();
+    .bind(device.id, leaseId, device.account_id, device.id, JSON.stringify(busy)).first();
   if (!row) return json({ claimed: false });
   const message = await env.DB.prepare(`SELECT m.object_key, m.message_id, m.agent_email, t.subject
     FROM messages m JOIN threads t ON t.id = m.thread_id
@@ -366,7 +378,7 @@ export async function handleDeviceRequest(request, env) {
   });
   if (url.pathname === '/api/device/push') return openDevicePush(request, env, device);
   if (url.pathname === '/api/device/attachment') return attachment(request, env, device, url);
-  if (url.pathname === '/api/device/claim') return claim(env, device);
+  if (url.pathname === '/api/device/claim') return claim(env, device, await busyFolders(request));
   if (url.pathname === '/api/device/artifacts') return uploadRunArtifact(request, env, device);
   let body;
   try { body = await boundedJson(request); }

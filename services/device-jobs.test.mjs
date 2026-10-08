@@ -547,3 +547,23 @@ test('a reply to a status message stays in the thread of the job it reported on'
   await inbound(env, 'status-2', 'one more thing', [`<${job.id}.received@wonder.test>`]);
   assert.equal(sqlite.prepare('SELECT COUNT(DISTINCT thread_id) AS n FROM jobs').get().n, 1);
 });
+
+test('a Mac running several jobs is not handed a second thread in a busy project folder', async () => {
+  const { env, sqlite } = bindings();
+  const mac = device(sqlite);
+  await inbound(env, 'folder-a');
+  await inbound(env, 'folder-b');
+  await inbound(env, 'chat-c');
+  const project = (path) => JSON.stringify({ kind: 'project', path, name: 'p' });
+  const [a, b] = sqlite.prepare('SELECT j.id FROM jobs j JOIN messages m ON m.id = j.message_id ORDER BY j.rowid').all();
+  sqlite.prepare('UPDATE jobs SET workspace_json = ? WHERE id = ?').run(project('/Users/me/comic'), a.id);
+  sqlite.prepare('UPDATE jobs SET workspace_json = ? WHERE id = ?').run(project('/Users/me/comic'), b.id);
+  const first = envelope((await call(env, mac.token, 'claim', { busyFolders: [] })).body);
+  assert.equal(first.workspace.path, '/Users/me/comic');
+  // The other comic job waits; the chat thread can run beside it.
+  const second = envelope((await call(env, mac.token, 'claim', { busyFolders: ['/Users/me/comic'] })).body);
+  assert.notEqual(second.workspace?.kind, 'project');
+  assert.deepEqual((await call(env, mac.token, 'claim', { busyFolders: ['/Users/me/comic'] })).body, { claimed: false });
+  // An older daemon sends no list and still gets the queued job.
+  assert.equal(envelope((await call(env, mac.token, 'claim', {})).body).workspace.path, '/Users/me/comic');
+});
