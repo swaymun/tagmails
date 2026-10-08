@@ -113,6 +113,8 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     if (mode === 'approval-request') send({ id: 900, method: 'item/commandExecution/requestApproval',
       params: { threadId: id, turnId: 'turn-1', command: 'curl https://example.com' } });
     setTimeout(() => {
+      // A long turn streams many small deltas, several megabytes in total.
+      if (mode === 'chatty') for (let i = 0; i < 3000; i++) send({ method: 'item/agentMessage/delta', params: { delta: 'x'.repeat(1024) } });
       send({ method: 'thread/tokenUsage/updated', params: { tokenUsage: { last: {
         inputTokens: 1200, cachedInputTokens: 300, cacheWriteInputTokens: 0,
         outputTokens: 40, reasoningOutputTokens: 12 } } } });
@@ -443,4 +445,10 @@ test('an interrupted Codex write is not executed a second time for the same emai
   assert.equal(fs.readFileSync(calls, 'utf8').trim().split('\n').filter((line) =>
     JSON.parse(line).method === 'turn/start').length, 1);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, 'sessions.json'))).jobs[job.jobId], result);
+});
+
+test('a long turn that streams megabytes of small events still completes', async (t) => {
+  setup(t, 'chatty');
+  const result = await runClaim(claim('job-chatty', 'thread-chatty'));
+  assert.equal(result.state, 'completed');
 });

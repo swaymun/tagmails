@@ -13,7 +13,9 @@ import { addRunEvent, codexRunEvent, finishRunTranscript, runTranscript } from '
 
 const CODEX_MODEL_ID = /^[a-z][a-z0-9][a-z0-9._-]{0,62}$/;
 const runtimeFor = (write, full = false) => full ? 'codex-app-server-full' : write ? 'codex-app-server-write' : 'codex-app-server-readonly';
-const MAX_EVENTS = 2 * 1024 * 1024;
+// One app-server message, not the whole run: a long turn streams far more than
+// this in total, and the transcript keeps its own bounds.
+const MAX_EVENT = 8 * 1024 * 1024;
 const MAX_CLAIM = 8 * 1024 * 1024;
 const HISTORY_PAGE_SIZE = 25;
 const MAX_HISTORY_PAGES = 8;
@@ -205,7 +207,6 @@ async function runCodex(claim, workspace, home, sessionId, staged, write, full =
   const lines = readline.createInterface({ input: child.stdout });
   const pending = new Map();
   let nextId = 1;
-  let bytes = 0;
   let approvals = 0;
   let answer = '';
   let unphasedAnswer = '';
@@ -227,8 +228,7 @@ async function runCodex(claim, workspace, home, sessionId, staged, write, full =
     rejectTurn(error);
   };
   lines.on('line', (line) => {
-    bytes += Buffer.byteLength(line);
-    if (bytes > MAX_EVENTS) { stop(new Error('Codex event output is too large')); child.kill(); return; }
+    if (Buffer.byteLength(line) > MAX_EVENT) { stop(new Error('Codex sent an oversized event')); child.kill(); return; }
     let message;
     try { message = JSON.parse(line); }
     catch { stop(new Error('Invalid Codex app-server event')); child.kill(); return; }
@@ -315,13 +315,14 @@ async function runCodex(claim, workspace, home, sessionId, staged, write, full =
     threadForSteer = threadId;
     let status;
     try { status = await turnDone; }
-    catch {
+    catch (error) {
       transcript.truncated = true;
+      const reason = /oversized|unreadable|Invalid Codex|exited/i.test(error?.message ?? '') ? ` (${error.message})` : '';
       const summary = leaseLost
         ? 'The relay connection was lost while Codex was working. Inspect any local changes before sending a new request.'
         : timedOut
         ? 'Codex did not finish before the configured time limit. Inspect any local changes before sending a new request.'
-        : 'Codex stopped before TagMails could confirm the result. Inspect any local changes before sending a new request.';
+        : `Codex stopped before TagMails could confirm the result${reason}. Inspect any local changes before sending a new request.`;
       return { result: { ...fail(summary, write, full), transcript } };
     }
     if (leaseLost) return { result: { ...fail('The local claim lease was lost while Codex was running.', write, full), transcript } };

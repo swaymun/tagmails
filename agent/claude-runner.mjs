@@ -186,14 +186,13 @@ async function runClaude(claim, workspace, sessionId, staged, write) {
   const transcript = runTranscript(claim.request);
   const failed = (summary) => ({ result: { ...fail(summary, write), transcript } });
   let resultEvent;
-  let outputBytes = 0;
   let outputExceeded = false;
   let invalidOutput = false;
   let boundaryDenied = false;
   const lines = readline.createInterface({ input: child.stdout });
   lines.on('line', (line) => {
-    outputBytes += Buffer.byteLength(line);
-    if (outputBytes > 2 * 1024 * 1024) { outputExceeded = true; child.kill(); return; }
+    // Bound one event, not the run: long turns stream far more in total.
+    if (Buffer.byteLength(line) > 8 * 1024 * 1024) { outputExceeded = true; child.kill(); return; }
     let event;
     try { event = JSON.parse(line); }
     catch { invalidOutput = true; child.kill(); return; }
@@ -227,7 +226,7 @@ async function runClaude(claim, workspace, sessionId, staged, write) {
     });
     if (leaseLost) return failed('The local claim lease was lost while Claude was running.');
     if (timedOut) return failed('Claude did not finish within the time limit for one email.');
-    if (outputExceeded) return failed('Claude produced too much output for this prototype.');
+    if (outputExceeded) return failed('Claude sent an oversized event, so TagMails stopped the run.');
     if (invalidOutput) return failed('Claude returned an unreadable event stream.');
     if (code !== 0) return failed(`Claude stopped without a completed turn (exit ${code}).`);
     const event = resultEvent;
