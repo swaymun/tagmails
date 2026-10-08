@@ -89,7 +89,13 @@ export async function prepareCodexProfile(workspace, access = false) {
 // TagMails permission profile arrives as -c overrides (nothing is written to
 // the owner's config) and desktop control stays off. TagMails keeps its own
 // thread-to-session map in a separate folder.
+// Owner write turns work like the Codex app: commands can read this Mac (the
+// toolchain, ~/.gitconfig), write the workspace and temp folders, and use the
+// network for git and gh. Participants never get this profile.
 function profileOverride(profile, access) {
+  if (access === 'write') {
+    return `permissions.${profile}={extends=":read-only",filesystem={":root"="read",":tmpdir"="write",":slash_tmp"="write",":workspace_roots"={"."="write"}},network={enabled=true}}`;
+  }
   return `permissions.${profile}={extends=":read-only",filesystem={":root"="deny",":minimal"="read",":tmpdir"="deny",":slash_tmp"="deny",":workspace_roots"={"."="${access}"}},network={enabled=false}}`;
 }
 

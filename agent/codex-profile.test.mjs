@@ -48,7 +48,7 @@ test('an owner run uses the owner Codex home and passes its permission profile a
     assert.equal(home, await fs.realpath(desktop));
     assert.equal(storeDir, await fs.realpath(path.join(root, 'store')));
     const overrides = args.filter((_, index) => index % 2 === 1);
-    assert.ok(overrides.some((value) => value.startsWith('permissions.tagmails-write={') && value.includes('"."="write"') && value.includes('network={enabled=false}')));
+    assert.ok(overrides.some((value) => value.startsWith('permissions.tagmails-write={') && value.includes('"."="write"') && value.includes('":root"="read"') && value.includes('network={enabled=true}')));
     assert.ok(overrides.some((value) => value.startsWith('plugins={') && value.includes('"computer-use@openai-bundled"={enabled=false}')));
     assert.ok(overrides.includes('notify=[]'));
     await assert.rejects(prepareOwnerCodexHome(await fs.realpath(desktop), 'write'), /outside the selected workspace/);
