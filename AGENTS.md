@@ -29,8 +29,11 @@ Migrations go in `services/migrations/NNNN_name.sql`; the test fixture applies t
 - Installed by Homebrew (`swaymun/tagmails`), run by launchd as `com.tagmails.daemon`; adapters live in the Cellar (`tagmails status` shows `Adapters`). `tagmails start` re-saves settings, so pass the flags again (pilot: `--access write --projects`).
 - **Iterate on `agent/` without a release:** `scripts/sync-agent.sh` copies this checkout's adapters over the installed ones and restarts the service. `brew upgrade tagmails` undoes it.
 - **Changes in `crates/`:** rebuild with `cargo build --release -p tagmails-daemon`, then run it directly once (`target/release/tagmails run --once`) or cut a release.
-- **Release:** bump the version in both `agent/package.json` and `crates/tagmails-daemon/Cargo.toml`, run `node scripts/package-agent.mjs` (cross-builds with cargo-zigbuild; install zig first), upload to the `swaymun/homebrew-tagmails` release, update `Formula/tagmails.rb`, then `brew upgrade tagmails && tagmails status`. A relay change that needs a newer daemon must degrade gracefully for older ones (e.g. extra response fields are ignored).
-- Logs: `tagmails logs`. Reinstall the service: `tagmails uninstall && tagmails start ...`.
+- **Release:** bump the version in both `agent/package.json` and `crates/tagmails-daemon/Cargo.toml`, run `node scripts/package-agent.mjs` (cross-builds with cargo-zigbuild; `brew install zig`), upload to the `swaymun/homebrew-tagmails` release, update `Formula/tagmails.rb`, then `brew upgrade tagmails && tagmails status`. A relay change that needs a newer daemon must degrade gracefully for older ones (e.g. extra response fields are ignored).
+- Jobs run in parallel (default 3, `TAGMAILS_MAX_JOBS`), one per project folder: claims send `busyFolders` and the relay skips jobs routed there. Runners share `sessions.json` files, so write them only through `agent/session-store.mjs`.
+- Owner `write` turns: Codex reads the whole Mac, writes the workspace, temp and the repo's git folder, and has network (so `git push`/`gh` work); Claude `auto` drops `--restricted` and runs like Claude Code. Participants keep the closed profiles. Codex's own state (`~/.codex`) stays read-only, so an app that runs a nested `codex` needs a workspace-local `CODEX_HOME`.
+- A new project folder is routable only after a Codex project or Claude session exists there (`agent/project-inventory.mjs`); restart the service to republish sooner than the 15-minute refresh.
+- Logs: `tagmails logs`; each job logs a `running <model> in <folder>` line and its result state. Reinstall the service: `tagmails uninstall && tagmails start ...`.
 
 ## Working method
 
