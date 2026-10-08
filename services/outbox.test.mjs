@@ -811,7 +811,7 @@ test('archives, large, expired, and different-job files are never attached to an
   assert.equal((await sendNextOutbox(env, { sendEmail: async (payload) => { sent = payload; return { data: { id: 'large-1' } }; },
     getSentEmail: async () => ({ data: { message_id: '<large-1@tagmails.test>' } }) })).state, 'sent');
   assert.equal(sent.attachments, undefined);
-  assert.match(sent.text, /2 files · 7 days/);
+  assert.match(sent.text, /Download 2 more files \(7 days\): https:\/\/tagmails\.example\/\?run=job-1#files/);
   assert.match(sent.text, /Transcript/);
 });
 

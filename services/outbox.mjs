@@ -266,10 +266,15 @@ async function prepare(env, row) {
       content: bytes.toString('base64') });
     attachedBytes += bytes.length;
   }
-  const fileNote = [
-    ...(files.length > attachments.length && siteOrigin
-      ? [`${files.length - attachments.length} file${files.length - attachments.length === 1 ? '' : 's'} · 7 days`] : []),
-  ];
+  // Files too big for email stay on the run page; name them and link there.
+  const attachedNames = new Set(attachments.map((file) => file.filename));
+  const leftOut = files.filter((file) => !attachedNames.has(file.name));
+  const fileNote = [];
+  const fileLinks = leftOut.length && siteOrigin ? [{
+    label: leftOut.length === 1 ? `Download ${leftOut[0].name} (${(leftOut[0].byte_size / 1e6).toFixed(1)} MB, 7 days)`
+      : `Download ${leftOut.length} more files (7 days)`,
+    url: `${siteOrigin}/?run=${encodeURIComponent(row.job_id)}#files`,
+  }] : [];
   const balance = ownerOnly && testBillingEnabled(env)
     ? await testWalletSnapshot(env, row.account_id) : null;
   const charge = balance
@@ -301,9 +306,9 @@ async function prepare(env, row) {
       ? selectedModel.split(' · ') : []), ...(projectName ? [`in ${projectName}`] : []), ...fileNote, ...(noChargeDetail ? [noChargeDetail] : []),
       ...(balanceDetail ? [balanceDetail] : []), ...allowanceDetail],
     checks: result.checks,
-    links: transcriptUrl && result.runtime !== 'relay' && (ownerCanOpen || participantTranscriptReady)
+    links: [...fileLinks, ...(transcriptUrl && result.runtime !== 'relay' && (ownerCanOpen || participantTranscriptReady)
       ? [{ label: sharedWithParticipant && !participantTranscriptReady ? `${runLinkLabel} (owner only)` : runLinkLabel,
-        url: openInApp ? `${siteOrigin}/open#${session.harness}/${session.id.toLowerCase()}` : transcriptUrl }] : [],
+        url: openInApp ? `${siteOrigin}/open#${session.harness}/${session.id.toLowerCase()}` : transcriptUrl }] : [])],
     brandUrl: siteOrigin,
     note: result.runtime === 'relay' ? null
       : result.state === 'needs_approval'
