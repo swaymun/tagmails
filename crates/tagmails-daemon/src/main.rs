@@ -667,7 +667,8 @@ fn upload_id(lease_id: &str, index: usize) -> String {
 }
 
 fn workspace_file_bytes(workspace: &Path, name: &str) -> Result<Vec<u8>, Box<dyn Error>> {
-    const MAX_FILE_BYTES: u64 = 24_000_000;
+    // The relay streams files up to 95 MB into storage when it gets their hash.
+    const MAX_FILE_BYTES: u64 = 95_000_000;
     let root = workspace.canonicalize()?;
     let source = root.join(name).canonicalize()?;
     if !source.starts_with(&root) || !source.is_file() {
@@ -678,7 +679,7 @@ fn workspace_file_bytes(workspace: &Path, name: &str) -> Result<Vec<u8>, Box<dyn
         .take(MAX_FILE_BYTES + 1)
         .read_to_end(&mut bytes)?;
     if bytes.is_empty() || bytes.len() as u64 > MAX_FILE_BYTES {
-        return Err("Requested file is empty or exceeds 24 MB".into());
+        return Err("Requested file is empty or exceeds 95 MB".into());
     }
     Ok(bytes)
 }
@@ -726,16 +727,25 @@ fn upload_file(
     mime_type: &str,
     bytes: Vec<u8>,
 ) -> Result<(), Box<dyn Error>> {
+    let sha256: String = ring::digest::digest(&ring::digest::SHA256, &bytes)
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    // The shared client times out after 10 s; a large file on a slow uplink needs longer.
+    let seconds = 60 + bytes.len() as u64 / 250_000;
     let response: Value = client
         .post(format!(
             "{}/api/device/artifacts?jobId={job_id}&leaseId={lease_id}",
             base.trim_end_matches('/')
         ))
+        .timeout(Duration::from_secs(seconds))
         .bearer_auth(token)
         .header("Content-Type", mime_type)
         .header("Content-Length", bytes.len().to_string())
         .header("X-TagMails-Filename", filename)
         .header("X-TagMails-Upload-Id", upload_id)
+        .header("X-TagMails-SHA256", sha256)
         .body(bytes)
         .send()?
         .error_for_status()?
@@ -912,7 +922,7 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
                     Err(error) if required => {
                         eprintln!("Requested file could not be exported: {error}");
                         result["state"] = json!("failed");
-                        result["summary"] = json!("The requested file was missing, empty, outside the selected workspace, or over 24 MB.");
+                        result["summary"] = json!("The requested file was missing, empty, outside the selected workspace, or over 95 MB.");
                         result["checks"] = json!(["No file was uploaded. Local edits from this turn may remain."]);
                         ids.clear();
                         break;
