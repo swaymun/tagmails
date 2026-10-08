@@ -96,3 +96,26 @@ test('staged text PDFs expose bounded untrusted text and invalid PDFs stay unrea
   try { assert.match(unread.prompt, /invalid PDF signature/); }
   finally { await unread.cleanup(); }
 });
+
+test('attachments staged in a Git workspace stay out of commits and keep their media type and name', async (t) => {
+  const bytes = Buffer.from('not really a video');
+  const server = http.createServer((request, response) => response.writeHead(200).end(bytes));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const previous = process.env.TAGMAILS_LAB_URL;
+  process.env.TAGMAILS_LAB_URL = `http://127.0.0.1:${server.address().port}`;
+  t.after(() => { if (previous === undefined) delete process.env.TAGMAILS_LAB_URL; else process.env.TAGMAILS_LAB_URL = previous; });
+  const workspace = await fs.mkdtemp(`${os.tmpdir()}/tagmails-git-`);
+  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  await fs.mkdir(`${workspace}/.git/info`, { recursive: true });
+  await fs.writeFile(`${workspace}/.git/info/exclude`, '*.log');
+  const attachment = { name: 'demo clip.mp4', mimeType: 'video/mp4', size: bytes.length,
+    path: '/api/attachment?messageId=mail-1&attachmentId=file-1' };
+  for (let run = 0; run < 2; run++) {
+    const staged = await stageAgentAttachments([attachment], workspace);
+    assert.deepEqual(await fs.readFile(`${staged.directory}/attachment-1.mp4`), bytes);
+    assert.match(staged.prompt, /video\/mp4, 18 bytes, sent as "demo clip\.mp4"/);
+    await staged.cleanup();
+  }
+  assert.equal(await fs.readFile(`${workspace}/.git/info/exclude`, 'utf8'), '*.log\n/tagmails-attachment-*/\n');
+});
