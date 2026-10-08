@@ -138,3 +138,29 @@ test('replies go out through the EMAIL binding with threading headers and attach
   assert.equal(sent[0].attachments[0].type, 'text/plain');
   assert.equal(sent[0].cc, undefined);
 });
+
+test('large files are sealed as a stream, open byte for byte, and reject a wrong hash or truncation', async () => {
+  const objects = new Map();
+  const raw = {
+    put: async (key, value, options = {}) => objects.set(key, { bytes: Buffer.from(await new Response(value).arrayBuffer()), customMetadata: options.customMetadata }),
+    get: async (key) => {
+      const object = objects.get(key);
+      return object && { customMetadata: object.customMetadata, body: new Response(object.bytes).body,
+        arrayBuffer: async () => Uint8Array.from(object.bytes).buffer };
+    },
+    delete: async (key) => objects.delete(key),
+  };
+  const bucket = encryptedBucket({ STORAGE_KEY: KEY }, raw);
+  const plain = randomBytes(3 * 1024 * 1024 + 123);
+  const sha256 = createHash('sha256').update(plain).digest('hex');
+  await bucket.put('guide', new Response(plain).body, { length: plain.length, sha256 });
+  const stored = objects.get('guide').bytes;
+  assert.equal(stored.indexOf(plain.subarray(0, 64)), -1);
+  assert.deepEqual(Buffer.from(await new Response((await bucket.get('guide')).body).arrayBuffer()), plain);
+  assert.deepEqual(Buffer.from(await (await bucket.get('guide')).arrayBuffer()), plain);
+  await assert.rejects(bucket.put('bad', new Response(plain).body, { length: plain.length, sha256: '0'.repeat(64) }), /hash/);
+  await assert.rejects(bucket.put('short', new Response(plain).body, { length: plain.length + 1, sha256 }), /shorter/);
+  // Dropping the final record must not read as a shorter file.
+  objects.set('cut', { ...objects.get('guide'), bytes: stored.subarray(0, 14 + 2 * (1024 * 1024 + 16)) });
+  await assert.rejects(new Response((await bucket.get('cut')).body).arrayBuffer());
+});

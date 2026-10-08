@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -34,7 +35,12 @@ export function bindings() {
   const objects = new Map();
   const env = {
     DB: db, MAIL: {
-      put: async (key, value) => objects.set(key, Buffer.from(value)),
+      // Like R2: streams are read whole, and a sha256 option must match the bytes.
+      put: async (key, value, options = {}) => {
+        const bytes = value instanceof ReadableStream ? Buffer.from(await new Response(value).arrayBuffer()) : Buffer.from(value);
+        if (options.sha256 && createHash('sha256').update(bytes).digest('hex') !== options.sha256) throw new Error('Checksum mismatch');
+        objects.set(key, bytes);
+      },
       get: async (key) => objects.has(key) ? { arrayBuffer: async () => Uint8Array.from(objects.get(key)).buffer } : null,
       delete: async (key) => { objects.delete(key); },
     },

@@ -393,21 +393,32 @@ test('a run file is uploaded under its lease, privately downloaded, and deleted 
   assert.equal(objects.has(objectKey), false);
 });
 
-test('run file uploads accept the 24 MB boundary and enforce the combined limit', async () => {
+test('run file uploads: 24 MB buffered, 95 MB streamed with a checked hash, 200 MB per run', async () => {
   const { env, sqlite } = bindings();
   const paired = device(sqlite);
   await inbound(env);
   const lease = envelope((await call(env, paired.token, 'claim')).body);
-  const upload = async (bytes) => handleDeviceRequest(new Request(
+  const upload = async (bytes, sha256) => handleDeviceRequest(new Request(
     `https://relay.test/api/device/artifacts?jobId=${lease.jobId}&leaseId=${lease.leaseId}`, {
       method: 'POST', headers: { Authorization: `Bearer ${paired.token}`,
-        'Content-Type': 'application/octet-stream', 'Content-Length': String(bytes.length),
-        'X-TagMails-Filename': 'output.bin' }, body: bytes,
+        'Content-Type': 'application/pdf', 'Content-Length': String(bytes.length),
+        'X-TagMails-Filename': 'guide.pdf', ...(sha256 ? { 'X-TagMails-SHA256': sha256 } : {}) }, body: bytes,
     }), env);
+  const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
+  // Older daemons send no hash and keep the buffered 24 MB limit.
   assert.equal((await upload(Buffer.alloc(24_000_000))).status, 201);
-  assert.equal((await upload(Buffer.alloc(1_000_000))).status, 201);
-  assert.equal((await upload(Buffer.from('x'))).status, 409);
-  assert.equal(sqlite.prepare('SELECT SUM(byte_size) n FROM run_artifacts').get().n, 25_000_000);
+  assert.equal((await upload(Buffer.alloc(24_000_001))).status, 413);
+  // A travel-guide-sized PDF streams to storage; a wrong hash stores nothing.
+  const guide = Buffer.alloc(65_000_000, 1);
+  assert.equal((await upload(guide, hash(Buffer.from('other')))).status, 400);
+  assert.equal((await upload(guide, hash(guide))).status, 201);
+  assert.equal((await upload(Buffer.alloc(95_000_001), hash(Buffer.alloc(1)))).status, 413);
+  const big = Buffer.alloc(95_000_000, 2);
+  assert.equal((await upload(big, hash(big))).status, 201);
+  // 24 + 65 + 95 MB stored; 20 MB more passes the per-run limit.
+  const extra = Buffer.alloc(20_000_000, 3);
+  assert.equal((await upload(extra, hash(extra))).status, 409);
+  assert.equal(sqlite.prepare('SELECT SUM(byte_size) n FROM run_artifacts').get().n, 184_000_000);
 });
 
 test('a retried run file upload reuses its ID and rejects changed bytes or metadata', async () => {

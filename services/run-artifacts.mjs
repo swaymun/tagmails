@@ -3,7 +3,12 @@ import { createHash, randomUUID } from 'node:crypto';
 
 export const ARTIFACT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_FILE_BYTES = 24_000_000;
-const MAX_RUN_BYTES = 25_000_000;
+// Daemons that send the file's SHA-256 stream it straight to R2, which checks
+// the hash, so a file can be larger than Worker memory comfortably buffers.
+// 95 MB keeps one request under Cloudflare's 100 MB body limit.
+export const MAX_STREAMED_FILE_BYTES = 95_000_000;
+const MAX_RUN_BYTES = 200_000_000;
+const SHA256 = /^[0-9a-f]{64}$/;
 const MAX_FILES = 5;
 const MIME_TYPE = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/i;
 
@@ -39,11 +44,12 @@ function metadata(request) {
   catch { return null; }
   const mimeType = request.headers.get('content-type')?.toLowerCase() ?? '';
   const uploadId = request.headers.get('x-tagmails-upload-id');
+  const sha256 = request.headers.get('x-tagmails-sha256')?.toLowerCase() ?? null;
   if (jobIds.length !== 1 || leaseIds.length !== 1 || !ARTIFACT_ID.test(jobIds[0]) ||
       !ARTIFACT_ID.test(leaseIds[0]) || !name || name.length > 120 || name === '.' || name === '..' ||
       /[\\/\x00-\x1f\x7f]/.test(name) || !MIME_TYPE.test(mimeType) ||
-      (uploadId !== null && !ARTIFACT_ID.test(uploadId))) return null;
-  return { jobId: jobIds[0], leaseId: leaseIds[0], name, mimeType, uploadId };
+      (uploadId !== null && !ARTIFACT_ID.test(uploadId)) || (sha256 !== null && !SHA256.test(sha256))) return null;
+  return { jobId: jobIds[0], leaseId: leaseIds[0], name, mimeType, uploadId, sha256 };
 }
 
 async function repeatedUpload(env, device, info, id, sha256, byteSize) {
@@ -69,20 +75,45 @@ export async function uploadRunArtifact(request, env, device) {
   const info = metadata(request);
   if (!info) return json({ error: 'Invalid file metadata' }, 400);
   if (!await activeLease(env, device, info.jobId, info.leaseId)) return json({ error: 'Lease expired or replaced' }, 409);
-  let bytes;
-  try { bytes = await fileBytes(request); }
-  catch { return json({ error: 'Invalid or oversized file' }, 413); }
-  if (!await activeLease(env, device, info.jobId, info.leaseId)) return json({ error: 'Lease expired or replaced' }, 409);
   const id = info.uploadId ?? randomUUID();
-  const sha256 = createHash('sha256').update(bytes).digest('hex');
-  if (info.uploadId) {
-    const repeated = await repeatedUpload(env, device, info, id, sha256, bytes.length);
-    if (repeated) return repeated;
-  }
   // A distinct object key prevents two concurrent retries from overwriting
   // the winner's bytes before the database resolves the duplicate ID.
   const key = `artifacts/${device.account_id}/${info.jobId}/${info.leaseId}/${randomUUID()}`;
-  await env.MAIL.put(key, bytes, { httpMetadata: { contentType: 'application/octet-stream' } });
+  let sha256;
+  let byteLength;
+  if (info.sha256) {
+    const length = Number(request.headers.get('content-length'));
+    if (!Number.isSafeInteger(length) || length < 1 || length > MAX_STREAMED_FILE_BYTES || !request.body) {
+      return json({ error: 'Invalid or oversized file' }, 413);
+    }
+    sha256 = info.sha256;
+    byteLength = length;
+    if (info.uploadId) {
+      const repeated = await repeatedUpload(env, device, info, id, sha256, byteLength);
+      if (repeated) { await request.body.cancel(); return repeated; }
+    }
+    // Storage rejects the object if the bytes don't match the length or the hash
+    // (R2 checks them itself; the encrypted bucket checks them while sealing).
+    const body = typeof FixedLengthStream === 'function' ? request.body.pipeThrough(new FixedLengthStream(length)) : request.body;
+    try { await env.MAIL.put(key, body, { length, sha256, httpMetadata: { contentType: 'application/octet-stream' } }); }
+    catch { return json({ error: 'File bytes did not match their length or hash' }, 400); }
+  } else {
+    let bytes;
+    try { bytes = await fileBytes(request); }
+    catch { return json({ error: 'Invalid or oversized file' }, 413); }
+    sha256 = createHash('sha256').update(bytes).digest('hex');
+    byteLength = bytes.length;
+    if (info.uploadId) {
+      const repeated = await repeatedUpload(env, device, info, id, sha256, byteLength);
+      if (repeated) return repeated;
+    }
+    await env.MAIL.put(key, bytes, { httpMetadata: { contentType: 'application/octet-stream' } });
+  }
+  if (!await activeLease(env, device, info.jobId, info.leaseId)) {
+    await env.MAIL.delete(key);
+    return json({ error: 'Lease expired or replaced' }, 409);
+  }
+  const bytes = { length: byteLength };
   try {
     const inserted = await env.DB.prepare(`INSERT INTO run_artifacts
       (id, account_id, job_id, lease_id, object_key, name, mime_type, byte_size, sha256)
