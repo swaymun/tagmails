@@ -11,14 +11,15 @@ import { sendNextOutbox } from './outbox.mjs';
 const KEY = randomBytes(32).toString('base64');
 
 // Signs a message the way a sending server would, with relaxed/relaxed rsa-sha256.
-function signed(raw, { domain = 'gmail.com', selector = 's1', privateKey, names = ['from', 'to', 'subject', 'message-id'], length }) {
+function signed(raw, { domain = 'gmail.com', selector = 's1', privateKey, names = ['from', 'to', 'subject', 'message-id', 'content-type'], length }) {
   const { head, body } = _test.splitMessage(raw);
   const bh = createHash('sha256').update(_test.canonicalBody(body, 'relaxed', length)).digest('base64');
   const headerLines = head.split('\r\n').filter(Boolean);
   const pick = (name) => headerLines.findLast((line) => line.toLowerCase().startsWith(`${name}:`));
   const relaxed = (line) => { const at = line.indexOf(':'); return `${line.slice(0, at).trim().toLowerCase()}:${line.slice(at + 1).replace(/\s+/g, ' ').trim()}`; };
   const sigValue = ` v=1; a=rsa-sha256; c=relaxed/relaxed; d=${domain}; s=${selector}; h=${names.join(':')};${length == null ? '' : ` l=${length};`} bh=${bh}; b=`;
-  const data = names.map((name) => `${relaxed(pick(name))}\r\n`).join('') + relaxed(`DKIM-Signature:${sigValue}`);
+  // A listed header the message lacks signs as absent (how Gmail oversigns Cc).
+  const data = names.filter(pick).map((name) => `${relaxed(pick(name))}\r\n`).join('') + relaxed(`DKIM-Signature:${sigValue}`);
   const b = createSign('RSA-SHA256').update(data, 'latin1').sign(privateKey, 'base64');
   return `DKIM-Signature:${sigValue}${b}\r\n${raw}`;
 }
@@ -65,7 +66,7 @@ test('DKIM passes only for an untouched message signed by the sender domain', as
 
 test('DKIM rejects unsigned From, a second From header, and body-length-limited signatures', async () => {
   const { privateKey, resolveTxt } = keyRecord();
-  const noFrom = signed(MESSAGE('owner@gmail.com', 'agent@wonder.test'), { privateKey, names: ['to', 'subject', 'message-id'] });
+  const noFrom = signed(MESSAGE('owner@gmail.com', 'agent@wonder.test'), { privateKey, names: ['to', 'subject', 'message-id', 'content-type'] });
   assert.equal((await verifyDkim(noFrom, 'owner@gmail.com', { resolveTxt })).pass, false);
   const good = signed(MESSAGE('attacker@gmail.com', 'agent@wonder.test'), { privateKey });
   assert.equal((await verifyDkim(good, 'attacker@gmail.com', { resolveTxt })).pass, true);
@@ -83,6 +84,26 @@ function emailMessage(raw, to) {
   return { from: 'owner@gmail.com', to, rawSize: bytes.length, raw: new Response(bytes).body,
     headers: new Headers(), setReject() {} };
 }
+
+test('a valid owner signature must also cover the Cc, Message-ID and Content-Type the relay acts on', async () => {
+  const { env, sqlite } = bindings();
+  const { privateKey, resolveTxt } = keyRecord();
+  const deliver = async (raw) => (await handleEmail(emailMessage(raw, 'agent@wonder.test'), env, { resolveTxt, fetchModel: fetch })).json();
+  const original = MESSAGE('owner@gmail.com', 'agent@wonder.test', 'Summarize the plan.');
+  // Whoever holds a copy adds a Cc the signature never covered: it must not become a participant.
+  const addedCc = signed(original, { privateKey }).replace('To: agent@wonder.test', 'To: agent@wonder.test\r\nCc: mallory@evil.test');
+  assert.deepEqual(await deliver(addedCc), { accepted: false, reason: 'sender authentication failed' });
+  // Each relied-on header left out of h= fails, though the signature itself verifies.
+  for (const name of ['message-id', 'content-type', 'subject']) {
+    const names = ['from', 'to', 'subject', 'message-id', 'content-type'].filter((item) => item !== name);
+    assert.deepEqual(await deliver(signed(original, { privateKey, names })), { accepted: false, reason: 'sender authentication failed' }, name);
+  }
+  // Gmail oversigns Cc (h= lists it though absent), so adding one breaks the signature too.
+  const gmail = signed(original, { privateKey, names: ['content-type', 'to', 'subject', 'message-id', 'from', 'cc'] });
+  assert.equal((await deliver(gmail.replace('To: agent@wonder.test', 'To: agent@wonder.test\r\nCc: mallory@evil.test'))).accepted, false);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM participants').get().n, 0);
+  assert.deepEqual(await deliver(gmail), { accepted: true, duplicate: false });
+});
 
 test('mail delivered by Cloudflare runs only when DKIM proves the owner sent it, and is stored sealed', async () => {
   const { env, sqlite, objects } = bindings();
@@ -112,14 +133,14 @@ test('Cloudflare mail runs only when the agent is in a signed To or Cc', async (
   const replayed = signed(MESSAGE('owner@gmail.com', 'friend@example.com', 'Lunch?'), { privateKey });
   assert.deepEqual(await deliver(replayed), { accepted: false, reason: 'agent not in signed To or Cc' });
   // The agent in To, but To is not signed.
-  const unsignedTo = signed(MESSAGE('owner@gmail.com', 'agent@wonder.test'), { privateKey, names: ['from', 'subject', 'message-id'] });
-  assert.equal((await deliver(unsignedTo)).reason, 'agent not in signed To or Cc');
+  const unsignedTo = signed(MESSAGE('owner@gmail.com', 'agent@wonder.test'), { privateKey, names: ['from', 'subject', 'message-id', 'content-type'] });
+  assert.equal((await deliver(unsignedTo)).accepted, false);
   // A second To header added after signing.
   const addedTo = replayed.replace('To: friend@example.com', 'To: agent@wonder.test\r\nTo: friend@example.com');
   assert.equal((await deliver(addedTo)).accepted, false);
   // Agent in a signed Cc is fine.
   const cc = signed(MESSAGE('owner@gmail.com', 'friend@example.com').replace('To: friend@example.com', 'To: friend@example.com\r\nCc: agent@wonder.test'),
-    { privateKey, names: ['from', 'to', 'cc', 'subject', 'message-id'] });
+    { privateKey, names: ['from', 'to', 'cc', 'subject', 'message-id', 'content-type'] });
   assert.equal((await deliver(cc)).accepted, true);
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM jobs').get().n, 1);
 });
@@ -193,7 +214,7 @@ test('a multi-person Cloudflare thread runs only for the owner and the people th
     const raw = [...headers.map(([name, value]) => `${name}: ${value}`), 'Content-Type: text/plain; charset=utf-8', '', body, ''].join('\r\n');
     const signingDomain = domain ?? mailbox.split('@')[1];
     const mime = sign ? signed(raw, { domain: signingDomain, privateKey: keys.privateKey(signingDomain),
-      names: headers.map(([name]) => name.toLowerCase()) }) : raw;
+      names: [...headers.map(([name]) => name.toLowerCase()), 'content-type'] }) : raw;
     const response = await (await handleEmail(emailMessage(mime, envelopeTo), env, { resolveTxt: keys.resolveTxt, fetchModel: fetch })).json();
     return { messageId, response };
   };
@@ -272,7 +293,7 @@ test('replies go only to the verified sender and the owner-approved people on th
     // A malformed model line gets a relay-only reply, so the outbox runs without a Mac.
     const raw = [...headers.map(([name, value]) => `${name}: ${value}`), 'Content-Type: text/plain; charset=utf-8', '', 'Model: Luna please review this', ''].join('\r\n');
     const domain = from.split('@')[1];
-    const mime = signed(raw, { domain, privateKey: keys.privateKey(domain), names: headers.map(([name]) => name.toLowerCase()) });
+    const mime = signed(raw, { domain, privateKey: keys.privateKey(domain), names: [...headers.map(([name]) => name.toLowerCase()), 'content-type'] });
     assert.deepEqual(await (await handleEmail(emailMessage(mime, 'agent@wonder.test'), env, { resolveTxt: keys.resolveTxt, fetchModel: fetch })).json(),
       { accepted: true, duplicate: false });
     assert.equal(await completeOneModelClarification(env), true);

@@ -122,8 +122,15 @@ export function aligned(signingDomain, fromDomain) {
   return d === from || from.endsWith(`.${d}`);
 }
 
+// Headers that decide who gets access (To, Cc), which thread and whether it is
+// a replay (Message-ID, References, In-Reply-To) and how the body is read
+// (Content-Type). A valid signature that leaves one of them unsigned would let
+// whoever holds a copy add a Cc or re-frame the MIME. Gmail signs all of them.
+export const MUST_SIGN = ['to', 'cc', 'subject', 'message-id', 'references', 'in-reply-to', 'content-type'];
+
 /**
- * Returns { pass, domain, signedHeaders } when a signature from the From domain verifies.
+ * Returns { pass, domain, signedHeaders } when a signature from the From domain
+ * verifies and covers every header in MUST_SIGN that the message has.
  */
 export async function verifyDkim(raw, fromAddress, { resolveTxt = (name) => dohTxt(name) } = {}) {
   const { head, body } = splitMessage(raw);
@@ -138,7 +145,9 @@ export async function verifyDkim(raw, fromAddress, { resolveTxt = (name) => dohT
   for (const signature of signatures) {
     const result = await verifySignature(signature, headers, body, resolveTxt);
     results.push(result);
-    if (result.pass && aligned(result.domain, fromDomain)) {
+    const uncovered = MUST_SIGN.filter((name) => headers.some((header) => header.name === name) && !result.signedHeaders.includes(name));
+    if (result.pass && uncovered.length) result.reason = `unsigned ${uncovered.join(', ')}`;
+    else if (result.pass && aligned(result.domain, fromDomain)) {
       return { pass: true, domain: result.domain, signedHeaders: result.signedHeaders, results };
     }
   }
