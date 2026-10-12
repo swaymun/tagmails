@@ -1092,10 +1092,8 @@ fn route_claim(client: &Client, settings: &Settings, mut claim: Value, busy: &[S
         out["runner"].as_str().map_or(String::new(), |runner| format!(" ({runner})"))
     );
     if let Some(error) = out["model"]["error"].as_str().or_else(|| out["ask"].as_str()) {
-        // Answered instead of run: recorded like the relay's own answers, so the thread's next turn carries this request.
+        // Answered instead of run; the completion records it so the thread's next turn carries this request.
         let reply: String = error.chars().take(500).collect();
-        let _ = relay_post(client, &settings.relay, "/api/device/route", &settings.token,
-            json!({"jobId": claim["jobId"], "leaseId": claim["leaseId"], "answered": reply}));
         claim["routingReply"] = json!(reply);
         return Ok(Some(claim));
     }
@@ -1314,6 +1312,9 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
         object.remove("attach");
     }
     let mut body = json!({"jobId":job_id,"leaseId":lease_id,"result":result});
+    if let Some(reply) = claim["routingReply"].as_str() {
+        body["answered"] = json!(reply);
+    }
     if sealed {
         // The relay sends the reply from this request; it can't read the stored mail.
         body["subject"] = claim["request"]["subject"].clone();

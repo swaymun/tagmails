@@ -311,14 +311,14 @@ async function acceptMessage(env, message) {
   }
   const previousJob = threadId && !stopped ? await env.DB.prepare(`SELECT j.model_json FROM jobs j
     JOIN messages m ON m.id = j.message_id
-    WHERE j.thread_id = ? AND json_extract(j.model_json, '$.id') IS NOT NULL AND j.steer_of IS NULL
+    WHERE j.thread_id = ? AND json_extract(j.model_json, '$.id') IS NOT NULL AND (j.steer_of IS NULL OR j.steer_state IS NULL)
     ORDER BY m.rowid DESC LIMIT 1`).bind(threadId).first() : null;
   const priorModel = previousJob?.model_json ? JSON.parse(previousJob.model_json) : null;
   // Project routing: replies stay in the thread's folder. A reply to "which
   // project?" is routed together with the request that prompted the question.
   const previousWorkspace = threadId && !stopped ? await env.DB.prepare(`SELECT j.workspace_json FROM jobs j
     JOIN messages m ON m.id = j.message_id
-    WHERE j.thread_id = ? AND j.workspace_json IS NOT NULL AND j.steer_of IS NULL
+    WHERE j.thread_id = ? AND j.workspace_json IS NOT NULL AND (j.steer_of IS NULL OR j.steer_state IS NULL)
     ORDER BY m.rowid DESC LIMIT 1`).bind(threadId).first() : null;
   const priorWorkspace = previousWorkspace ? JSON.parse(previousWorkspace.workspace_json) : null;
   if (priorWorkspace?.pending) priorWorkspace.pending = await openText(env, priorWorkspace.pending);

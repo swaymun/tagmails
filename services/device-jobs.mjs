@@ -337,25 +337,22 @@ async function routed(env, device, body) {
   }
   const stored = model && { id: model.id, effort: model.effort, ...(model.speed && model.speed !== 'standard' ? { speed: model.speed } : {}), source: 'classified' };
   const storedWorkspace = workspace ? JSON.stringify(workspace.kind === 'project' ? { kind: 'project', path: workspace.path } : { kind: 'scratch' }) : null;
-  // The Mac answered instead of running (an unavailable model, a "which project?" question):
-  // stored like the relay's own answers, so the thread's next turn carries this request.
-  const answered = typeof body.answered === 'string' && body.answered.trim() && body.answered.length <= 500
-    ? JSON.stringify({ error: body.answered }) : null;
-  const row = await env.DB.prepare(`UPDATE jobs SET model_json = COALESCE(?, ?, model_json), workspace_json = COALESCE(?, workspace_json)
+  const row = await env.DB.prepare(`UPDATE jobs SET model_json = COALESCE(?, model_json), workspace_json = COALESCE(?, workspace_json)
     WHERE id = ? AND device_id = ? AND lease_id = ? AND state = 'running' AND lease_until > CURRENT_TIMESTAMP
       AND EXISTS (SELECT 1 FROM threads t WHERE t.id = jobs.thread_id AND t.account_id = ?) RETURNING id, thread_id, rowid AS position`)
-    .bind(answered, stored ? JSON.stringify(stored) : null, storedWorkspace,
+    .bind(stored ? JSON.stringify(stored) : null, storedWorkspace,
       body.jobId, device.id, body.leaseId, device.account_id).first();
   if (!row) return json({ error: 'Lease expired or replaced' }, 409);
-  // Emails that arrived before this report took the thread's provisional state at intake. Those
-  // still waiting continue with what the Mac chose (an explicit choice of their own is kept).
-  if (!answered) {
-    if (stored) await env.DB.prepare(`UPDATE jobs SET model_json = ? WHERE thread_id = ? AND rowid > ? AND state = 'queued' AND steer_of IS NULL
-      AND json_extract(model_json, '$.source') IN ('default', 'thread', 'pilot')`)
-      .bind(JSON.stringify({ ...stored, source: 'thread' }), row.thread_id, row.position).run();
-    if (storedWorkspace) await env.DB.prepare(`UPDATE jobs SET workspace_json = ? WHERE thread_id = ? AND rowid > ? AND state = 'queued' AND steer_of IS NULL
-      AND workspace_json IS NULL`).bind(storedWorkspace, row.thread_id, row.position).run();
-  }
+  // Emails that arrived before this report took the thread's provisional state at intake. The same
+  // sender's emails still waiting continue with what the Mac chose, up to the next email that picked
+  // a model itself (an explicit or reported choice is kept, and later emails follow that one).
+  const sameSender = `message_id IN (SELECT id FROM messages WHERE sender_email = (SELECT m.sender_email FROM messages m JOIN jobs a ON a.message_id = m.id WHERE a.id = ?4))`;
+  const until = `rowid < COALESCE((SELECT MIN(rowid) FROM jobs WHERE thread_id = ?2 AND rowid > ?3 AND json_extract(model_json, '$.source') IN ('explicit', 'classified')), 9223372036854775807)`;
+  const waiting = `thread_id = ?2 AND rowid > ?3 AND state = 'queued' AND (steer_of IS NULL OR steer_state IS NULL) AND ${sameSender} AND ${until}`;
+  if (stored) await env.DB.prepare(`UPDATE jobs SET model_json = ?1 WHERE ${waiting} AND json_extract(model_json, '$.source') IN ('default', 'thread', 'pilot')`)
+    .bind(JSON.stringify({ ...stored, source: 'thread' }), row.thread_id, row.position, body.jobId).run();
+  if (storedWorkspace) await env.DB.prepare(`UPDATE jobs SET workspace_json = ?1 WHERE ${waiting} AND workspace_json IS NULL`)
+    .bind(storedWorkspace, row.thread_id, row.position, body.jobId).run();
   return json({ routed: true });
 }
 
@@ -569,6 +566,14 @@ async function complete(env, device, body) {
       WHERE id = ? AND device_id = ? AND lease_id = ? AND result_hash = ? AND state = ?`)
       .bind(body.jobId, device.id, body.leaseId, resultHash, state),
   ];
+  // The Mac answered instead of running (an unavailable model, a "which project?" question): stored like
+  // the relay's own answers, with the completion, so the thread's next turn carries this request.
+  if (state === 'completed' && body.result.runtime === 'tagmails-router' && typeof body.answered === 'string' &&
+      body.answered.trim() && body.answered.length <= 500) {
+    statements.push(env.DB.prepare(`UPDATE jobs SET model_json = ?
+      WHERE id = ? AND device_id = ? AND lease_id = ? AND result_hash = ? AND state = 'completed'`)
+      .bind(JSON.stringify({ error: body.answered }), body.jobId, device.id, body.leaseId, resultHash));
+  }
   if (state === 'completed') {
     // The agent finished a turn that carried the thread's earlier unrun
     // requests; later turns no longer need them.

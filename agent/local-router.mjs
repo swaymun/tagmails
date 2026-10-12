@@ -152,7 +152,14 @@ export async function routeClaim({ claim, catalog, projects, dataDir, classifyWi
   if (request.fromOwner !== true) return {};
   const models = catalog ? catalogFromDevice(catalog) : null;
   const subject = String(request.subject ?? '');
-  const body = String(request.body ?? '');
+  // After an answered request the claim body carries the thread's earlier requests ahead of the
+  // current message: routing reads the current message (its own Model: line, its own words) and
+  // uses the earlier ones only as context for the folder.
+  const whole = String(request.body ?? '');
+  const marker = 'The current message:\n';
+  const at = whole.lastIndexOf(marker);
+  const body = at >= 0 ? whole.slice(at + marker.length) : whole;
+  const earlier = at >= 0 ? whole.slice(0, at).trim().slice(0, 1500) : '';
   const prior = claim.model?.source === 'thread' ? { id: claim.model.id, effort: claim.model.effort } : undefined;
   const pending = claim.workspace?.kind ? null : await takePending(dataDir, claim.threadId);
   const modelPlan = prepareModelRoute(body, claim.model?.id, {
@@ -160,11 +167,11 @@ export async function routeClaim({ claim, catalog, projects, dataDir, classifyWi
     defaultEffort: claim.model?.effort, defaultSpeed: claim.model?.speed ?? 'standard',
     pilotCodexModel: claim.model?.id,
   });
-  const requestText = `${subject ? `Subject: ${subject}\n` : ''}${currentText(body)}`.slice(0, 4000);
+  const requestText = `${subject ? `Subject: ${subject}\n` : ''}${currentText(body)}${earlier ? `\n\n${earlier}` : ''}`.slice(0, 4000);
   const state = pending ? `${pending.state}\n\nThe agent asked which project to use. The sender replied:\n${currentText(body)}` : requestText;
   const list = claim.workspace?.kind || !projects?.length ? [] : cleanProjectCatalog(projects)
     .map((project) => ({ ...project, description: project.description.slice(0, 160) }));
-  const folderPlan = list.length ? prepareProjectRoute(state, list, { pathText: pending ? currentText(body) : state }) : { done: null };
+  const folderPlan = list.length ? prepareProjectRoute(state, list, { pathText: `${subject ? `Subject: ${subject}\n` : ''}${currentText(body)}` }) : { done: null };
   const preferred = preferredRunner(claim.model?.id);
   const plans = { model: modelPlan, folder: folderPlan };
   let model = modelPlan.done ?? null, workspace = folderPlan.done ?? null, runner = null, ms = 0;

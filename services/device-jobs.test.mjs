@@ -777,11 +777,49 @@ test('a request the Mac answered instead of running is carried into the thread\'
   const send = sender(env);
   await send('ans-1', 'owner@gmail.com', 'Use Gemini to fix the footer.');
   const claimed = envelope((await call(env, paired.token, 'claim', { routing: 'local' })).body);
-  assert.deepEqual((await call(env, paired.token, 'route', { jobId: claimed.jobId, leaseId: claimed.leaseId,
-    answered: 'That model is unavailable for this agent.' })).body, { routed: true });
-  await call(env, paired.token, 'complete', { jobId: claimed.jobId, leaseId: claimed.leaseId,
+  // The answer is recorded with the completion, so a Mac that dies in between leaves an ordinary lease to retry.
+  await call(env, paired.token, 'complete', { jobId: claimed.jobId, leaseId: claimed.leaseId, answered: 'That model is unavailable for this agent.',
     result: { runtime: 'tagmails-router', state: 'needs_clarification', summary: 'That model is unavailable for this agent.' } });
   await send('ans-2', 'owner@gmail.com', 'Use Luna instead.', ['<ans-1@gmail.com>']);
   const next = envelope((await call(env, paired.token, 'claim', { routing: 'local' })).body);
   assert.match(next.request.body, /Use Gemini to fix the footer\.[\s\S]*The current message:\nUse Luna instead\./);
+});
+
+test('the Mac\'s routing report reaches only the same sender\'s waiting emails, and stops at the next model choice', async () => {
+  const { env, sqlite } = bindings();
+  const paired = device(sqlite);
+  const send = sender(env);
+  const file = { attachments: [{ filename: 'a.txt', contentType: 'text/plain', size: 1 }] };
+  await send('prop-1', 'owner@gmail.com', 'Use Claude on the footer in TagMails.');
+  const claimed = envelope((await call(env, paired.token, 'claim', { routing: 'local' })).body);
+  sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)').run(claimed.threadId, 'guest@gmail.com');
+  await send('prop-2', 'guest@gmail.com', 'Also see this file.', ['<prop-1@gmail.com>'], file);
+  await send('prop-3', 'owner@gmail.com', 'Model: Luna\nWith this file.', ['<prop-1@gmail.com>'], file);
+  await send('prop-4', 'owner@gmail.com', 'And this file too.', ['<prop-3@gmail.com>'], file);
+  await call(env, paired.token, 'route', { jobId: claimed.jobId, leaseId: claimed.leaseId, model: { id: 'gpt-6-luna', effort: 'low' },
+    workspace: { kind: 'project', path: '/Users/me/code/tagmails' } });
+  const rows = Object.fromEntries(sqlite.prepare(`SELECT m.provider_email_id AS id, j.model_json, j.workspace_json FROM jobs j
+    JOIN messages m ON m.id = j.message_id WHERE j.state = 'queued'`).all().map((row) => [row.id, row]));
+  assert.notEqual(JSON.parse(rows['prop-2'].model_json).id, 'gpt-6-luna', "a participant's email is not rewritten");
+  assert.equal(rows['prop-2'].workspace_json, null);
+  assert.equal(JSON.parse(rows['prop-3'].model_json).source, 'explicit', 'an explicit choice is kept');
+  assert.equal(JSON.parse(rows['prop-3'].model_json).id, 'gpt-6-luna');
+  assert.equal(rows['prop-4'].workspace_json === null || JSON.parse(rows['prop-4'].workspace_json).kind === 'project', true);
+});
+
+test('a follow-up the Mac handed back keeps its place in the thread\'s history', async () => {
+  const { env, sqlite } = bindings();
+  const paired = device(sqlite);
+  const send = sender(env);
+  await send('req-1', 'owner@gmail.com', 'Write the japan guide.');
+  const claimed = envelope((await call(env, paired.token, 'claim', { routing: 'local' })).body);
+  await send('req-2', 'owner@gmail.com', 'then the Korea guide', ['<req-1@gmail.com>']);
+  const [offer] = (await call(env, paired.token, 'renew', { jobId: claimed.jobId, leaseId: claimed.leaseId })).body.steers;
+  await call(env, paired.token, 'steered', { jobId: claimed.jobId, leaseId: claimed.leaseId, steerId: offer.id, delivered: false });
+  await call(env, paired.token, 'complete', { jobId: claimed.jobId, leaseId: claimed.leaseId, result: { state: 'completed', summary: 'Done.' } });
+  const second = envelope((await call(env, paired.token, 'claim', { routing: 'local' })).body);
+  await call(env, paired.token, 'route', { jobId: second.jobId, leaseId: second.leaseId, model: { id: 'gpt-6-luna', effort: 'low' }, workspace: { kind: 'scratch' } });
+  await call(env, paired.token, 'complete', { jobId: second.jobId, leaseId: second.leaseId, result: { state: 'completed', summary: 'Done.' } });
+  await send('req-3', 'owner@gmail.com', 'Continue.', ['<req-2@gmail.com>']);
+  assert.equal(JSON.parse(sqlite.prepare("SELECT model_json FROM jobs WHERE state = 'queued'").get().model_json).id, 'gpt-6-luna');
 });

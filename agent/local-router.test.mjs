@@ -113,3 +113,13 @@ test('the CLI is asked for JSON only, falls back to the other CLI, and answers o
   await assert.rejects(classify(request, 'codex', { ask: { codex: async () => '{"route":"nonsense"}', claude: async () => 'not json' } }), /routing unavailable/);
   assert.deepEqual(parseAnswer('x {"a":1} y'), { a: 1 });
 });
+
+test('after an answered request the current message is routed, with the earlier requests as folder context only', quiet(async () => {
+  const seen = [];
+  const body = 'Earlier in this thread, owner@gmail.com wrote (the relay replied without running an agent):\nUse Gemini to fix the footer in TagMails.\n\nThe current message:\nModel: Luna\nUse Luna instead.';
+  const out = await routeClaim({ claim: owner(body, { model: { id: 'gpt-6-luna', effort: 'medium', source: 'explicit' }, request: { fromOwner: true, subject: 'Footer', body } }), catalog, projects,
+    classifyWith: answering({ folder: 'p_a100000001' }, seen) });
+  assert.equal(out.workspace.path, '/Users/me/tagmails');
+  assert.equal(seen.length, 1, 'the Model: line of the current message settles the model');
+  assert.match(seen[0].state, /Use Luna instead[\s\S]*Use Gemini to fix the footer in TagMails/);
+}));
