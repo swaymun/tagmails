@@ -273,6 +273,10 @@ test('pair returns a working one-time code and the commands for this relay', asy
   assert.equal(device.status, 201);
   const status = (await tool(env, tokens.access_token, 'status')).data;
   assert.deepEqual(status.computers.map((computer) => computer.name), ['Studio Mac']);
+  env.PUBLIC_ORIGIN = 'https://tagmails-relay-dev.saimun-shahee.workers.dev';
+  const hosted = (await tool(env, tokens.access_token, 'pair')).data;
+  assert.equal(hosted.commands[0], `tagmails pair ${hosted.pairingCode}`,
+    'reached through tagmails.com, the hosted relay still pairs without --relay');
 });
 
 test('runs and run cover only this account and tolerate a missing or unreadable result', async () => {

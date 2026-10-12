@@ -17,6 +17,14 @@
   "env": {
     "dev": {
       "name": "tagmails-relay-dev",
+      // The MCP connector and its OAuth endpoints are served on the Site's domain;
+      // these routes run before the Site's custom domain. Computers keep using workers.dev.
+      "workers_dev": true,
+      "routes": [
+        { "pattern": "tagmails.com/mcp", "zone_name": "tagmails.com" },
+        { "pattern": "tagmails.com/oauth/*", "zone_name": "tagmails.com" },
+        { "pattern": "tagmails.com/.well-known/oauth-*", "zone_name": "tagmails.com" }
+      ],
       "vars": { "SITE_ALLOWED_ORIGINS": "https://tagmails.com,https://www.tagmails.com", "BILLING_LIVE": "true", "PUBLIC_SIGNUP_ENABLED": "true", "PILOT_CODEX_MODEL": "gpt-6-sol", "ADDRESS_DOMAIN": "tagmails.com", "MAIL_DELIVERY_READY": "true", "STATUS_REACTIONS_ENABLED": "true", "CLAUDE_ROUTE_ENABLED": "true" },
       "d1_databases": [{ "binding": "DB", "database_name": "tagmails-relay-dev", "database_id": "792cbd68-83f3-4b64-b050-b62aebcb6801", "migrations_dir": "services/migrations" }],
       "r2_buckets": [{ "binding": "MAIL", "bucket_name": "tagmails-relay-mail-dev" }],

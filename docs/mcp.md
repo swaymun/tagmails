@@ -1,6 +1,6 @@
 # TagMails over MCP
 
-The relay serves a plain remote MCP server at `<relay>/mcp` (streamable HTTP, JSON responses, no UI). The hosted one is `https://tagmails-relay-dev.saimun-shahee.workers.dev/mcp`; a self-hosted relay serves the same path on its own origin.
+The relay serves a plain remote MCP server at `<relay>/mcp` (streamable HTTP, JSON responses, no UI). The hosted one is `https://tagmails.com/mcp`; a self-hosted relay serves the same path on its own origin.
 
 ## Connect
 

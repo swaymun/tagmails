@@ -71,7 +71,7 @@ async function recentRuns(env, ctx, { limit, threadId = null }) {
     id: row.id, threadId: row.thread_id, state: row.state, createdAt: row.created_at,
     subject: await readableText(env, row.subject), from: row.sender_email, project: projectName(row.workspace_json),
     model: selectedModelStatus(row.model_json), delivery: row.delivery_state ?? null,
-    receiptUrl: `${ctx.origin}/runs/${row.id}`,
+    receiptUrl: `${ctx.relayOrigin}/runs/${row.id}`,
   })));
 }
 
@@ -140,7 +140,7 @@ async function pair(env, ctx, args) {
   }
   const harness = agent ?? harnessOf(settings.model);
   const { code, expiresInSeconds } = await createPairingCode(env, ctx.account.id);
-  const relay = ctx.origin === HOSTED_RELAY ? '' : ` --relay ${ctx.origin}`;
+  const relay = ctx.relayOrigin === HOSTED_RELAY ? '' : ` --relay ${ctx.relayOrigin}`;
   const pairCommand = `tagmails pair ${code}${relay}`;
   const startCommand = `tagmails start ${startFlags(settings)}`;
   const label = harness === 'claude' ? 'Claude Code' : 'Codex';
@@ -203,7 +203,7 @@ async function run(env, ctx, args) {
       answer, answerTruncated: typeof result?.answer === 'string' && result.answer.length > 20_000,
       details: text(result?.details, 4000),
       checks: Array.isArray(result?.checks) ? result.checks.filter((check) => typeof check === 'string').slice(0, 20) : [] },
-    files, receiptUrl: `${ctx.origin}/runs/${row.id}`,
+    files, receiptUrl: `${ctx.relayOrigin}/runs/${row.id}`,
   };
 }
 
@@ -212,8 +212,8 @@ async function billing(env, ctx, _args, { stripeFetch }) {
   if (!balance.topUpsEnabled) return { ...balance, checkoutUrl: null, message: 'Top-ups are not enabled on this relay.' };
   const site = configuredOrigin(env.SITE_ORIGIN);
   const checkout = await startCheckout(env, ctx.account, {
-    successUrl: site ? `${site}/?topup=returned#billing` : `${ctx.origin}/account?topup=returned`,
-    cancelUrl: site ? `${site}/?topup=canceled#billing` : `${ctx.origin}/account?topup=canceled`,
+    successUrl: site ? `${site}/?topup=returned#billing` : `${ctx.relayOrigin}/account?topup=returned`,
+    cancelUrl: site ? `${site}/?topup=canceled#billing` : `${ctx.relayOrigin}/account?topup=canceled`,
   }, stripeFetch);
   if (checkout.error) throw new ToolError(`${checkout.error}. Try again in a minute.`);
   return { ...balance, checkoutUrl: checkout.checkoutUrl, amount: dollars(TOP_UP_CENTS * 1000), testMode: checkout.testMode,
@@ -377,7 +377,9 @@ export async function handleMcpRequest(request, env, { stripeFetch = fetch } = {
       ? new Response(null, { status: 202, headers: OPEN_CORS }) : reply(rpcError(id, -32600, 'Invalid request'), 400);
   }
   if (!['string', 'number'].includes(typeof id)) return reply(rpcError(null, -32600, 'Invalid request id'), 400);
-  const ctx = { ...grant, origin: url.origin };
+  // The connector may be reached through the Site's domain (tagmails.com/mcp);
+  // computers and receipts still use the relay's own origin.
+  const ctx = { ...grant, relayOrigin: configuredOrigin(env.PUBLIC_ORIGIN) ?? url.origin };
   if (method === 'initialize') {
     const requested = params?.protocolVersion;
     return reply(rpc(id, {
