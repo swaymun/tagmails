@@ -4,7 +4,7 @@ import test from 'node:test';
 import { bindings } from './bindings-fixture.mjs';
 import { encryptedBucket, openText, protectedEnv, sealText } from './storage-crypto.mjs';
 import { _test, verifyDkim } from './dkim.mjs';
-import { handleEmail } from './relay-worker.mjs';
+import { completeOneModelClarification, handleEmail } from './relay-worker.mjs';
 import { sendWithCloudflare } from './cloudflare-mail.mjs';
 import { sendNextOutbox } from './outbox.mjs';
 
@@ -163,4 +163,129 @@ test('large files are sealed as a stream, open byte for byte, and reject a wrong
   // Dropping the final record must not read as a shorter file.
   objects.set('cut', { ...objects.get('guide'), bytes: stored.subarray(0, 14 + 2 * (1024 * 1024 + 16)) });
   await assert.rejects(new Response((await bucket.get('cut')).body).arrayBuffer());
+});
+
+// Signing keys for several sending domains, as their DNS would publish them.
+function domainKeys(...domains) {
+  const keys = new Map(domains.map((domain) => [domain, generateKeyPairSync('rsa', { modulusLength: 2048 })]));
+  return {
+    privateKey: (domain) => keys.get(domain).privateKey,
+    resolveTxt: async (name) => {
+      const key = keys.get(name.split('._domainkey.')[1]);
+      return key ? [`v=DKIM1; k=rsa; p=${key.publicKey.export({ type: 'spki', format: 'der' }).toString('base64')}`] : [];
+    },
+  };
+}
+
+test('a multi-person Cloudflare thread runs only for the owner and the people the owner copied', async () => {
+  const { env, sqlite, objects } = bindings();
+  sqlite.prepare('INSERT INTO accounts (id, google_sub, owner_email, agent_email) VALUES (?, ?, ?, ?)')
+    .run('account-2', 'google-sub-2', 'second@gmail.com', 'u-second@wonder.test');
+  const keys = domainKeys('gmail.com', 'partner.example', 'evil.example');
+  let sequence = 0;
+  // One email as its sender's server signs it: every header present is signed.
+  const send = async ({ from, to = 'agent@wonder.test', cc, replyTo, inReplyTo, body = 'Review the plan.', domain, envelopeTo = 'agent@wonder.test', sign = true }) => {
+    const mailbox = from.match(/<([^>]+)>/)?.[1] ?? from;
+    const messageId = `<sim-${sequence += 1}@${mailbox.split('@')[1]}>`;
+    const headers = [['From', from], ['To', to], ...(cc ? [['Cc', cc]] : []), ...(replyTo ? [['Reply-To', replyTo]] : []),
+      ['Subject', inReplyTo ? 'Re: Launch plan' : 'Launch plan'], ['Message-ID', messageId],
+      ...(inReplyTo ? [['In-Reply-To', inReplyTo], ['References', inReplyTo]] : [])];
+    const raw = [...headers.map(([name, value]) => `${name}: ${value}`), 'Content-Type: text/plain; charset=utf-8', '', body, ''].join('\r\n');
+    const signingDomain = domain ?? mailbox.split('@')[1];
+    const mime = sign ? signed(raw, { domain: signingDomain, privateKey: keys.privateKey(signingDomain),
+      names: headers.map(([name]) => name.toLowerCase()) }) : raw;
+    const response = await (await handleEmail(emailMessage(mime, envelopeTo), env, { resolveTxt: keys.resolveTxt, fetchModel: fetch })).json();
+    return { messageId, response };
+  };
+  const counts = () => ({ objects: objects.size, ...Object.fromEntries(['threads', 'messages', 'jobs', 'outbox', 'participants',
+    'test_email_charges', 'credit_ledger', 'status_reactions', 'reactions'].map((table) =>
+    [table, sqlite.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n])) });
+  // Mail the relay must ignore leaves no thread, message, job, reply, charge, stored MIME or grant.
+  const ignored = async (email, reason) => {
+    const before = counts();
+    const { response } = await send(email);
+    assert.equal(response.accepted, false, JSON.stringify(email));
+    if (reason) assert.equal(response.reason, reason);
+    assert.deepEqual(counts(), before, JSON.stringify(email));
+  };
+  const accepted = async (email) => {
+    const result = await send(email);
+    assert.deepEqual(result.response, { accepted: true, duplicate: false }, JSON.stringify(email));
+    return result.messageId;
+  };
+  const participants = () => sqlite.prepare('SELECT email, revoked_at IS NOT NULL AS revoked FROM participants ORDER BY email').all()
+    .map((row) => `${row.email}${row.revoked ? ' (revoked)' : ''}`);
+
+  // Strangers, before any thread exists.
+  await ignored({ from: 'mallory@evil.example' });
+  await ignored({ from: 'second@gmail.com' }); // another TagMails account's owner
+  await ignored({ from: 'owner+agent@gmail.com' }); // a Gmail plus alias is not the owner address
+  await ignored({ from: 'owner@gmail.com', sign: false }, 'sender authentication failed');
+  await ignored({ from: 'owner@gmail.com', domain: 'evil.example' }, 'sender authentication failed');
+  await ignored({ from: '"owner@gmail.com" <mallory@evil.example>' });
+  await ignored({ from: 'mallory@evil.example', replyTo: 'owner@gmail.com' });
+
+  // The owner starts a thread and copies Bob.
+  const start = await accepted({ from: 'Owner <owner@gmail.com>', cc: 'bob@partner.example' });
+  assert.deepEqual(participants(), ['bob@partner.example']);
+  const other = await accepted({ from: 'owner@gmail.com', body: 'A private second thread.' });
+
+  // Bob can continue that thread, but copying Carol does not invite her.
+  const bobReply = await accepted({ from: 'bob@partner.example', inReplyTo: start, cc: 'carol@partner.example, owner@gmail.com' });
+  assert.deepEqual(participants(), ['bob@partner.example']);
+  await ignored({ from: 'carol@partner.example', inReplyTo: bobReply });
+  await ignored({ from: 'carol@partner.example', inReplyTo: start, cc: 'bob@partner.example' });
+  // Bob cannot start a thread, join the owner's other thread, or reach the agent by Bcc.
+  await ignored({ from: 'bob@partner.example' });
+  await ignored({ from: 'bob@partner.example', inReplyTo: other });
+  await ignored({ from: 'bob@partner.example', to: 'owner@gmail.com', inReplyTo: start }, 'agent not in signed To or Cc');
+  // Strangers and the other account's owner cannot ride the thread either.
+  await ignored({ from: 'mallory@evil.example', inReplyTo: bobReply });
+  await ignored({ from: 'second@gmail.com', inReplyTo: start });
+  await ignored({ from: 'owner@gmail.com', inReplyTo: start, domain: 'evil.example' }, 'sender authentication failed');
+  // Nor can Bob pose as the owner with his own domain's signature.
+  await ignored({ from: 'owner@gmail.com', inReplyTo: start, domain: 'partner.example' }, 'sender authentication failed');
+
+  // The relay delivers a message for one account only.
+  await ignored({ from: 'second@gmail.com', to: 'agent@wonder.test, u-second@wonder.test', envelopeTo: 'nobody@wonder.test' }, 'unknown recipient');
+
+  // Once the owner revokes Bob, his replies stop.
+  sqlite.prepare('UPDATE participants SET revoked_at = CURRENT_TIMESTAMP WHERE email = ?').run('bob@partner.example');
+  await ignored({ from: 'bob@partner.example', inReplyTo: bobReply });
+  assert.deepEqual(participants(), ['bob@partner.example (revoked)']);
+  // Copying him again on a new owner message restores access.
+  await accepted({ from: 'owner@gmail.com', inReplyTo: bobReply, cc: 'bob@partner.example' });
+  assert.deepEqual(participants(), ['bob@partner.example']);
+
+  assert.deepEqual(sqlite.prepare(`SELECT m.sender_email, j.state FROM jobs j JOIN messages m ON m.id = j.message_id
+    ORDER BY m.rowid`).all().map((row) => `${row.sender_email} ${row.state}`),
+  ['owner@gmail.com queued', 'owner@gmail.com queued', 'bob@partner.example queued', 'owner@gmail.com queued']);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM threads').get().n, 2);
+});
+
+test('replies go only to the verified sender and the owner-approved people on the thread, never to Reply-To', async () => {
+  const { env, sqlite } = bindings();
+  const keys = domainKeys('gmail.com', 'partner.example');
+  const send = async ({ from, cc, replyTo, inReplyTo, id }) => {
+    const headers = [['From', from], ['To', 'agent@wonder.test'], ...(cc ? [['Cc', cc]] : []), ...(replyTo ? [['Reply-To', replyTo]] : []),
+      ['Subject', 'Plan'], ['Message-ID', `<${id}@sim.test>`], ...(inReplyTo ? [['In-Reply-To', inReplyTo], ['References', inReplyTo]] : [])];
+    // A malformed model line gets a relay-only reply, so the outbox runs without a Mac.
+    const raw = [...headers.map(([name, value]) => `${name}: ${value}`), 'Content-Type: text/plain; charset=utf-8', '', 'Model: Luna please review this', ''].join('\r\n');
+    const domain = from.split('@')[1];
+    const mime = signed(raw, { domain, privateKey: keys.privateKey(domain), names: headers.map(([name]) => name.toLowerCase()) });
+    assert.deepEqual(await (await handleEmail(emailMessage(mime, 'agent@wonder.test'), env, { resolveTxt: keys.resolveTxt, fetchModel: fetch })).json(),
+      { accepted: true, duplicate: false });
+    assert.equal(await completeOneModelClarification(env), true);
+    let sent;
+    assert.equal((await sendNextOutbox(env, {
+      sendEmail: async (payload) => { sent = payload; return { data: { id: `sent-${id}` } }; },
+      getSentEmail: async () => ({ data: { message_id: `<sent-${id}@wonder.test>` } }),
+    })).state, 'sent');
+    return { to: sent.to, cc: sent.cc ?? [], replyTo: sent.replyTo };
+  };
+  assert.deepEqual(await send({ id: 'owner-1', from: 'owner@gmail.com', cc: 'bob@partner.example', replyTo: 'mallory@evil.example' }),
+    { to: ['owner@gmail.com'], cc: ['bob@partner.example'], replyTo: undefined });
+  assert.deepEqual(await send({ id: 'bob-1', from: 'bob@partner.example', cc: 'owner@gmail.com, carol@partner.example',
+    replyTo: 'mallory@evil.example', inReplyTo: '<owner-1@sim.test>' }), { to: ['bob@partner.example'], cc: ['owner@gmail.com'], replyTo: undefined });
+  assert.deepEqual(sqlite.prepare('SELECT email FROM participants').all().map((row) => row.email), ['bob@partner.example']);
 });

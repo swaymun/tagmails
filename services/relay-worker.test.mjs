@@ -256,6 +256,11 @@ test('a signed Resend delivery selects the matching account address', async () =
       raw: { download_url: 'https://inbound.resend.com/raw/account-2' } }),
     fetchRaw: async () => new Response(rawMime),
   };
+  // Received mail over Resend is off unless the relay opts in; Cloudflare Email Routing checks senders more strictly.
+  delete env.RESEND_INBOUND_ENABLED;
+  assert.deepEqual(await (await handleInbound(webhook(data.to), env, provider)).json(), { accepted: false });
+  assert.equal(sqlite.prepare('SELECT count(*) n FROM jobs').get().n, 0);
+  env.RESEND_INBOUND_ENABLED = 'true';
   assert.deepEqual(await (await handleInbound(webhook(data.to), env, provider)).json(),
     { accepted: true, duplicate: false });
   assert.equal(sqlite.prepare('SELECT account_id FROM messages').get().account_id, 'account-2');

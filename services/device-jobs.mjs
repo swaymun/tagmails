@@ -136,15 +136,18 @@ async function claim(env, device, busy = []) {
 // A turn the relay answered itself ("which project?", an unavailable model)
 // never reached an agent, and the sender's reply usually quotes only that
 // answer. Hand the agent those earlier requests, newest last.
+// Only the claiming sender's own earlier requests: a participant's text must
+// never ride into the owner's turn (owner access and tools), nor the reverse.
 async function unrunEarlierRequests(env, device, row, agentEmail) {
-  const { results = [] } = await env.DB.prepare(`SELECT m.object_key, m.message_id FROM jobs j
+  const { results = [] } = await env.DB.prepare(`SELECT m.object_key, m.message_id, m.sender_email FROM jobs j
     JOIN messages m ON m.id = j.message_id JOIN threads t ON t.id = j.thread_id
     WHERE j.thread_id = ? AND t.account_id = ? AND j.id != ?
       AND json_type(j.model_json, '$.error') = 'text'
       AND (j.created_at, j.rowid) < (SELECT created_at, rowid FROM jobs WHERE id = ?)
       AND j.handed_to_agent_at IS NULL
+      AND m.sender_email = (SELECT cm.sender_email FROM jobs cj JOIN messages cm ON cm.id = cj.message_id WHERE cj.id = ?)
     ORDER BY j.created_at DESC, j.rowid DESC LIMIT 3`)
-    .bind(row.thread_id, device.account_id, row.id, row.id).all();
+    .bind(row.thread_id, device.account_id, row.id, row.id, row.id).all();
   const earlier = [];
   for (const item of results.reverse()) {
     const object = await env.MAIL.get(item.object_key);
@@ -154,7 +157,7 @@ async function unrunEarlierRequests(env, device, row, agentEmail) {
         verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false,
       });
       const text = currentText(parsed.body).trim();
-      if (parsed.messageId === item.message_id && text) earlier.push({ from: parsed.from, text });
+      if (parsed.messageId === item.message_id && parsed.from === item.sender_email && text) earlier.push({ from: parsed.from, text });
     } catch { /* Skip a message that no longer parses. */ }
   }
   return earlier;

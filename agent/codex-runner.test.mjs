@@ -481,4 +481,11 @@ test('owner standing instructions reach owner prompts only', async (t) => {
   const participant = claim('job-instructions-2', 'thread-instructions');
   participant.request.fromOwner = false;
   assert.doesNotMatch(promptFor(participant), /Google Drive|standing instructions for TagMails/);
+  // Changing TagMails settings and using connectors are owner powers.
+  const ownerTools = process.env.TAGMAILS_OWNER_TOOLS;
+  delete process.env.TAGMAILS_OWNER_TOOLS;
+  try {
+    assert.match(promptFor(owner), /tagmails set --model/);
+    assert.doesNotMatch(promptFor(participant), /tagmails set|connected apps/);
+  } finally { if (ownerTools !== undefined) process.env.TAGMAILS_OWNER_TOOLS = ownerTools; }
 });

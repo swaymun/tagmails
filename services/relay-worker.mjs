@@ -182,6 +182,14 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
     getReceivedEmail, fetchRaw,
   });
   if (message.ignored) return Response.json({ accepted: false });
+  // Mail arrives through Cloudflare Email Routing, which checks the sender's
+  // DKIM alignment and signed To/Cc itself. Resend's received-mail verdict is
+  // looser (DMARC "gray" for p=none Gmail), so its inbound path stays off unless
+  // a relay explicitly opts in. Resend's sent and delivery events still apply.
+  if (message.agentAddress && env.RESEND_INBOUND_ENABLED !== 'true') {
+    console.log('Inbound email ignored: Resend inbound is disabled');
+    return Response.json({ accepted: false });
+  }
   if (message.sent) return Response.json(await reconcileSentEvent(env, message.sent));
   if (message.deliveryOutcome) return Response.json(await recordDeliveryOutcome(env, message.deliveryOutcome));
   return acceptMessage(env, message, { fetchModel });
