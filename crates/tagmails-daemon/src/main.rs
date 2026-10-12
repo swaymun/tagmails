@@ -1032,7 +1032,8 @@ fn run_relay(settings: &Settings, once: bool, reload: bool) -> Result<(), Box<dy
         clear_published_projects(&client, settings);
     }
     let mut settings = settings.clone();
-    let mut seen_config = load_config();
+    let mut seen_config = read_config()?;
+    let mut config_error: Option<String> = None;
     // Model defaults and the reactions choice ride the model-catalog publish.
     let mut seen_defaults = (effective_defaults(&seen_config), reactions_choice());
     let mut next_model_probe = Instant::now();
@@ -1047,7 +1048,20 @@ fn run_relay(settings: &Settings, once: bool, reload: bool) -> Result<(), Box<dy
     let (done_sender, done_receiver) = std::sync::mpsc::channel::<String>();
     loop {
         if reload && !once {
-            let config = load_config();
+            // A half-written or broken file keeps the settings already running.
+            let config = match read_config() {
+                Ok(config) => {
+                    config_error = None;
+                    config
+                }
+                Err(error) => {
+                    if config_error.as_ref() != Some(&error) {
+                        eprintln!("Keeping the current settings: {error}");
+                    }
+                    config_error = Some(error);
+                    seen_config.clone()
+                }
+            };
             let defaults = (effective_defaults(&config), reactions_choice());
             if defaults != seen_defaults {
                 next_model_probe = Instant::now();
@@ -1192,6 +1206,13 @@ mod tests {
         set_email_defaults(&args(&["set", "--model", "claude-sonnet-5-5"])).unwrap();
         apply_start_flags(&mut config, &args(&["start", "--access", "full"])).unwrap();
         assert_eq!(effective_defaults(&config)["model"], "claude-sonnet-5-5");
+        // A broken config.json is an error, never the broader defaults (write access, project routing).
+        let saved = fs::read(paths::config_file()).unwrap();
+        fs::write(paths::config_file(), b"{\"access\": \"read\",").unwrap();
+        assert!(read_config().unwrap_err().contains("not a valid settings file"));
+        assert!(settings_from_config().is_err(), "the service must not start on the defaults");
+        fs::write(paths::config_file(), &saved).unwrap();
+        assert_eq!(read_config().unwrap(), load_config());
         // A symlink an agent plants among the email settings is never followed into config.json.
         #[cfg(unix)]
         {
@@ -1654,12 +1675,26 @@ fn option(args: &[String], name: &str) -> Result<Option<String>, Box<dyn Error>>
     }
 }
 
-fn load_config() -> Value {
-    fs::read(paths::config_file())
+/// The saved settings. A missing file is the defaults; an unreadable or
+/// malformed one is an error, never the defaults: those are TagMails'
+/// recommended permissions and project routing, which can be broader than
+/// what the owner chose (`--access read`, a pinned workspace).
+fn read_config() -> Result<Value, String> {
+    let file = paths::config_file();
+    let bytes = match fs::read(&file) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(json!({})),
+        Err(error) => return Err(format!("{} could not be read: {error}", file.display())),
+    };
+    serde_json::from_slice::<Value>(&bytes)
         .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .filter(Value::is_object)
-        .unwrap_or_else(|| json!({}))
+        .ok_or_else(|| format!("{} is not a valid settings file; fix it or run `tagmails start` with your flags after deleting it", file.display()))
+}
+
+/// Settings for display and model defaults, where a broken file means none.
+fn load_config() -> Value {
+    read_config().unwrap_or_else(|_| json!({}))
 }
 
 fn save_config(config: &Value) -> Result<(), Box<dyn Error>> {
@@ -1686,7 +1721,7 @@ fn default_device_name() -> String {
 }
 
 fn settings_from_config() -> Result<Settings, Box<dyn Error>> {
-    let config = load_config();
+    let config = read_config()?;
     let mut settings = Settings {
         relay: configured_relay(&config),
         token: read_token(&paths::token_file())?,
@@ -1852,7 +1887,7 @@ fn command_pair(args: &[String]) -> Result<(), Box<dyn Error>> {
         .skip(1)
         .find(|arg| arg.starts_with("tm_pair_"))
         .ok_or("Pass the pairing code from the setup page: tagmails pair tm_pair_…")?;
-    let mut config = load_config();
+    let mut config = read_config()?;
     let relay = option(args, "--relay")?.unwrap_or_else(|| configured_relay(&config));
     let name = option(args, "--name")?.unwrap_or_else(default_device_name);
     create_private_dir(&paths::config_dir())?;
@@ -1883,7 +1918,7 @@ fn codex_sandbox_problem(access: &str) -> Option<String> {
 }
 
 fn command_start(args: &[String]) -> Result<(), Box<dyn Error>> {
-    let mut config = load_config();
+    let mut config = read_config()?;
     read_token(&paths::token_file())?;
     apply_start_flags(&mut config, args)?;
     save_config(&config)?;
