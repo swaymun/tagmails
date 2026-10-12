@@ -9,14 +9,31 @@ deliberately configured. The production configuration has no public signup flag.
 
 Resend's team dashboard displays received email bodies and attachments. Resend
 retains email and log data for 30 days on Free, Pro, and Scale plans. The
-TagMails relay separately keeps raw inbound MIME in R2 for up to seven days
-after a run settles, and a Cloudflare account administrator can access that
-storage. The relay also keeps run results and transcripts in R2, and retains
-thread subjects and recipient metadata in D1. Settled outbound reply bodies
-are removed from the relay's outbox and R2 copy by scheduled cleanup; replies
-with an uncertain send outcome remain available for recovery. These properties
-do not meet a promise that the TagMails operator
-cannot browse customer messages. A shorter TagMails R2 retention period does
+TagMails relay separately keeps content in R2, where a Cloudflare account
+administrator can read it (sealed with the Worker's `STORAGE_KEY`, which the
+operator controls). Scheduled cleanup (`services/inbound-retention.mjs`) applies
+one rule per kind of content:
+
+- **Raw inbound mail** (MIME and attachments) is deleted 7 days after its job
+  finished, whether or not a reply was sent: steers, relay answers, refused
+  and failed jobs, and blocked or uncertain replies are all covered. It is
+  kept while its job is queued or running, while a steer is waiting to reach
+  the run, and while its reply is still being built. A sealed copy of the
+  request kept for a "which project?" answer is cleared at the same time.
+- **Run results** (answer, summary, transcript) are deleted 30 days after the
+  job finished. The run page and thread list then show the run without an
+  answer.
+- **Run output files** expire 7 days after upload.
+- **Outbound reply bodies** are removed once the send settles; replies with an
+  uncertain send outcome keep theirs for recovery.
+
+D1 has no job finish time, so a settled reply's last update stands in for it,
+and the job's arrival time when there is no settled reply. Results stored by
+an earlier run of a job whose lease was replaced are not tracked in D1 and are
+not yet deleted. D1 keeps metadata indefinitely for threading and billing:
+thread subjects (sealed), sender and recipient addresses, message IDs,
+timestamps, models and project folders. These properties do not meet a
+promise that the TagMails operator cannot browse customer messages. A shorter TagMails R2 retention period does
 not shorten Resend's copy.
 
 Sources: [Resend inbound visibility](https://resend.com/blog/inbound-emails),

@@ -16,7 +16,7 @@ import { handleTestWalletRequest, reconcileDueRefunds } from './billing-wallet.m
 import { chargeRelayReply, fundPendingTestEmails, reconcileTestEmailCharges, reservePendingTestEmails,
   testBillingEnabled } from './email-charges.mjs';
 import { deleteExpiredRunArtifacts } from './run-artifacts.mjs';
-import { deleteSettledInboundMime } from './inbound-retention.mjs';
+import { deleteExpiredInboundMime, deleteExpiredRunResults } from './inbound-retention.mjs';
 import { sendNextStatusReaction } from './status-reactions.mjs';
 import { accountModelCatalog } from './model-catalog.mjs';
 import { accountPreferences } from './account-preferences.mjs';
@@ -421,8 +421,10 @@ export default {
         if (!await completeOneModelClarification(env)) break;
       }
     } catch { console.error('Model clarification is delayed'); }
-    try { await deleteSettledInboundMime(env); }
+    try { await deleteExpiredInboundMime(env); }
     catch { console.error('Inbound MIME cleanup is delayed'); }
+    try { await deleteExpiredRunResults(env); }
+    catch { console.error('Run result cleanup is delayed'); }
     try { await deleteExpiredRunArtifacts(env); }
     catch { console.error('Run artifact cleanup is delayed'); }
     try { await reconcileDueRefunds(env); }
