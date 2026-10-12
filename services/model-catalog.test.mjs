@@ -37,7 +37,7 @@ test('a paired Mac publishes a bounded model list that is scoped to its owner', 
   }), /does not offer/);
   assert.deepEqual(await saveAccountPreferences(env, { id: 'account-1' }, {
     model: 'gpt-6-astra', effort: 'high', speed: 'fast',
-  }), { model: 'gpt-6-astra', effort: 'high', speed: 'fast', source: 'site', codexAccess: null, claudePermission: null, limits: null });
+  }), { model: 'gpt-6-astra', effort: 'high', speed: 'fast', source: 'site' });
   sqlite.prepare("UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE id = 'device-1'").run();
   assert.deepEqual((await accountModelCatalog(env.DB, 'account-1')).models, []);
 });
@@ -91,7 +91,7 @@ test('"use Claude" routes to the machine\'s Claude model', async () => {
     { id: 'claude-opus-5-5', effort: 'max', source: 'classified' });
 });
 
-test('a site default overrides the computer default, which overrides the account model', async () => {
+test('the computer default (start or an emailed set) wins over a site default, which wins over the account model', async () => {
   const { env, sqlite } = bindings();
   sqlite.prepare('INSERT INTO devices (id, account_id, token_hash) VALUES (?, ?, ?)')
     .run('device-1', 'account-1', createHash('sha256').update(token).digest('hex'));
@@ -102,39 +102,26 @@ test('a site default overrides the computer default, which overrides the account
   assert.equal((await publish({ model: 'gpt-6-astra', effort: 'xhigh', speed: 'fast' })).status, 200);
   // An effort the model lacks is dropped rather than trusted.
   assert.deepEqual(await accountPreferences(env, account),
-    { model: 'gpt-6-astra', effort: 'medium', speed: 'fast', source: 'computer', codexAccess: null, claudePermission: null, limits: null });
+    { model: 'gpt-6-astra', effort: 'medium', speed: 'fast', source: 'computer' });
   await publish({ model: 'gpt-6-astra', effort: 'high' });
   assert.equal((await accountPreferences(env, account)).effort, 'high');
   await saveAccountPreferences(env, account, { model: 'gpt-6-sol', effort: 'medium', speed: 'standard' });
-  assert.deepEqual(await accountPreferences(env, account),
-    { model: 'gpt-6-sol', effort: 'medium', speed: 'standard', source: 'site', codexAccess: null, claudePermission: null, limits: null });
-  assert.equal((await clearAccountPreferences(env, account)).source, 'computer');
+  assert.equal((await accountPreferences(env, account)).source, 'computer');
+  // Without a computer default, an older site's saved choice still applies.
   await publish({ model: 'not-on-this-mac' });
-  assert.equal((await accountPreferences(env, account)).source, 'default');
+  assert.deepEqual(await accountPreferences(env, account),
+    { model: 'gpt-6-sol', effort: 'medium', speed: 'standard', source: 'site' });
+  assert.equal((await clearAccountPreferences(env, account)).source, 'default');
 });
 
-test('website permissions travel with each job, and the computer reports its limits', async () => {
+test('the website cannot set permissions; they belong to the computer', async () => {
   const { env, sqlite } = bindings();
-  sqlite.prepare('INSERT INTO devices (id, account_id, token_hash) VALUES (?, ?, ?)')
-    .run('device-1', 'account-1', createHash('sha256').update(token).digest('hex'));
   const account = { id: 'account-1', default_model: 'gpt-6-sol' };
-  const choice = { model: 'gpt-6-sol', effort: 'medium', speed: 'standard' };
-  // Before the computer reports a ceiling, the website stops at write and auto.
-  await assert.rejects(saveAccountPreferences(env, account, { ...choice, codexAccess: 'full' }), /does not allow/);
-  await assert.rejects(saveAccountPreferences(env, account, { ...choice, claudePermission: 'bypassPermissions' }), /does not allow/);
-  const report = (limits) => handleDeviceRequest(new Request('https://relay.test/api/device/models', {
-    method: 'POST', headers: { Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ models: reported, limits }),
-  }), env);
-  await report({ access: 'write', claudePermission: 'auto', extra: 'ignored' });
-  await assert.rejects(saveAccountPreferences(env, account, { ...choice, codexAccess: 'full' }), /does not allow/);
-  // Only a computer that opted in locally (tagmails start --max-access full) can be set to full.
-  await report({ access: 'full', claudePermission: 'auto' });
-  await saveAccountPreferences(env, account, { ...choice, codexAccess: 'full', claudePermission: 'acceptEdits' });
-  const saved = await accountPreferences(env, account);
-  assert.deepEqual([saved.codexAccess, saved.claudePermission, saved.limits],
-    ['full', 'acceptEdits', { access: 'full', claudePermission: 'auto' }]);
-  await assert.rejects(saveAccountPreferences(env, account, { model: 'gpt-6-sol', effort: 'medium', speed: 'standard', codexAccess: 'root' }), /permission/);
-  const cleared = await clearAccountPreferences(env, account);
-  assert.equal(cleared.codexAccess, 'full', 'handing the model back keeps the permission choice');
+  sqlite.prepare(`INSERT INTO account_preferences (account_id, codex_access, claude_permission) VALUES ('account-1', 'full', 'bypassPermissions')`).run();
+  const saved = await saveAccountPreferences(env, account, { model: 'gpt-6-sol', effort: 'medium', speed: 'standard',
+    codexAccess: 'full', claudePermission: 'bypassPermissions' });
+  assert.deepEqual(saved, { model: 'gpt-6-sol', effort: 'medium', speed: 'standard', source: 'site' });
+  assert.deepEqual({ ...sqlite.prepare('SELECT codex_access, claude_permission FROM account_preferences').get() },
+    { codex_access: null, claude_permission: null });
+  assert.equal((await clearAccountPreferences(env, account)).codexAccess, undefined);
 });

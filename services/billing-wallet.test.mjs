@@ -223,20 +223,13 @@ test('scheduled reconciliation applies a refund after its first provider lookup 
   assert.equal(sqlite.prepare('SELECT count(*) n FROM refund_notifications WHERE resolved_at IS NOT NULL').get().n, 1);
 });
 
-test('live billing needs the flag and a live key, accepts only live events, and charges file transfers once', async () => {
-  const { billingLive, testBillingEnabled, chargeFileTransfer } = await import('./email-charges.mjs');
+test('live billing needs the flag and a live key', async () => {
+  const { billingLive, testBillingEnabled } = await import('./email-charges.mjs');
   assert.equal(billingLive({ BILLING_LIVE: 'true', STRIPE_SECRET_KEY: 'sk_test_x', STRIPE_WEBHOOK_SECRET: 'whsec_x' }), false);
   assert.equal(billingLive({ STRIPE_SECRET_KEY: 'rk_live_x', STRIPE_WEBHOOK_SECRET: 'whsec_x' }), false);
   const live = { BILLING_LIVE: 'true', STRIPE_SECRET_KEY: 'rk_live_x', STRIPE_WEBHOOK_SECRET: 'whsec_x' };
   assert.equal(billingLive(live), true);
   assert.equal(testBillingEnabled(live), true);
-  const { env, sqlite } = bindings();
-  Object.assign(env, live);
-  await chargeFileTransfer(env, 'account-1', 'artifact-small', 3_000_000);
-  await chargeFileTransfer(env, 'account-1', 'artifact-big', 1_200_000_000);
-  await chargeFileTransfer(env, 'account-1', 'artifact-big', 1_200_000_000);
-  const rows = sqlite.prepare('SELECT kind, amount_cents FROM credit_ledger ORDER BY kind').all().map((row) => ({ ...row }));
-  assert.deepEqual(rows, [{ kind: 'file_transfer', amount_cents: -10 }]);
 });
 
 test('live Checkout accepts only live sessions and credits a signed live payment', async () => {

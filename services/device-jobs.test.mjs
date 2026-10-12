@@ -393,32 +393,44 @@ test('a run file is uploaded under its lease, privately downloaded, and deleted 
   assert.equal(objects.has(objectKey), false);
 });
 
-test('run file uploads: 24 MB buffered, 95 MB streamed with a checked hash, 200 MB per run', async () => {
+test('run file uploads only take what fits in one email, buffered or streamed with a checked hash', async () => {
   const { env, sqlite } = bindings();
   const paired = device(sqlite);
   await inbound(env);
   const lease = envelope((await call(env, paired.token, 'claim')).body);
-  const upload = async (bytes, sha256) => handleDeviceRequest(new Request(
+  const upload = async (bytes, sha256, name = 'guide.pdf') => handleDeviceRequest(new Request(
     `https://relay.test/api/device/artifacts?jobId=${lease.jobId}&leaseId=${lease.leaseId}`, {
       method: 'POST', headers: { Authorization: `Bearer ${paired.token}`,
         'Content-Type': 'application/pdf', 'Content-Length': String(bytes.length),
-        'X-TagMails-Filename': 'guide.pdf', ...(sha256 ? { 'X-TagMails-SHA256': sha256 } : {}) }, body: bytes,
+        'X-TagMails-Filename': name, ...(sha256 ? { 'X-TagMails-SHA256': sha256 } : {}) }, body: bytes,
     }), env);
   const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
-  // Older daemons send no hash and keep the buffered 24 MB limit.
-  assert.equal((await upload(Buffer.alloc(24_000_000))).status, 201);
-  assert.equal((await upload(Buffer.alloc(24_000_001))).status, 413);
-  // A travel-guide-sized PDF streams to storage; a wrong hash stores nothing.
+  // Older daemons upload large files without asking first; nothing over the email limit is stored.
+  assert.equal((await upload(Buffer.alloc(3_500_001))).status, 413);
   const guide = Buffer.alloc(65_000_000, 1);
-  assert.equal((await upload(guide, hash(Buffer.from('other')))).status, 400);
-  assert.equal((await upload(guide, hash(guide))).status, 201);
-  assert.equal((await upload(Buffer.alloc(95_000_001), hash(Buffer.alloc(1)))).status, 413);
-  const big = Buffer.alloc(95_000_000, 2);
-  assert.equal((await upload(big, hash(big))).status, 201);
-  // 24 + 65 + 95 MB stored; 20 MB more passes the per-run limit.
-  const extra = Buffer.alloc(20_000_000, 3);
-  assert.equal((await upload(extra, hash(extra))).status, 409);
-  assert.equal(sqlite.prepare('SELECT SUM(byte_size) n FROM run_artifacts').get().n, 184_000_000);
+  assert.equal((await upload(guide, hash(guide))).status, 413);
+  assert.equal((await upload(Buffer.alloc(10), null, 'scripts.zip')).status, 400);
+  // A wrong hash stores nothing; the run's files together must still fit.
+  const first = Buffer.alloc(2_000_000, 2);
+  assert.equal((await upload(first, hash(Buffer.from('other')))).status, 400);
+  assert.equal((await upload(first, hash(first))).status, 201);
+  assert.equal((await upload(Buffer.alloc(1_500_000))).status, 201);
+  assert.equal((await upload(Buffer.alloc(1))).status, 409);
+  assert.equal(sqlite.prepare('SELECT SUM(byte_size) n FROM run_artifacts').get().n, 3_500_000);  // A retry after the lease expired gets the whole email budget again.
+  sqlite.prepare("UPDATE jobs SET lease_until = datetime('now', '-1 second')").run();
+  const retry = envelope((await call(env, paired.token, 'claim')).body);
+  assert.equal(retry.jobId, lease.jobId);
+  assert.notEqual(retry.leaseId, lease.leaseId);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) n FROM run_artifacts WHERE expires_at > CURRENT_TIMESTAMP").get().n, 0,
+    'the expired lease\'s files are marked for cleanup');
+  assert.deepEqual((await call(env, paired.token, 'file-route', { jobId: retry.jobId, leaseId: retry.leaseId,
+    name: 'guide.pdf', mimeType: 'application/pdf', size: 3_000_000 })).body, { route: 'relay' });
+  const again = Buffer.alloc(3_000_000, 4);
+  assert.equal((await handleDeviceRequest(new Request(
+    `https://relay.test/api/device/artifacts?jobId=${retry.jobId}&leaseId=${retry.leaseId}`, {
+      method: 'POST', headers: { Authorization: `Bearer ${paired.token}`, 'Content-Type': 'application/pdf',
+        'Content-Length': String(again.length), 'X-TagMails-Filename': 'guide.pdf', 'X-TagMails-SHA256': hash(again) }, body: again,
+    }), env)).status, 201);
 });
 
 test('a retried run file upload reuses its ID and rejects changed bytes or metadata', async () => {
@@ -569,8 +581,11 @@ test('a Mac running several jobs is not handed a second thread in a busy project
   const [a, b] = sqlite.prepare('SELECT j.id FROM jobs j JOIN messages m ON m.id = j.message_id ORDER BY j.rowid').all();
   sqlite.prepare('UPDATE jobs SET workspace_json = ? WHERE id = ?').run(project('/Users/me/comic'), a.id);
   sqlite.prepare('UPDATE jobs SET workspace_json = ? WHERE id = ?').run(project('/Users/me/comic'), b.id);
+  // A permission the website saved before it lost that setting never reaches the computer.
+  sqlite.prepare(`INSERT INTO account_preferences (account_id, codex_access) VALUES ('account-1', 'full')`).run();
   const first = envelope((await call(env, mac.token, 'claim', { busyFolders: [] })).body);
   assert.equal(first.workspace.path, '/Users/me/comic');
+  assert.equal(first.permissions, undefined);
   // The other comic job waits; the chat thread can run beside it.
   const second = envelope((await call(env, mac.token, 'claim', { busyFolders: ['/Users/me/comic'] })).body);
   assert.notEqual(second.workspace?.kind, 'project');
@@ -579,18 +594,19 @@ test('a Mac running several jobs is not handed a second thread in a busy project
   assert.equal(envelope((await call(env, mac.token, 'claim', {})).body).workspace.path, '/Users/me/comic');
 });
 
-test('the relay routes small mail-safe files into the email and large owner files to Drive', async () => {
+test('the relay takes only files that fit in the email; others are named as not sent', async () => {
   const { env, sqlite } = bindings();
   const mac = device(sqlite);
   await inbound(env);
   const lease = envelope((await call(env, mac.token, 'claim')).body);
   const route = async (name, size) => (await call(env, mac.token, 'file-route', { jobId: lease.jobId, leaseId: lease.leaseId, name, mimeType: 'application/pdf', size })).body;
   assert.deepEqual(await route('summary.pdf', 200_000), { route: 'relay' });
-  // Too big for email and Drive isn't connected: nothing is uploaded, the reply asks to connect.
-  assert.deepEqual(await route('tokyo.pdf', 65_364_035), { route: 'none', reason: 'drive-not-connected' });
-  assert.deepEqual(await route('scripts.zip', 2_000), { route: 'none', reason: 'drive-not-connected' });
+  // TagMails doesn't host files: too big for email, or not a type mail opens, is never uploaded.
+  assert.deepEqual(await route('tokyo.pdf', 65_364_035), { route: 'none', reason: 'too-large' });
+  assert.deepEqual(await route('scripts.zip', 2_000), { route: 'none', reason: 'too-large' });
+  assert.deepEqual(await route('more.pdf', 3_600_000), { route: 'none', reason: 'too-large' });
   assert.equal((await call(env, mac.token, 'file-route', { jobId: lease.jobId, leaseId: 'nope', name: 'a.pdf', size: 1 })).status, 409);
   // A completion can name files that could not be sent.
   assert.equal((await call(env, mac.token, 'complete', { jobId: lease.jobId, leaseId: lease.leaseId,
-    result: { state: 'completed', summary: 'Here are the guides.', unsentFiles: [{ name: 'tokyo.pdf', reason: 'drive-not-connected' }] } })).status, 200);
+    result: { state: 'completed', summary: 'Here are the guides.', unsentFiles: [{ name: 'tokyo.pdf', reason: 'too-large' }] } })).status, 200);
 });

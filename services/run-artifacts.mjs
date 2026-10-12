@@ -1,16 +1,14 @@
-import { chargeFileTransfer } from './email-charges.mjs';
+import { ATTACHABLE_BYTES } from './email-charges.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 
 export const ARTIFACT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const MAX_FILE_BYTES = 24_000_000;
-// Daemons that send the file's SHA-256 stream it straight to R2, which checks
-// the hash, so a file can be larger than Worker memory comfortably buffers.
-// 95 MB keeps one request under Cloudflare's 100 MB body limit.
-export const MAX_STREAMED_FILE_BYTES = 95_000_000;
-const MAX_RUN_BYTES = 200_000_000;
+// TagMails only keeps files long enough to attach them; a run's files must fit
+// in one email. Bigger files belong in the owner's own storage.
+const MAX_FILE_BYTES = ATTACHABLE_BYTES;
+const MAX_RUN_BYTES = ATTACHABLE_BYTES;
 const SHA256 = /^[0-9a-f]{64}$/;
 const MAX_FILES = 5;
-// Files a mail client opens directly; anything else goes out as a link.
+// Files a mail client opens directly; nothing else is accepted.
 export const EMAIL_SAFE_FILE = /\.(pdf|txt|md|csv|tsv|json|html?|rtf|docx|xlsx|pptx|odt|ods|odp|png|jpe?g|gif|webp|heic|svg|mp3|m4a|wav|mp4|mov|ics)$/i;
 const MIME_TYPE = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/i;
 
@@ -49,7 +47,7 @@ function metadata(request) {
   const sha256 = request.headers.get('x-tagmails-sha256')?.toLowerCase() ?? null;
   if (jobIds.length !== 1 || leaseIds.length !== 1 || !ARTIFACT_ID.test(jobIds[0]) ||
       !ARTIFACT_ID.test(leaseIds[0]) || !name || name.length > 120 || name === '.' || name === '..' ||
-      /[\\/\x00-\x1f\x7f]/.test(name) || !MIME_TYPE.test(mimeType) ||
+      /[\\/\x00-\x1f\x7f]/.test(name) || !EMAIL_SAFE_FILE.test(name) || !MIME_TYPE.test(mimeType) ||
       (uploadId !== null && !ARTIFACT_ID.test(uploadId)) || (sha256 !== null && !SHA256.test(sha256))) return null;
   return { jobId: jobIds[0], leaseId: leaseIds[0], name, mimeType, uploadId, sha256 };
 }
@@ -85,7 +83,7 @@ export async function uploadRunArtifact(request, env, device) {
   let byteLength;
   if (info.sha256) {
     const length = Number(request.headers.get('content-length'));
-    if (!Number.isSafeInteger(length) || length < 1 || length > MAX_STREAMED_FILE_BYTES || !request.body) {
+    if (!Number.isSafeInteger(length) || length < 1 || length > MAX_FILE_BYTES || !request.body) {
       return json({ error: 'Invalid or oversized file' }, 413);
     }
     sha256 = info.sha256;
@@ -123,11 +121,11 @@ export async function uploadRunArtifact(request, env, device) {
       WHERE EXISTS (SELECT 1 FROM jobs j JOIN threads t ON t.id = j.thread_id
         WHERE j.id = ? AND j.lease_id = ? AND j.device_id = ? AND t.account_id = ?
           AND j.state = 'running' AND j.lease_until > CURRENT_TIMESTAMP)
-        AND (SELECT COUNT(*) FROM run_artifacts WHERE job_id = ?) < ?
-        AND COALESCE((SELECT SUM(byte_size) FROM run_artifacts WHERE job_id = ?), 0) + ? <= ?
+        AND (SELECT COUNT(*) FROM run_artifacts WHERE job_id = ? AND lease_id = ?) < ?
+        AND COALESCE((SELECT SUM(byte_size) FROM run_artifacts WHERE job_id = ? AND lease_id = ?), 0) + ? <= ?
       RETURNING id`).bind(id, device.account_id, info.jobId, info.leaseId, key,
       info.name, info.mimeType, bytes.length, sha256, info.jobId, info.leaseId, device.id,
-      device.account_id, info.jobId, MAX_FILES, info.jobId, bytes.length, MAX_RUN_BYTES).first();
+      device.account_id, info.jobId, info.leaseId, MAX_FILES, info.jobId, info.leaseId, bytes.length, MAX_RUN_BYTES).first();
     if (!inserted) {
       await env.MAIL.delete(key);
       return json({ error: 'Lease expired or file limit reached' }, 409);
@@ -140,7 +138,6 @@ export async function uploadRunArtifact(request, env, device) {
     }
     throw error;
   }
-  await chargeFileTransfer(env, device.account_id, id, bytes.length);
   return json({ id, name: info.name, mimeType: info.mimeType, size: bytes.length,
     expiresInDays: 7 }, 201);
 }

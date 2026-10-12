@@ -811,7 +811,9 @@ test('archives, large, expired, and different-job files are never attached to an
   assert.equal((await sendNextOutbox(env, { sendEmail: async (payload) => { sent = payload; return { data: { id: 'large-1' } }; },
     getSentEmail: async () => ({ data: { message_id: '<large-1@tagmails.test>' } }) })).state, 'sent');
   assert.equal(sent.attachments, undefined);
-  assert.match(sent.text, /Download 2 more files \(7 days\): https:\/\/tagmails\.example\/\?run=job-1#files/);
+  // TagMails links no hosted downloads; it names what didn't fit.
+  assert.match(sent.text, /Not sent: scripts\.zip, file\.txt\. Email fits 3\.5 MB of files/);
+  assert.doesNotMatch(sent.text, /Download/);
   assert.match(sent.text, /Transcript/);
 });
 

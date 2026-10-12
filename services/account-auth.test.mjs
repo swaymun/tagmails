@@ -136,13 +136,13 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   assert.deepEqual(await (await handleAccountRequest(preferencesRequest(customOrigin), env, options)).json(), {
-    model: 'gpt-6.1-sol', effort: 'medium', speed: 'standard', source: 'default', codexAccess: null, claudePermission: null, limits: null,
+    model: 'gpt-6.1-sol', effort: 'medium', speed: 'standard', source: 'default',
   });
   const changedPreferences = await handleAccountRequest(preferencesRequest(customOrigin, 'POST', {
     model: 'gpt-6-luna', effort: 'low', speed: 'fast',
   }), env, options);
   assert.equal(changedPreferences.status, 200);
-  assert.deepEqual(await changedPreferences.json(), { model: 'gpt-6-luna', effort: 'low', speed: 'fast', source: 'site', codexAccess: null, claudePermission: null, limits: null });
+  assert.deepEqual(await changedPreferences.json(), { model: 'gpt-6-luna', effort: 'low', speed: 'fast', source: 'site' });
   assert.equal((await handleAccountRequest(preferencesRequest('https://attacker.test', 'POST', {
     model: 'gpt-6-sol', effort: 'medium', speed: 'standard',
   }), env, options)).status, 403);
@@ -381,7 +381,7 @@ test('the private Site can show the owner account and manage only its paired dev
   assert.equal(account.headers.get('access-control-allow-origin'), env.SITE_ORIGIN);
   assert.deepEqual(await account.json(), { ownerEmail: 'owner@gmail.com',
     agentEmail: 'agent@wonder.test', defaultModel: 'gpt-6.1-sol', deliveryReady: false, addressDomain: null,
-    addressChangesLeft: 3, driveConnected: false });
+    addressChangesLeft: 3 });
   assert.equal((await handleAccountRequest(site('/api/site/devices'), env, options)).status, 200);
   const code = await (await handleAccountRequest(site('/api/site/pairing-code', 'POST'), env, options)).json();
   assert.match(code.code, /^tm_pair_[A-Za-z0-9_-]{27}$/);

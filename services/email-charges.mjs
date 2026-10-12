@@ -2,7 +2,6 @@ import { notifyDevices } from './device-push.mjs';
 
 export const TEST_EMAIL_CENTS = 5;
 
-export const FILE_TRANSFER_CENTS_PER_GB = 5;
 // Cloudflare Email Sending caps a whole message at 5 MiB. Base64 adds a third,
 // so 3.5 MB of files plus a 32k-character answer stays under it.
 export const ATTACHABLE_BYTES = 3_500_000;
@@ -19,14 +18,6 @@ export function testBillingEnabled(env) {
   return env.BILLING_TEST_MODE === 'true' &&
     /^(?:sk|rk)_test_/.test(env.STRIPE_SECRET_KEY ?? '') &&
     env.STRIPE_WEBHOOK_SECRET?.startsWith('whsec_');
-}
-
-// Files too big to attach become download links: $0.05 per started GB.
-export async function chargeFileTransfer(env, accountId, artifactId, bytes) {
-  if (!testBillingEnabled(env) || bytes <= ATTACHABLE_BYTES) return;
-  const cents = Math.ceil(bytes / 1e9) * FILE_TRANSFER_CENTS_PER_GB;
-  await env.DB.prepare(`INSERT OR IGNORE INTO credit_ledger (id, account_id, amount_cents, kind, source_id)
-    VALUES (?, ?, ?, 'file_transfer', ?)`).bind(crypto.randomUUID(), accountId, -cents, artifactId).run();
 }
 
 function changed(result) {
