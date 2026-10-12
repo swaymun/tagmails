@@ -51,8 +51,9 @@ export async function whileHoldingClaim(claim, work, { release = async () => {},
   const stop = keepClaim(claim, () => { lost = true; }, options);
   try {
     const value = await work();
-    // A renewal still in flight could report the loss after we return; ask
-    // once more now, so a revoked or replaced lease never reaches the agent.
+    // A renewal still in flight could report the loss after we return: wait
+    // for it, then ask once more, so a lost lease never reaches the agent.
+    await stop.settled();
     if (!lost) {
       try { await (options.renew ?? renewClaim)(claim); }
       catch (error) { if (error.leaseGone) lost = true; }
@@ -91,10 +92,13 @@ export function keepClaim(claim, onLost, { every = Number(process.env.TAGMAILS_C
   // deliver one twice. Each holds its delivery promise from the first offer, so
   // a renewal that overlaps a slow delivery waits on it instead of delivering again.
   const handled = new Map();
+  let inflight = Promise.resolve();
   const timer = setInterval(async () => {
     if (lost) return;
     try {
-      const renewed = await renew(claim);
+      const pending = renew(claim);
+      inflight = Promise.all([inflight, pending.then(() => {}, () => {})]);
+      const renewed = await pending;
       lastOk = now();
       for (const steer of onSteer ? renewed?.steers ?? [] : []) {
         // A different sender's follow-up never joins this turn (it may run with
@@ -114,5 +118,8 @@ export function keepClaim(claim, onLost, { every = Number(process.env.TAGMAILS_C
       if (error.leaseGone || now() - lastOk >= leaseMs) { lost = true; onLost(); }
     }
   }, every);
-  return () => clearInterval(timer);
+  // stop.settled() resolves once a renewal still in flight has been handled.
+  const stop = () => clearInterval(timer);
+  stop.settled = async () => { await inflight; await new Promise((resolve) => setImmediate(resolve)); };
+  return stop;
 }

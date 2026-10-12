@@ -1414,6 +1414,13 @@ mod tests {
         fs::write(paths::config_file(), b"{\"access\": \"read\",").unwrap();
         assert!(read_config().unwrap_err().contains("not a valid settings file"));
         assert!(settings_from_config().is_err(), "the service must not start on the defaults");
+        for broken in [r#"{"access":null}"#, r#"{"workspace":17}"#, r#"{"claudePermission":[]}"#, r#"{"access":"everything"}"#] {
+            fs::write(paths::config_file(), broken).unwrap();
+            assert!(read_config().is_err(), "{broken}");
+        }
+        // What `tagmails start` writes today stays valid.
+        fs::write(paths::config_file(), r#"{"access":"write","claudePermission":"auto","maxAccess":"write","maxClaudePermission":"auto","relay":"https://relay.test","workspace":null,"defaults":null}"#).unwrap();
+        assert!(read_config().is_ok());
         fs::write(paths::config_file(), &saved).unwrap();
         assert_eq!(read_config().unwrap(), load_config());
         // A symlink an agent plants among the email settings is never followed into config.json.
@@ -1899,7 +1906,25 @@ fn read_config() -> Result<Value, String> {
     serde_json::from_slice::<Value>(&bytes)
         .ok()
         .filter(Value::is_object)
+        .filter(valid_permission_fields)
         .ok_or_else(|| format!("{} is not a valid settings file; fix it or run `tagmails start` with your flags after deleting it", file.display()))
+}
+
+/// Permission and folder fields that are present must be strings with a known
+/// value: `"access": null` would otherwise read as the broader default.
+fn valid_permission_fields(config: &Value) -> bool {
+    let allowed: [(&str, &[&str]); 5] = [
+        ("access", &["read", "write", "full"]),
+        ("maxAccess", &["read", "write", "full"]),
+        ("claudePermission", &["readonly", "manual", "acceptEdits", "auto", "bypassPermissions"]),
+        ("maxClaudePermission", &["readonly", "manual", "acceptEdits", "auto", "bypassPermissions"]),
+        ("routingContext", &["full", "files"]),
+    ];
+    allowed.iter().all(|(key, values)| match config.get(*key) {
+        None => true,
+        Some(value) => value.as_str().is_some_and(|text| values.contains(&text)),
+    // `tagmails start --projects` saves "workspace": null.
+    }) && ["workspace", "relay"].iter().all(|key| config.get(*key).is_none_or(|value| value.is_string() || value.is_null()))
 }
 
 /// Settings for display and model defaults, where a broken file means none.

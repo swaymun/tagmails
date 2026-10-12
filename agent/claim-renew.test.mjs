@@ -122,6 +122,14 @@ test('preparing a run renews the lease, and a lease lost meanwhile releases the 
   await assert.rejects(whileHoldingClaim({}, slow, { every: 5, release: async (value) => released.push(value),
     renew: async () => { throw Object.assign(new Error('gone'), { leaseGone: true }); } }), /lost while preparing/);
   assert.deepEqual(released, [{ staged: true }]);
+  // A renewal still in flight when preparation ends is waited for, even if the final check fails for another reason.
+  let calls = 0;
+  await assert.rejects(whileHoldingClaim({}, () => new Promise((resolve) => setTimeout(() => resolve({ staged: true }), 8)), {
+    every: 5, renew: async () => {
+      calls += 1;
+      if (calls === 1) { await new Promise((resolve) => setTimeout(resolve, 30)); throw Object.assign(new Error('gone'), { leaseGone: true }); }
+      throw new Error('network blip');
+    } }), /lost while preparing/);
   // Preparation that ends before the first renewal still checks the lease before the agent starts.
   await assert.rejects(whileHoldingClaim({}, async () => ({ staged: true }), { every: 60_000,
     renew: async () => { throw Object.assign(new Error('gone'), { leaseGone: true }); } }), /lost while preparing/);
