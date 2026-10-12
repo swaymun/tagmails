@@ -1,0 +1,176 @@
+<!doctype html>
+<!-- Source for the README screenshots. Made-up people and projects only.
+     Render with: node scripts/render-readme-shots.mjs -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tagmails threads</title>
+<style>
+  :root { --ink:#1f1f1f; --muted:#5e5e5e; --line:#e3e3e3; --bg:#f6f8fc; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); font:14px/1.5 Roboto, "Helvetica Neue", Arial, sans-serif; color:var(--ink); }
+  .scene { display:none; width:760px; padding:16px; }
+  .scene.on { display:block; }
+  .card { background:#fff; border-radius:16px; padding:20px 24px 18px; }
+  .subject { display:flex; align-items:center; gap:10px; margin:0 0 18px 52px; }
+  .subject h1 { font-size:22px; font-weight:400; margin:0; }
+  .chip { font-size:12px; background:#ddd; color:#444; border-radius:4px; padding:0 6px; }
+  .msg { display:grid; grid-template-columns:40px 1fr; gap:12px; padding:14px 0; border-top:1px solid var(--line); }
+  .msg:first-of-type { border-top:0; padding-top:0; }
+  .avatar { width:40px; height:40px; border-radius:50%; display:grid; place-items:center; color:#fff; font-size:17px; }
+  .you { background:#5b7fd6; }
+  .agent { background:#172620; }
+  .agent svg { width:22px; height:22px; }
+  .head { display:flex; justify-content:space-between; align-items:baseline; }
+  .who b { font-weight:600; }
+  .who span { color:var(--muted); font-size:12px; }
+  .time { color:var(--muted); font-size:12px; white-space:nowrap; }
+  .to { color:var(--muted); font-size:12px; margin-top:-2px; }
+  .body { margin-top:10px; }
+  .body p { margin:0 0 10px; }
+  .body ul, .body ol { margin:0 0 10px; padding-left:22px; }
+  .body code { font:13px/1.4 "SF Mono", Menlo, Consolas, monospace; background:#f1f3f1; border-radius:4px; padding:1px 4px; }
+  .collapsed .body { display:none; }
+  .collapsed .snippet { color:var(--muted); margin-top:2px; }
+  .reaction { display:inline-flex; gap:4px; align-items:center; border:1px solid var(--line); border-radius:12px; padding:0 8px; font-size:13px; margin-top:2px; }
+  .footer { margin-top:16px; padding-top:8px; border-top:1px solid #e6e8e4; color:#6f7a73; font-size:12px; }
+  .footer a { color:#1f5c41; }
+  .footer .sep { color:#b3bab5; padding:0 6px; }
+  .brand b { color:#1d2420; }
+  .brand i { font-style:normal; display:inline-block; background:#1d2420; color:#d0f06c; border-radius:4px; padding:0 4px; margin-right:3px; font-size:11px; line-height:16px; }
+  .attach { margin-top:12px; display:flex; gap:10px; }
+  .file { width:230px; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .file .thumb { height:104px; background:#f1f3f4; display:grid; place-items:center; }
+  .file .name { white-space:nowrap; font-size:12px; padding:6px 8px; border-top:1px solid var(--line); display:flex; gap:6px; align-items:center; }
+  .file .name small { color:var(--muted); margin-left:auto; }
+  .badge { background:#1e8e3e; color:#fff; font-size:9px; font-weight:700; border-radius:2px; padding:1px 3px; }
+  .actions { display:flex; gap:10px; margin:6px 0 0 52px; }
+  .actions span { border:1px solid #747775; border-radius:18px; padding:6px 16px; color:#444; font-size:13px; }
+</style>
+</head>
+<body>
+
+<!-- 1. A question about a project, answered in the same thread -->
+<section class="scene" id="ask">
+  <div class="card">
+    <div class="subject"><h1>Login page flash</h1><span class="chip">Inbox</span></div>
+    <div class="msg">
+      <div class="avatar you">M</div>
+      <div>
+        <div class="head"><div class="who"><b>Maya Okafor</b> <span>&lt;maya.okafor@example.com&gt;</span></div><div class="time">9:14 AM</div></div>
+        <div class="to">to maya-agent</div>
+        <div class="body"><p>In my-app, why does the login page flash white before the dark theme kicks in? Don't change anything yet, just tell me.</p></div>
+      </div>
+    </div>
+    <div class="msg">
+      <div class="avatar agent"><svg viewBox="0 0 64 64"><path d="M18 43 43 18M27 18h16v16" fill="none" stroke="#d0f06c" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div>
+        <div class="head"><div class="who"><b>maya-agent</b> <span>&lt;maya-agent@tagmails.com&gt;</span></div><div class="time">9:16 AM</div></div>
+        <div class="to">to me</div>
+        <div class="body">
+          <p>The theme is applied after React mounts, so the first paint uses the default white background.</p>
+          <ul>
+            <li><code>src/theme/ThemeProvider.tsx</code> reads the saved theme in a <code>useEffect</code>, which runs after the first paint.</li>
+            <li><code>index.html</code> has no background color, so the browser paints white until then.</li>
+          </ul>
+          <p>Fix: add a tiny inline script in <code>index.html</code> that sets <code>data-theme</code> from <code>localStorage</code> before the bundle loads, and give <code>html</code> a dark background for that theme. Reply "go ahead" and I'll make the change.</p>
+          <div class="footer">
+            <a href="#">Open in Codex</a><span class="sep">·</span>GPT-6 Sol Medium<span class="sep">·</span>in my-app<span class="sep">·</span>Balance $9.41<span class="sep">·</span><span class="brand"><i>↗</i><b>tagmails</b><b style="color:#7aa33a">.</b></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="actions"><span>↩ Reply</span><span>↪ Forward</span></div>
+</section>
+
+<!-- 2. A follow-up sent mid-run joins the running task -->
+<section class="scene" id="steer">
+  <div class="card">
+    <div class="subject"><h1>Rate limit the login endpoint</h1><span class="chip">Inbox</span></div>
+    <div class="msg collapsed">
+      <div class="avatar you">M</div>
+      <div>
+        <div class="head"><div class="who"><b>Maya Okafor</b></div><div class="time">2:02 PM</div></div>
+        <div class="snippet">In api-server, add rate limiting to POST /login: 5 tries per minute per IP, with a test.</div>
+        <div class="reaction">👀</div>
+      </div>
+    </div>
+    <div class="msg">
+      <div class="avatar you">M</div>
+      <div>
+        <div class="head"><div class="who"><b>Maya Okafor</b> <span>&lt;maya.okafor@example.com&gt;</span></div><div class="time">2:04 PM</div></div>
+        <div class="to">to maya-agent</div>
+        <div class="body"><p>Actually, make it 10 per minute, and cover /signup too.</p></div>
+      </div>
+    </div>
+    <div class="msg">
+      <div class="avatar agent"><svg viewBox="0 0 64 64"><path d="M18 43 43 18M27 18h16v16" fill="none" stroke="#d0f06c" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div>
+        <div class="head"><div class="who"><b>maya-agent</b> <span>&lt;maya-agent@tagmails.com&gt;</span></div><div class="time">2:09 PM</div></div>
+        <div class="to">to me</div>
+        <div class="body">
+          <p>Done. <code>POST /login</code> and <code>POST /signup</code> now allow 10 requests per minute per IP and answer <code>429</code> with a <code>Retry-After</code> header after that.</p>
+          <ul>
+            <li>New middleware in <code>src/middleware/rateLimit.ts</code>, applied to both routes in <code>src/routes/auth.ts</code>.</li>
+            <li><code>test/rateLimit.test.ts</code> covers the 11th request and the reset. <code>npm test</code> passes (48 tests).</li>
+          </ul>
+          <p>Your 2:04 note reached me mid-run, so the limit is 10, not 5. Not committed yet.</p>
+          <div class="footer">
+            <a href="#">Open in Claude</a><span class="sep">·</span>Claude Sonnet 5.5 High<span class="sep">·</span>in api-server<span class="sep">·</span><span class="brand"><i>↗</i><b>tagmails</b><b style="color:#7aa33a">.</b></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="actions"><span>↩ Reply</span><span>↪ Forward</span></div>
+</section>
+
+<!-- 3. Ask for a file and it arrives attached -->
+<section class="scene" id="file">
+  <div class="card">
+    <div class="subject"><h1>Signups chart</h1><span class="chip">Inbox</span></div>
+    <div class="msg">
+      <div class="avatar you">M</div>
+      <div>
+        <div class="head"><div class="who"><b>Maya Okafor</b> <span>&lt;maya.okafor@example.com&gt;</span></div><div class="time">Sun 6:40 PM</div></div>
+        <div class="to">to maya-agent</div>
+        <div class="body"><p>From the analytics project, send me a chart of weekly signups for the last 12 weeks as a PNG.</p></div>
+      </div>
+    </div>
+    <div class="msg">
+      <div class="avatar agent"><svg viewBox="0 0 64 64"><path d="M18 43 43 18M27 18h16v16" fill="none" stroke="#d0f06c" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div>
+        <div class="head"><div class="who"><b>maya-agent</b> <span>&lt;maya-agent@tagmails.com&gt;</span></div><div class="time">Sun 6:43 PM</div></div>
+        <div class="to">to me</div>
+        <div class="body">
+          <p>Attached: weekly signups for the 12 weeks to October 11, from <code>data/signups.parquet</code>.</p>
+          <p>Signups rose from 212 to 389 a week. The jump in week 9 lines up with the referral launch on September 14.</p>
+          <div class="attach">
+            <div class="file">
+              <div class="thumb">
+                <svg width="150" height="78" viewBox="0 0 150 78"><g fill="#7aa33a">
+                  <rect x="4" y="52" width="9" height="22"/><rect x="16" y="50" width="9" height="24"/><rect x="28" y="48" width="9" height="26"/><rect x="40" y="49" width="9" height="25"/>
+                  <rect x="52" y="45" width="9" height="29"/><rect x="64" y="44" width="9" height="30"/><rect x="76" y="42" width="9" height="32"/><rect x="88" y="40" width="9" height="34"/>
+                  <rect x="100" y="24" width="9" height="50"/><rect x="112" y="20" width="9" height="54"/><rect x="124" y="16" width="9" height="58"/><rect x="136" y="12" width="9" height="62"/></g>
+                  <line x1="2" y1="74.5" x2="148" y2="74.5" stroke="#9aa39d"/></svg>
+              </div>
+              <div class="name"><span class="badge">PNG</span>weekly-signups.png<small>86 KB</small></div>
+            </div>
+          </div>
+          <div class="footer">
+            <a href="#">Open in Codex</a><span class="sep">·</span>GPT-6 Luna Medium<span class="sep">·</span>in analytics<span class="sep">·</span><span class="brand"><i>↗</i><b>tagmails</b><b style="color:#7aa33a">.</b></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="actions"><span>↩ Reply</span><span>↪ Forward</span></div>
+</section>
+
+<script>
+  const scene = new URLSearchParams(location.search).get('scene') || 'ask';
+  document.getElementById(scene).classList.add('on');
+</script>
+</body>
+</html>

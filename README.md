@@ -1,63 +1,132 @@
-<p><img src="assets/brand/wordmark.svg" alt="tagmails." height="48"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/wordmark-dark.png">
+    <img src="assets/readme/wordmark-light.png" alt="tagmails." width="268" height="64">
+  </picture>
+</p>
 
-Email your coding agent: Tagmails hands each email to Codex or Claude Code on your own Mac or Linux machine, in the right project folder, and replies in the same Gmail thread.
+<p align="center"><b>Email your coding agent.</b> Tagmails gives Codex or Claude Code on your own computer an email address. Write to it from Gmail, and the answer comes back in the same thread.</p>
+
+<p align="center"><a href="https://tagmails.com">tagmails.com</a> · <a href="#quick-start">Quick start</a> · <a href="docs/self-hosting.md">Self-host</a></p>
+
+## What it looks like
+
+Ask about a project by name. The agent works in that folder on your computer and replies in the thread.
+
+<img src="assets/readme/ask.png" alt="A Gmail thread: Maya asks why the login page in my-app flashes white, and her agent replies two minutes later with the cause and a proposed fix." width="760">
+
+Changed your mind while it's working? Just reply. The follow-up joins the run that's already going.
+
+<img src="assets/readme/steer.png" alt="A Gmail thread: Maya asks for rate limiting on /login, then two minutes later replies to make it 10 per minute and cover /signup too. The agent's reply covers both." width="760">
+
+Ask for a file and it arrives attached.
+
+<img src="assets/readme/file.png" alt="A Gmail thread: Maya asks for a weekly signups chart as a PNG, and the agent replies with a short summary and weekly-signups.png attached." width="760">
 
 ## Quick start
 
-1. Sign in with Google at [tagmails.com](https://tagmails.com) and add a balance (you pay per email).
-2. Click **Copy setup prompt** and paste it into Codex or Claude Code on the Mac or Linux machine that should do the work. It installs `tagmails`, pairs the machine, starts it, and saves where your large files should go.
-3. Email your agent address from that Gmail account. Reply in the thread to continue.
+You need a Mac or Linux computer with [Codex](https://developers.openai.com/codex) or [Claude Code](https://code.claude.com) signed in, and a Gmail account.
 
-**Or skip the website:** tell Codex or Claude Code on that machine "Read https://tagmails.com/skill.md and set up Tagmails". It asks which agent and default model to use, runs `tagmails pair`, and shows you a link; you open it and continue with Google (your first sign-in creates the account).
+1. Sign in with Google at [tagmails.com](https://tagmails.com) and add a balance.
+2. Click **Copy setup prompt** and paste it into Codex or Claude Code on the computer that should do the work. It installs Tagmails, connects the computer to your account and starts it.
+3. Email your agent address from that Gmail account. Reply in the thread to keep going.
 
-By hand instead: `brew install swaymun/tagmails/tagmails` (or `curl -fsSL https://tagmails.com/install.sh | sh`, Node.js 20.16+), then `tagmails pair` (open the link it prints) and `tagmails start --projects`.
+Prefer to skip the website? Tell Codex or Claude Code: "Read https://tagmails.com/skill.md and set up Tagmails."
 
-`tagmails doctor` checks the setup and prints a fix for each problem. `tagmails status`, `logs`, `stop`, `open <thread-id>` and `uninstall` cover the rest; see `tagmails --help`.
+<details>
+<summary>Or set it up by hand</summary>
 
-**Self-host** on your own Cloudflare account: `npm ci && node scripts/self-host-setup.mjs`, then pair with `--relay <your-origin>`. See [docs/self-hosting.md](docs/self-hosting.md).
+```sh
+brew install swaymun/tagmails/tagmails             # or: curl -fsSL https://tagmails.com/install.sh | sh  (needs Node.js 20.16+)
+tagmails pair                                      # prints a link; open it and continue with Google
+tagmails start --projects                          # runs in the background, picks a project folder per email
+tagmails doctor                                    # checks the setup and prints a fix for each problem
+```
+
+`tagmails status`, `logs`, `stop`, `open <thread-id>` and `uninstall` cover the rest; see `tagmails --help`.
+
+</details>
 
 ## How it works
 
-```
-Gmail ─► relay Worker (services/: D1, R2) ─► tagmails daemon (crates/) ─► Codex / Claude Code (agent/)
-                                                                                     │
-Gmail thread ◄──────────────── relay outbox ◄──────────── result ◄───────────────────┘
-```
+1. You send an email to your agent address.
+2. The Tagmails relay checks that it really came from you (Gmail's signature has to match), seals it so only your computer can read the stored copy, and hands it to your computer.
+3. Your computer picks the model and the project folder. Name a project ("in my-app …") or a path ("work in ~/code/api"); if nothing fits, the agent works in a fresh chat folder.
+4. Codex or Claude Code runs right there, with your files, your tools and your own plan. Your Codex or Claude sessions stay on your computer, so you can open the same session later (`tagmails open`).
+5. The answer comes back in the same Gmail thread, with any files you asked for (up to 3.5 MB in total). Reply to continue the same session.
 
-- The relay authenticates the sender, picks the model and project folder, and pushes the job to your paired machine.
-- The daemon runs the agent in that folder and uploads the result; the relay replies in the thread with up to 3.5 MB of email-safe attachments. Tagmails hosts nothing larger.
-- `apps/mock-inbox` runs the whole loop locally without real mail.
+If your computer is asleep, the email waits until it's back. Up to three emails run at once, one per project folder.
+
+More detail: [project routing](docs/project-routing.md).
+
+## Pricing
+
+**$0.0025 per email you send** (a quarter of a cent; $1 covers 400 emails), from a prepaid balance. The agent runs on your own Codex or Claude plan, so Tagmails never charges for model usage. Follow-ups that join a running task are free. Details: [docs/pricing.md](docs/pricing.md).
+
+## Privacy
+
+- **Stored mail is sealed to your computer.** When you pair, your computer makes a key that never leaves it. Everything the relay keeps about your mail (the message, attachments, subject, the agent's answer and transcript) is encrypted to that key, so the people running Tagmails can't read it back.
+- **What the relay sees in transit.** It reads each email in memory to check the sender, seal it and send the reply. It keeps metadata it needs to thread and bill: addresses, message IDs, times, the model and the project folder name. It also keeps your computer's list of project folders, encrypted with the relay's own key.
+- **Choosing the model and folder** happens on your computer, with your own Claude or Codex subscription.
+- Stored mail is deleted 7 days after its run finishes, answers after 30 days.
+
+Exactly what is and isn't visible: [docs/email-privacy.md](docs/email-privacy.md).
 
 ## Permissions
 
-Defaults are **Tagmails recommended permissions**: Codex `write` with Codex's automatic reviewer deciding sandbox escalations, and Claude Code `auto`. They change only with `tagmails start` on the machine.
+What the agent may do is set on your computer, never by email or the website. The defaults for your own emails:
 
-| Flag | Effect |
+- **Codex** can edit files in the project folder, read elsewhere, and use the network (so `git push` works). Anything beyond that goes to Codex's automatic reviewer, since nobody can click "approve" in an email.
+- **Claude Code** runs in its `auto` mode, like it does in your terminal.
+
+Change them with `tagmails start`:
+
+| Option | What it does |
 | --- | --- |
-| `--access read` | Read the folder, no edits. |
-| `--access write` (default) | Edit inside the chosen folder. |
-| `--access full` | No sandbox; runs only verified owner emails. |
-| `--claude-permission manual\|accept-edits\|auto\|bypass` | Claude Code mode, default `auto`; `bypass` is owner-only. |
-| `--projects` (default) / `--workspace PATH` | Pick a recent project folder per thread, or pin one folder. |
+| `--access read` | Look but don't touch: no edits. |
+| `--access write` | The default described above. |
+| `--access full` | No sandbox. Only your own emails can use it. |
+| `--claude-permission manual\|accept-edits\|auto\|bypass` | Claude Code's mode (default `auto`; `bypass` is for your own emails only). |
+| `--projects` / `--workspace PATH` | Pick a recent project folder for each email (default), or always use one folder. |
 
-`tagmails set` changes model defaults (`--model`, `--effort`, `--speed`) and your standing instructions (`--instructions`, for example where large files go) without a restart, and you can ask for it by email. Owner emails get your MCP servers, connectors and skills; participant emails get none.
+**Other people in the thread.** Anyone you put in To or Cc can reply in that thread and ask the agent things too. Their requests run with tighter limits: no network, no shell for Claude, none of your connectors or skills, and they never see your balance.
 
-Linux containers (Docker, RunPod) usually block Codex's sandbox; `tagmails start` warns and suggests a VM or `--access full`.
+## Settings by email
 
-## Security model
+Some settings you can change just by asking, in any email:
 
-- The owner is recognized only by DMARC (Resend) or an aligned DKIM signature covering From, body and a To/Cc naming the agent (Cloudflare). Other senders must be participants the owner added to that thread.
-- The device token stays on the machine; the relay keeps its hash, and the daemon rejects claims not HMAC-signed with it.
-- Agents run only in folders the daemon published or a per-thread chat folder. Attachments are labeled untrusted.
-- Stored mail is sealed to your machine. `tagmails pair` (or the first `tagmails start` on an older pairing) creates an X25519 key in the config folder; the private half never leaves it. The relay seals everything it keeps about your mail (the message, attachments, subject, the agent's answer and transcript, any reply waiting to go out) to the public half, so the operator can't read it back. The relay still reads each email in memory to check the sender, route it and send the reply, and routing (which model, which project, whether a follow-up steers) runs on your machine with your own Claude or Codex subscription, so no third party reads the email for it. Addresses, Message-IDs, times, models and project folder names stay readable. With no connected machine to seal to, the relay answers the email and keeps nothing; machines older than 0.2.24 get no work. Details: [docs/email-privacy.md](docs/email-privacy.md).
+- **Default model and effort**: "From now on use Sol on high." Or for one email only, add a line like `Model: Luna`.
+- **Standing instructions** that every email follows, for example "Put files too big for email in my Google Drive." The reply tells you when they changed.
+
+The same from a terminal: `tagmails set --model ID --effort LEVEL --instructions "…"`, and `tagmails set --reactions on` for 👀/✅ status reactions on your emails. Permissions and folders can only be changed on the computer itself.
+
+## Self-hosting
+
+The relay is one Cloudflare Worker with a D1 database and an R2 bucket. To run your own:
+
+```sh
+npm ci && node scripts/self-host-setup.mjs
+```
+
+then pair with `tagmails pair --relay <your-worker-url>`. Step-by-step guide: [docs/self-hosting.md](docs/self-hosting.md), or hand [docs/setup-for-agents.md](docs/setup-for-agents.md) to your coding agent.
 
 ## Development
 
-```sh
-npm ci && npm test                       # Worker, adapters, lab
-cargo test -p tagmails-daemon
-npm run lab                              # local inbox at http://127.0.0.1:4177
-cargo run -p tagmails-daemon -- --once   # mock agent takes one lab job
+```
+Gmail ─► relay (services/, Cloudflare Worker) ─► tagmails daemon (crates/, Rust) ─► Codex / Claude Code (agent/, Node)
+  ▲                                                                                     │
+  └──────────────────────── reply in the same thread ◄──────────────────────────────────┘
 ```
 
-[AGENTS.md](AGENTS.md) covers deploys, releases and conventions. MIT [license](LICENSE).
+```sh
+npm ci && npm test                       # relay, adapters and the local lab
+cargo test -p tagmails-daemon            # the daemon
+npm run lab                              # a local Gmail-like inbox at http://127.0.0.1:4177
+cargo run -p tagmails-daemon -- --once   # a mock agent takes one job from the lab
+```
+
+[AGENTS.md](AGENTS.md) has the conventions for coding agents and contributors. Found a security issue? See [SECURITY.md](SECURITY.md).
+
+## License
+
+[MIT](LICENSE)
