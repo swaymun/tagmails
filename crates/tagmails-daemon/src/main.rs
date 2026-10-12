@@ -736,10 +736,13 @@ fn workspace_file_type(name: &str) -> &'static str {
 
 fn answer_file(result: &Value) -> Vec<u8> {
     let mut lines = Vec::new();
-    if let Some(summary) = result["summary"].as_str() {
-        lines.push(summary.to_owned());
+    // The full answer the email shows; summary and details are only its preview.
+    let answer = result["answer"].as_str().filter(|answer| !answer.trim().is_empty());
+    if let Some(text) = answer.or(result["summary"].as_str()) {
+        lines.push(text.to_owned());
     }
-    for field in ["details", "checks"] {
+    let fields: &[&str] = if answer.is_some() { &["checks"] } else { &["details", "checks"] };
+    for field in fields.iter().copied() {
         if let Some(items) = result[field].as_array() {
             for item in items {
                 if let Some(text) = item.as_str() {
@@ -1389,6 +1392,11 @@ mod tests {
             String::from_utf8(answer_file(&result)).unwrap(),
             "Done.\n\nFound two items.\n\nNo files changed.\n"
         );
+        // A long answer is exported whole, not its short preview.
+        let long = format!("{}END-OF-ANSWER", "word ".repeat(1500));
+        let result = json!({"summary":"Preview.","details":["Preview detail."],"answer":long,"checks":["No files changed."]});
+        let text = String::from_utf8(answer_file(&result)).unwrap();
+        assert!(text.contains("END-OF-ANSWER") && !text.contains("Preview"));
     }
 
     #[test]
