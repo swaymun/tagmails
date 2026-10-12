@@ -4,7 +4,7 @@
 #   curl -fsSL https://tagmails.com/install.sh | sh
 #
 # Installs into ~/.local/lib/tagmails and links ~/.local/bin/tagmails.
-# Needs Node.js 20+ with npm. Prebuilt binaries cover macOS and Linux on arm64
+# Needs Node.js 20.16+ with npm. Prebuilt binaries cover macOS and Linux on arm64
 # and x86_64; elsewhere (or with TAGMAILS_FROM_SOURCE=1) it builds with Rust.
 # Every download is checked against SHA-256 sums: the ones pinned below for
 # the default version, or the release's SHA256SUMS for TAGMAILS_VERSION.
@@ -60,10 +60,11 @@ main() {
     *) ARCH="" ;;
   esac
 
-  command -v node >/dev/null 2>&1 || fail "Node.js 20 or newer is required: https://nodejs.org (or your package manager)."
+  command -v node >/dev/null 2>&1 || fail "Node.js 20.16 or newer is required: https://nodejs.org (or your package manager)."
   command -v npm >/dev/null 2>&1 || fail "npm is required (it ships with Node.js)."
-  NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
-  [ "$NODE_MAJOR" -ge 20 ] || fail "Node.js 20 or newer is required; found $(node --version)."
+  # The PDF reader the adapters load needs process.getBuiltinModule (Node 20.16+, 22.3+).
+  node -e 'process.exit(typeof process.getBuiltinModule === "function" ? 0 : 1)' ||
+    fail "Node.js 20.16 or newer is required; found $(node --version)."
 
   WORK="$(mktemp -d)"
   trap 'rm -rf "$WORK"' EXIT INT TERM
