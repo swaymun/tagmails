@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { runClaim } from './claude-runner.mjs';
+import { mcpCacheFile, runClaim } from './claude-runner.mjs';
 
 function claim(jobId, body = 'Summarize this workspace.') {
   return {
@@ -60,9 +60,11 @@ function run(prompt) {
   process.stdout.write('\\n');
 }
 `, { mode: 0o755 });
-  const keys = ['TAGMAILS_WORKSPACE', 'TAGMAILS_CLAUDE_SESSION_FILE', 'TAGMAILS_CLAUDE_BIN', 'ANTHROPIC_API_KEY', 'TAGMAILS_RUNTIME'];
+  const keys = ['TAGMAILS_WORKSPACE', 'TAGMAILS_CLAUDE_SESSION_FILE', 'TAGMAILS_CLAUDE_BIN', 'ANTHROPIC_API_KEY', 'TAGMAILS_RUNTIME',
+    'TAGMAILS_CLAUDE_MCP_CACHE'];
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   Object.assign(process.env, {
+    TAGMAILS_CLAUDE_MCP_CACHE: path.join(root, 'mcp-cache.json'),
     TAGMAILS_WORKSPACE: workspace,
     TAGMAILS_CLAUDE_SESSION_FILE: path.join(root, 'sessions.json'),
     TAGMAILS_CLAUDE_BIN: fakeBin,
@@ -256,4 +258,58 @@ test('Claude runs cannot read the device token or sealing key, while other confi
   assert.ok(results.length >= files.length * 2, `${run.stderr}\n${results.join('\n')}`);
   assert.ok(results.some((text) => text.includes('readable_config')), results.join('\n'));
   assert.ok(!results.some((text) => text.includes('tm_dev_secret')), results.join('\n'));
+});
+
+test('an owner run uses the cached MCP server list and refreshes it in the background, never waiting on a health check', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tagmails-claude-mcp-'));
+  const workspace = path.join(root, 'workspace');
+  fs.mkdirSync(workspace);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fakeBin = path.join(root, 'fake-claude');
+  const listCalls = path.join(root, 'list-calls');
+  fs.writeFileSync(fakeBin, `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'mcp') {
+  fs.appendFileSync(${JSON.stringify(listCalls)}, 'x');
+  const server = fs.readFileSync(${JSON.stringify(listCalls)}, 'utf8').length > 1 ? 'claude.ai Calendar' : 'claude.ai Gmail';
+  process.stdout.write('Checking MCP server health…\\n\\n' + server + ': https://mcp.example/mcp - ✔ Connected\\n');
+} else {
+  fs.appendFileSync(${JSON.stringify(path.join(root, 'args.jsonl'))}, JSON.stringify(args) + '\\n');
+  process.stdin.once('data', () => process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false,
+    session_id: '33333333-3333-4333-8333-333333333333', result: 'Done.' }) + '\\n'));
+}
+`, { mode: 0o755 });
+  const keys = ['TAGMAILS_WORKSPACE', 'TAGMAILS_CLAUDE_SESSION_FILE', 'TAGMAILS_CLAUDE_BIN', 'TAGMAILS_RUNTIME',
+    'TAGMAILS_CLAUDE_PERMISSION', 'TAGMAILS_CLAUDE_MCP_CACHE'];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+  Object.assign(process.env, { TAGMAILS_WORKSPACE: workspace, TAGMAILS_CLAUDE_SESSION_FILE: path.join(root, 'sessions.json'),
+    TAGMAILS_CLAUDE_BIN: fakeBin, TAGMAILS_RUNTIME: 'claude-write', TAGMAILS_CLAUDE_PERMISSION: 'auto',
+    TAGMAILS_CLAUDE_MCP_CACHE: path.join(root, 'mcp-cache.json') });
+  const owner = (jobId) => ({ claimed: true, jobId, claimId: `claim-${jobId}`, threadId: jobId,
+    model: { id: 'claude-sonnet-5-5', effort: 'medium' },
+    request: { from: 'owner@gmail.com', fromOwner: true, subject: 'Mail', body: 'Check my calendar.', attachments: [] } });
+  const lastArgs = () => JSON.parse(fs.readFileSync(path.join(root, 'args.jsonl'), 'utf8').trim().split('\n').at(-1));
+  const calls = () => fs.readFileSync(listCalls, 'utf8').length;
+  assert.equal(mcpCacheFile(), path.join(root, 'mcp-cache.json'));
+  // First run: no list yet, so it waits for one and saves it.
+  assert.equal((await runClaim(owner('mcp-1'))).state, 'completed');
+  assert.ok(lastArgs().includes('mcp__claude_ai_Gmail__*'));
+  assert.equal(calls(), 1);
+  // Within ten minutes the saved list is used and nothing is re-checked.
+  await runClaim(owner('mcp-2'));
+  assert.equal(calls(), 1);
+  assert.ok(lastArgs().includes('mcp__claude_ai_Gmail__*'));
+  // Older: this run still uses it, and a background refresh picks up the change for the next email.
+  const saved = JSON.parse(fs.readFileSync(mcpCacheFile(), 'utf8'));
+  fs.writeFileSync(mcpCacheFile(), JSON.stringify({ ...saved, at: Date.now() - 60 * 60_000 }));
+  await runClaim(owner('mcp-3'));
+  assert.ok(lastArgs().includes('mcp__claude_ai_Gmail__*'));
+  for (let wait = 0; wait < 100 && !fs.readFileSync(mcpCacheFile(), 'utf8').includes('Calendar'); wait += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  await runClaim(owner('mcp-4'));
+  assert.ok(lastArgs().includes('mcp__claude_ai_Calendar__*'));
+  assert.equal((fs.statSync(mcpCacheFile()).mode & 0o777), 0o600);
 });

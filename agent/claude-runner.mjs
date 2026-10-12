@@ -166,6 +166,49 @@ function ownerMcpListing() {
   } catch { return ''; }
 }
 
+// `claude mcp list` health-checks every connector: 3-6 s before each owner
+// run. Its server names change rarely, so the owner's list is kept in a file
+// (owner runs only; participants get no connectors). Younger than 10 minutes
+// it is used as is; up to a day old it is used and refreshed in the
+// background for the next email; older or missing, this run waits for it.
+const MCP_FRESH_MS = 10 * 60_000;
+const MCP_USABLE_MS = 24 * 60 * 60_000;
+
+export function mcpCacheFile(env = process.env) {
+  return env.TAGMAILS_CLAUDE_MCP_CACHE && path.isAbsolute(env.TAGMAILS_CLAUDE_MCP_CACHE)
+    ? env.TAGMAILS_CLAUDE_MCP_CACHE : path.join(os.homedir(), '.tagmails', 'claude-mcp-servers.json');
+}
+
+async function cachedMcpListing() {
+  try {
+    const saved = JSON.parse(await fs.readFile(mcpCacheFile(), 'utf8'));
+    const age = Date.now() - saved.at;
+    if (typeof saved.listing === 'string' && Number.isFinite(age) && age >= 0 && age < MCP_USABLE_MS) return { listing: saved.listing, age };
+  } catch { /* No usable cache. */ }
+  return null;
+}
+
+export async function refreshMcpCache() {
+  const listing = ownerMcpListing();
+  if (!listing) return listing;
+  const file = mcpCacheFile();
+  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  const temporary = `${file}.${process.pid}.tmp`;
+  await fs.writeFile(temporary, JSON.stringify({ at: Date.now(), listing }), { mode: 0o600 });
+  await fs.rename(temporary, file);
+  return listing;
+}
+
+async function ownerMcpServers() {
+  const cached = await cachedMcpListing();
+  if (!cached) return refreshMcpCache();
+  if (cached.age >= MCP_FRESH_MS) {
+    spawn(process.execPath, [fileURLToPath(import.meta.url), '--refresh-mcp-cache'],
+      { detached: true, stdio: 'ignore', env: process.env }).unref();
+  }
+  return cached.listing;
+}
+
 async function runClaude(claim, workspace, sessionId, staged, write) {
   const mode = MODES[selectedMode()];
   // Owner emails get the owner's Claude Code setup (MCP servers, claude.ai
@@ -183,7 +226,7 @@ async function runClaude(claim, workspace, sessionId, staged, write) {
     ...(mode.tools ? ['--tools', mode.tools] : []),
     // Nobody can approve a tool mid-email, so the owner's connectors are
     // pre-approved outside read-only mode, except tools that trash or delete.
-    ...(owner ? [...(mode.write || selectedMode() === 'manual' ? ownerAllowRules(ownerMcpListing()) : []),
+    ...(owner ? [...(mode.write || selectedMode() === 'manual' ? ownerAllowRules(await ownerMcpServers()) : []),
       '--disallowedTools', 'mcp__*__trash*', 'mcp__*__delete*'] : ['--disallowedTools', 'mcp__*']),
     '--settings', deviceSecretSettings(),
     '--permission-mode', mode.permission,
@@ -319,7 +362,9 @@ export async function runClaim(claim) {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url) && process.argv[2] === '--refresh-mcp-cache') {
+  await refreshMcpCache().catch(() => {});
+} else if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     process.stdout.write(`${JSON.stringify(await runClaim(await readClaim()))}\n`);
   } catch (error) {

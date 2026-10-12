@@ -3,7 +3,6 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { openAttachment, readDeviceKey } from './device-key.mjs';
 
 const MAX_ATTACHMENTS = 5;
@@ -47,6 +46,8 @@ async function extractedPdfText(bytes) {
   if (bytes.subarray(0, 5).toString('ascii') !== '%PDF-') return 'PDF text unavailable: invalid PDF signature.';
   let task;
   try {
+    // Loaded only for a PDF: importing pdfjs costs ~170 ms, which every job paid.
+    const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
     task = getDocument({ data: new Uint8Array(bytes), isEvalSupported: false,
       useSystemFonts: false, standardFontDataUrl: STANDARD_FONTS, stopAtErrors: true });
     const pdf = await task.promise;
