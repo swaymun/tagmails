@@ -79,6 +79,10 @@ test('a valid owner signature must also cover the Cc, Message-ID and Content-Typ
   // Whoever holds a copy adds a Cc the signature never covered: it must not become a participant.
   const addedCc = signed(original, { privateKey }).replace('To: agent@wonder.test', 'To: agent@wonder.test\r\nCc: mallory@evil.test');
   assert.deepEqual(await deliver(addedCc), { accepted: false, reason: 'sender authentication failed' });
+  // An unsigned Content-Transfer-Encoding would re-decode the signed body into other text.
+  const reencoded = signed(original, { privateKey }).replace('Content-Type: text/plain; charset=utf-8',
+    'Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64');
+  assert.deepEqual(await deliver(reencoded), { accepted: false, reason: 'sender authentication failed' });
   // Each relied-on header left out of h= fails, though the signature itself verifies.
   for (const name of ['message-id', 'content-type', 'subject']) {
     const names = ['from', 'to', 'subject', 'message-id', 'content-type'].filter((item) => item !== name);
@@ -89,6 +93,13 @@ test('a valid owner signature must also cover the Cc, Message-ID and Content-Typ
   assert.equal((await deliver(gmail.replace('To: agent@wonder.test', 'To: agent@wonder.test\r\nCc: mallory@evil.test'))).accepted, false);
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM participants').get().n, 0);
   assert.deepEqual(await deliver(gmail), { accepted: true, duplicate: false });
+  // A Gmail reaction is signed the same way and passes sender authentication (no reply exists, so nothing is recorded).
+  const reaction = signed(['From: Owner <owner@gmail.com>', 'To: agent@wonder.test', 'Subject: Re: Footer',
+    `Message-ID: <r-${randomBytes(4).toString('hex')}@gmail.com>`, 'In-Reply-To: <reply@wonder.test>',
+    'Content-Type: multipart/alternative; boundary="b"', '', '--b', 'Content-Type: text/plain', '', 'Owner reacted', '--b',
+    'Content-Type: text/vnd.google.email-reaction+json', '', '{"emoji":"\\ud83d\\udc4d","version":1}', '--b--', ''].join('\r\n'),
+  { privateKey, names: ['from', 'to', 'subject', 'message-id', 'in-reply-to', 'content-type'] });
+  assert.deepEqual(await deliver(reaction), { accepted: false, reaction: true });
 });
 
 test('mail delivered by Cloudflare runs only when DKIM proves the owner sent it, and is stored sealed', async () => {

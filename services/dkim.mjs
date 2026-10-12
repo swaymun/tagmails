@@ -126,9 +126,11 @@ export function aligned(signingDomain, fromDomain) {
 
 // Headers that decide who gets access (To, Cc), which thread and whether it is
 // a replay (Message-ID, References, In-Reply-To) and how the body is read
-// (Content-Type). A valid signature that leaves one of them unsigned would let
+// (Content-Type, Content-Transfer-Encoding; Gmail sends neither unsigned:
+// its mail is multipart with no top-level encoding). A valid signature that leaves one of them unsigned would let
 // whoever holds a copy add a Cc or re-frame the MIME. Gmail signs all of them.
-export const MUST_SIGN = ['to', 'cc', 'subject', 'message-id', 'references', 'in-reply-to', 'content-type'];
+export const MUST_SIGN = ['to', 'cc', 'subject', 'message-id', 'references', 'in-reply-to', 'content-type',
+  'content-transfer-encoding'];
 
 /**
  * Returns { pass, domain, signedHeaders } when a signature from the From domain

@@ -69,7 +69,8 @@ export async function parseInbound(raw, agentAddress = 'agent@wonder.test', {
     const oneEmoji = typeof emoji === 'string' && [...new Intl.Segmenter().segment(emoji)].length === 1 && /\p{Extended_Pictographic}|\p{Emoji_Presentation}|\uFE0F/u.test(emoji);
     const targetId = String(email.inReplyTo || '').trim();
     if (reaction?.version !== 1 || !oneEmoji || !/^<[^<>\s]+@[^<>\s]+>$/.test(targetId)) throw new Error('Invalid Gmail reaction');
-    return { from, messageId: email.messageId, reaction: emoji, reactionTargetId: targetId };
+    // To and Cc too: the relay accepts a reaction only from mail that names the agent in a signed recipient.
+    return { from, to, cc, messageId: email.messageId, reaction: emoji, reactionTargetId: targetId };
   }
   const body = (email.text?.trim() || (email.html ? convert(email.html, { wordwrap: false }).trim() : ''));
   if (!body) throw new Error('The email has no readable text');
