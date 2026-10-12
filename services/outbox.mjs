@@ -446,7 +446,7 @@ export async function purgeSettledOutboundBodies(env) {
 // Resend otherwise. Saved payloads keep the bare address for sender checks;
 // mail shows a display name. Cloudflare returns the sent message's ID
 // directly; Resend needs a lookup.
-function senders(env, { sendEmail, getSentEmail } = {}) {
+export function senders(env, { sendEmail, getSentEmail } = {}) {
   return {
     sendEmail: sendEmail ?? (env.EMAIL ? (payload) => sendWithCloudflare(env, payload)
       : (payload, options) => new Resend(env.RESEND_API_KEY).emails.send(

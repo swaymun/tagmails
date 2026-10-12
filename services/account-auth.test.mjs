@@ -157,9 +157,19 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ code, token, name: 'Saimun Mac', publicKey: deviceKey.publicKey }),
   });
-  const paired = await handleAccountRequest(pairRequest, env, options);
+  const welcome = [];
+  const paired = await handleAccountRequest(pairRequest, env, { ...options, sendEmail: async (mail) => { welcome.push(mail); } });
   assert.equal(paired.status, 201);
   const { deviceId } = await paired.json();
+  // Pairing emails the owner a welcome that doubles as the help sheet, from the agent's address.
+  assert.equal(welcome.length, 1);
+  const owner = sqlite.prepare('SELECT a.owner_email, a.agent_email FROM accounts a JOIN devices d ON d.account_id = a.id WHERE d.id = ?').get(deviceId);
+  assert.deepEqual(welcome[0].to, [owner.owner_email]);
+  assert.equal(welcome[0].from, owner.agent_email);
+  assert.equal(welcome[0].subject, 'TagMails is set up on Saimun Mac');
+  assert.match(welcome[0].text, /Reply to this email to try it/);
+  assert.match(welcome[0].text, /tagmails doctor/);
+  assert.match(welcome[0].html, /Turn on reactions/);
   // The computer's sealing key comes with the pairing (0.2.24+).
   assert.deepEqual({ ...sqlite.prepare('SELECT name, public_key, key_id FROM devices WHERE id = ?').get(deviceId) },
     { name: 'Saimun Mac', public_key: deviceKey.publicKey, key_id: await keyIdFor(deviceKey.publicKey) });

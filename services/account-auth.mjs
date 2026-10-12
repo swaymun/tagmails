@@ -10,6 +10,8 @@ import { knownAgentAddresses } from './agent-addresses.mjs';
 import { accountPreferences, clearAccountPreferences, saveAccountPreferences } from './account-preferences.mjs';
 import { accountModelCatalog } from './model-catalog.mjs';
 import { rateLimited, tooManyRequests } from './rate-limit.mjs';
+import { senders } from './outbox.mjs';
+import { sendWelcomeEmail } from './welcome-mail.mjs';
 
 const googleKeys = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
 const DEVICE_TOKEN = /^tm_dev_[A-Za-z0-9_-]{43}$/;
@@ -193,7 +195,7 @@ async function signIn(request, env, verifyIdentity, exchangeCode) {
   });
 }
 
-async function pair(request, env) {
+async function pair(request, env, sendEmail) {
   const url = new URL(request.url);
   if (url.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(url.hostname)) {
     return json({ error: 'HTTPS required' }, 403);
@@ -219,6 +221,9 @@ async function pair(request, env) {
     VALUES (?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END)`)
     .bind(deviceId, claimed.account_id, hash(body.token), body.name.trim(), publicKey,
       publicKey && await keyIdFor(publicKey), publicKey).run();
+  // The welcome email is the owner's first test and their help sheet.
+  // Sent through Cloudflare Email Sending; a Resend-only relay skips it.
+  await sendWelcomeEmail(env, claimed.account_id, body.name.trim(), sendEmail ?? (env.EMAIL ? senders(env).sendEmail : null));
   return json({ paired: true, deviceId }, 201);
 }
 
@@ -575,7 +580,7 @@ async function artifactResponse(env, accountId, row, artifactId, headers = {}) {
   } });
 }
 
-export async function handleAccountRequest(request, env, { verifyIdentity = verifyGoogleCredential, exchangeCode = fetch } = {}) {
+export async function handleAccountRequest(request, env, { verifyIdentity = verifyGoogleCredential, exchangeCode = fetch, sendEmail } = {}) {
   const { pathname } = new URL(request.url);
   if (pathname.startsWith('/api/site/')) {
     if (!env.DB) throw new Error('Account database is not configured');
@@ -634,7 +639,7 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
   if ((pathname === '/api/auth/google' || pathname === '/api/device/pair') && request.method === 'POST' &&
       await rateLimited(env, 'AUTH_RATE_LIMIT', request, 'auth')) return tooManyRequests(siteCors(request, env));
   if (pathname === '/api/auth/google' && request.method === 'POST') return signIn(request, env, verifyIdentity, exchangeCode);
-  if (pathname === '/api/device/pair' && request.method === 'POST') return pair(request, env);
+  if (pathname === '/api/device/pair' && request.method === 'POST') return pair(request, env, sendEmail);
   const account = await accountFor(request, env);
   if (receiptArtifact && request.method === 'GET') {
     if (!account) return Response.redirect(`${new URL(request.url).origin}/account?next=${encodeURIComponent(pathname)}`, 302);
