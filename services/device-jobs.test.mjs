@@ -185,6 +185,19 @@ test('text the daemon cut at 300 characters is accepted even when every characte
   { completed: true, duplicate: false });
 });
 
+test('a full-length answer in Chinese with a full transcript is accepted', async () => {
+  const { env, sqlite } = bindings();
+  const paired = device(sqlite);
+  await inbound(env);
+  const claimed = envelope((await call(env, paired.token, 'claim')).body);
+  const events = [...Array(47)].map(() => ({ kind: 'tool', text: '读'.repeat(800) }));
+  const result = { state: 'completed', summary: '完成。', answer: '答'.repeat(32_000),
+    transcript: { version: 1, truncated: true, events: [...events, { kind: 'assistant', text: '答'.repeat(8000) }] } };
+  assert.ok(Buffer.byteLength(JSON.stringify(result)) > 200_000);
+  assert.deepEqual((await call(env, paired.token, 'complete', { jobId: claimed.jobId, leaseId: claimed.leaseId, result })).body,
+    { completed: true, duplicate: false });
+});
+
 test('same-thread turns wait and stay with the Mac that owns their local session', async () => {
   const { env, sqlite } = bindings();
   const firstDevice = device(sqlite);

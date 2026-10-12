@@ -16,7 +16,9 @@ const LEASE_SECONDS = 90;
 // adapter crashed) is not handed out again: each retry costs the owner a full
 // agent turn, and the job blocks every later turn in its thread.
 export const MAX_ATTEMPTS = 3;
-const MAX_RESULT_BYTES = 64_000;
+// A full answer (32k characters) plus its transcript (48 events) is up to
+// ~170 KB of UTF-8 when the text is CJK or emoji; 64 KB refused real replies.
+const MAX_RESULT_BYTES = 256_000;
 // The full answer for the reply email; summary/details stay as a short preview.
 const MAX_ANSWER_CHARS = 32_000;
 
