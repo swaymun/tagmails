@@ -296,6 +296,16 @@ test('a question back is charged when the balance covers it, and still sent free
   credit(sqlite, 'account-1', 5, 'question');
   await deliver(env, 'question-paid', 'owner@gmail.com', { body: 'Model: Gemini Ultra\nCheck this too.' });
   assert.equal(await completeOneModelClarification(env), true);
-  assert.deepEqual(sqlite.prepare('SELECT state, amount_cents FROM test_email_charges').all().map((row) => ({ ...row })),
-    [{ state: 'reserved', amount_cents: 5 }]);
+  assert.deepEqual(sqlite.prepare('SELECT state, amount_millicents FROM test_email_charges').all().map((row) => ({ ...row })),
+    [{ state: 'reserved', amount_millicents: 5000 }]);
+});
+
+test('an email costs a quarter of a cent by default, so a dollar funds 400 emails', async () => {
+  const { emailPriceMillicents, EMAIL_PRICE_MILLICENTS } = await import('./email-charges.mjs');
+  assert.equal(EMAIL_PRICE_MILLICENTS, 250);
+  assert.equal(emailPriceMillicents({}), 250);
+  assert.equal(100 * 1000 / emailPriceMillicents({}), 400);
+  // A relay may set its own price; anything that isn't a positive whole number falls back.
+  assert.equal(emailPriceMillicents({ EMAIL_PRICE_MILLICENTS: '1000' }), 1000);
+  for (const bad of ['0', '-5', '2.5', 'free']) assert.equal(emailPriceMillicents({ EMAIL_PRICE_MILLICENTS: bad }), 250);
 });

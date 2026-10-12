@@ -499,7 +499,7 @@ test('recipient delivery events are isolated and older updates cannot overwrite 
   const providerId = '88888888-8888-4888-8888-888888888888';
   await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'],
     cc: ['guest@gmail.com'], jobId });
-  sqlite.prepare("INSERT INTO test_email_charges (job_id, account_id, amount_cents, state) VALUES (?, 'account-1', 5, 'reserved')").run(jobId);
+  sqlite.prepare("INSERT INTO test_email_charges (job_id, account_id, amount_millicents, state) VALUES (?, 'account-1', 5000, 'reserved')").run(jobId);
   sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)').run('thread-1', 'guest@gmail.com');
   assert.equal((await sendNextOutbox(env, {
     sendEmail: async () => ({ data: { id: providerId } }),
@@ -542,7 +542,7 @@ test('a failed primary recipient releases the test charge even when a copied gue
   await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'],
     cc: ['guest@gmail.com'], jobId });
   sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)').run('thread-1', 'guest@gmail.com');
-  sqlite.prepare("INSERT INTO test_email_charges (job_id, account_id, amount_cents, state) VALUES (?, 'account-1', 5, 'reserved')").run(jobId);
+  sqlite.prepare("INSERT INTO test_email_charges (job_id, account_id, amount_millicents, state) VALUES (?, 'account-1', 5000, 'reserved')").run(jobId);
   assert.equal((await sendNextOutbox(env, {
     sendEmail: async () => ({ data: { id: providerEmailId } }),
     getSentEmail: async () => ({ data: { message_id: '<mixed@tagmails.test>' } }),
@@ -717,8 +717,8 @@ test('owner-only replies show remaining test credits without exposing them to gu
     remainingPercent: 66, resetsAt: Math.floor(Date.now() / 1000) + 86400 }] };
   await env.MAIL.put('results/1.json', JSON.stringify({ state: 'completed', summary: 'Turn 1 finished.',
     runtime: 'codex-app-server-readonly', codexAllowance: allowance }));
-  sqlite.prepare(`INSERT INTO test_email_charges (job_id, account_id, amount_cents, state)
-    VALUES ('job-1', 'account-1', 5, 'reserved')`).run();
+  sqlite.prepare(`INSERT INTO test_email_charges (job_id, account_id, amount_millicents, state)
+    VALUES ('job-1', 'account-1', 5000, 'reserved')`).run();
   const payloads = [];
   const provider = {
     sendEmail: async (payload) => { payloads.push(payload); return { data: { id: `sent-${payloads.length}` } }; },

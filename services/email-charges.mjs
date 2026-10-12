@@ -1,6 +1,14 @@
 import { notifyDevices } from './device-push.mjs';
 
-export const TEST_EMAIL_CENTS = 5;
+// Each email costs a quarter of a cent by default, kept in thousandths of a
+// cent; a relay can set EMAIL_PRICE_MILLICENTS. Top-ups and the ledger stay in
+// whole cents (1 cent = 1,000 millicents).
+export const EMAIL_PRICE_MILLICENTS = 250;
+
+export function emailPriceMillicents(env) {
+  const price = Number(env.EMAIL_PRICE_MILLICENTS);
+  return Number.isSafeInteger(price) && price > 0 ? price : EMAIL_PRICE_MILLICENTS;
+}
 
 // Cloudflare Email Sending caps a whole message at 5 MiB. Base64 adds a third,
 // so 3.5 MB of files plus a 32k-character answer stays under it.
@@ -31,7 +39,7 @@ export async function reservePendingTestEmails(env, accountId, limit = 20) {
     // One INSERT computes the latest balance and reserves one oldest job. The
     // account cannot reserve the same credit twice when deliveries race.
     const result = await env.DB.prepare(`INSERT INTO test_email_charges
-      (job_id, account_id, amount_cents, state)
+      (job_id, account_id, amount_millicents, state)
       SELECT j.id, t.account_id, ?, 'reserved'
       FROM jobs j JOIN threads t ON t.id = j.thread_id
       JOIN accounts a ON a.id = t.account_id
@@ -42,11 +50,11 @@ export async function reservePendingTestEmails(env, accountId, limit = 20) {
           (SELECT 1 FROM participants p WHERE p.thread_id = t.id
             AND p.email = m.sender_email AND p.revoked_at IS NULL))
         AND NOT EXISTS (SELECT 1 FROM test_email_charges c WHERE c.job_id = j.id)
-        AND (SELECT COALESCE(SUM(amount_cents), 0) FROM credit_ledger WHERE account_id = t.account_id)
-          - (SELECT COALESCE(SUM(amount_cents), 0) FROM test_email_charges
+        AND (SELECT COALESCE(SUM(amount_cents), 0) * 1000 FROM credit_ledger WHERE account_id = t.account_id)
+          - (SELECT COALESCE(SUM(amount_millicents), 0) FROM test_email_charges
              WHERE account_id = t.account_id AND state != 'released') >= ?
       ORDER BY j.created_at, j.rowid LIMIT 1`)
-      .bind(TEST_EMAIL_CENTS, accountId, TEST_EMAIL_CENTS).run();
+      .bind(emailPriceMillicents(env), accountId, emailPriceMillicents(env)).run();
     if (!changed(result)) break;
     reserved += 1;
   }
@@ -71,8 +79,8 @@ export async function fundPendingTestEmails(env) {
 
 export async function testWalletSnapshot(env, accountId) {
   const row = await env.DB.prepare(`SELECT
-    (SELECT COALESCE(SUM(amount_cents), 0) FROM credit_ledger WHERE account_id = ?) AS credits,
-    (SELECT COALESCE(SUM(amount_cents), 0) FROM test_email_charges
+    (SELECT COALESCE(SUM(amount_cents), 0) * 1000 FROM credit_ledger WHERE account_id = ?) AS credits,
+    (SELECT COALESCE(SUM(amount_millicents), 0) FROM test_email_charges
       WHERE account_id = ? AND state != 'released') AS charges,
     (SELECT COUNT(*) FROM jobs j JOIN threads t ON t.id = j.thread_id
       JOIN messages m ON m.id = j.message_id JOIN accounts a ON a.id = t.account_id
@@ -83,19 +91,21 @@ export async function testWalletSnapshot(env, accountId) {
           (SELECT 1 FROM participants p WHERE p.thread_id = t.id
             AND p.email = m.sender_email AND p.revoked_at IS NULL))) AS waiting
   `).bind(accountId, accountId, accountId).first();
-  return { balanceCents: row.credits - row.charges, waitingEmails: row.waiting };
+  // Shown as dollars and cents, rounded down so a balance never looks higher than it is.
+  const balanceMillicents = row.credits - row.charges;
+  return { balanceCents: Math.floor(balanceMillicents / 1000), waitingEmails: row.waiting };
 }
 
 // Replies TagMails writes itself (a question back, a revoked computer) are
 // charged when the balance covers them, and still sent free when it doesn't.
 export async function chargeRelayReply(env, jobId) {
   if (!testBillingEnabled(env)) return;
-  await env.DB.prepare(`INSERT OR IGNORE INTO test_email_charges (job_id, account_id, amount_cents, state)
+  await env.DB.prepare(`INSERT OR IGNORE INTO test_email_charges (job_id, account_id, amount_millicents, state)
     SELECT j.id, t.account_id, ?, 'reserved' FROM jobs j JOIN threads t ON t.id = j.thread_id
-    WHERE j.id = ? AND (SELECT COALESCE(SUM(amount_cents), 0) FROM credit_ledger WHERE account_id = t.account_id)
-      - (SELECT COALESCE(SUM(amount_cents), 0) FROM test_email_charges
+    WHERE j.id = ? AND (SELECT COALESCE(SUM(amount_cents), 0) * 1000 FROM credit_ledger WHERE account_id = t.account_id)
+      - (SELECT COALESCE(SUM(amount_millicents), 0) FROM test_email_charges
          WHERE account_id = t.account_id AND state != 'released') >= ?`)
-    .bind(TEST_EMAIL_CENTS, jobId, TEST_EMAIL_CENTS).run();
+    .bind(emailPriceMillicents(env), jobId, emailPriceMillicents(env)).run();
 }
 
 export async function settleTestEmail(env, jobId) {

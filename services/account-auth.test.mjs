@@ -408,8 +408,8 @@ test('the private Site can show the owner account and manage only its paired dev
     '<stopped@gmail.com>', 'owner@gmail.com', 'inbound/stopped.eml');
   sqlite.prepare(`INSERT INTO jobs (id, thread_id, message_id, state) VALUES (?, ?, ?, 'queued')`)
     .run('stopped-job', stoppedThread, 'stopped-message');
-  sqlite.prepare(`INSERT INTO test_email_charges (job_id, account_id, amount_cents, state)
-    VALUES (?, ?, 5, 'reserved')`).run('stopped-job', 'account-1');
+  sqlite.prepare(`INSERT INTO test_email_charges (job_id, account_id, amount_millicents, state)
+    VALUES (?, ?, 5000, 'reserved')`).run('stopped-job', 'account-1');
   assert.equal((await handleAccountRequest(site(`/api/site/devices/${deviceId}/revoke`, 'POST'), env, {
     verifyIdentity: async () => ({ sub: 'another-sub', email: 'other@gmail.com' }),
   })).status, 404);
