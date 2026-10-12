@@ -210,7 +210,7 @@ async function pair(request, env, sendEmail) {
   }
   const claimed = await env.DB.prepare(`UPDATE pairing_codes SET used_at = CURRENT_TIMESTAMP
     WHERE code_hash = ? AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP
-      AND account_id IN (SELECT id FROM accounts WHERE active = 1)
+      AND account_id IN (SELECT id FROM accounts WHERE active = 1) AND ${ISSUER_VALID('pairing_codes')}
     RETURNING account_id`).bind(hash(body.code)).first();
   if (!claimed) return json({ error: 'Pairing code expired or already used' }, 409);
   const deviceId = randomUUID();
@@ -252,15 +252,24 @@ export async function siteOwnerFor(request, env, verifyIdentity = verifyGoogleCr
 // session (or MCP token) could otherwise create them without limit.
 export const PAIRING_CODES_PER_HOUR = 20;
 
-// A fresh 10-minute code, or null once the account hit its hourly limit.
-export async function createPairingCode(env, accountId) {
+// A pairing code is good only while the sign-in that made it is.
+const ISSUER_VALID = (code) => `(${code}.session_hash IS NULL OR EXISTS (SELECT 1 FROM sessions s
+    WHERE s.token_hash = ${code}.session_hash AND s.revoked_at IS NULL AND s.expires_at > CURRENT_TIMESTAMP))
+  AND (${code}.mcp_grant_id IS NULL OR EXISTS (SELECT 1 FROM mcp_grants g
+    WHERE g.id = ${code}.mcp_grant_id AND g.revoked_at IS NULL))`;
+
+// A fresh 10-minute code, or null once the account hit its hourly limit or
+// the issuing sign-in (`sessionToken`, or MCP `grantId`) ended meanwhile.
+export async function createPairingCode(env, accountId, { sessionToken = null, grantId = null } = {}) {
   await env.DB.prepare("DELETE FROM pairing_codes WHERE account_id = ? AND created_at < datetime('now', '-1 day')").bind(accountId).run();
   const code = `tm_pair_${randomBytes(20).toString('base64url')}`;
   // One statement counts and inserts, so concurrent requests can't all pass the check.
-  const inserted = await env.DB.prepare(`INSERT INTO pairing_codes (code_hash, account_id, expires_at)
-    SELECT ?1, ?2, datetime('now', '+10 minutes')
-    WHERE (SELECT COUNT(*) FROM pairing_codes WHERE account_id = ?2 AND created_at > datetime('now', '-1 hour')) < ?3`)
-    .bind(hash(code), accountId, PAIRING_CODES_PER_HOUR).run();
+  const inserted = await env.DB.prepare(`INSERT INTO pairing_codes (code_hash, account_id, expires_at, session_hash, mcp_grant_id)
+    SELECT ?1, ?2, datetime('now', '+10 minutes'), issuer.session_hash, issuer.mcp_grant_id
+    FROM (SELECT ?4 AS session_hash, ?5 AS mcp_grant_id) issuer
+    WHERE (SELECT COUNT(*) FROM pairing_codes WHERE account_id = ?2 AND created_at > datetime('now', '-1 hour')) < ?3
+      AND ${ISSUER_VALID('issuer')}`)
+    .bind(hash(code), accountId, PAIRING_CODES_PER_HOUR, sessionToken ? hash(sessionToken) : null, grantId).run();
   if (!(inserted.meta?.changes ?? inserted.changes)) return null;
   return { code, expiresInSeconds: 600 };
 }
@@ -434,7 +443,9 @@ async function siteAccountRequest(request, env, pathname, verifyIdentity) {
     return json({ signedOut: true }, 200, headers);
   }
   if (pathname === '/api/site/pairing-code' && request.method === 'POST') {
-    const pairing = await createPairingCode(env, account.id);
+    const credential = request.headers.get('authorization')?.match(/^Bearer (\S+)$/)?.[1];
+    const pairing = await createPairingCode(env, account.id,
+      { sessionToken: SITE_SESSION.test(credential ?? '') ? credential : null });
     return pairing ? json(pairing, 200, headers) : json(PAIRING_LIMITED, 429, headers);
   }
   const revoke = pathname.match(/^\/api\/site\/devices\/([0-9a-f-]{36})\/revoke$/i);
@@ -685,7 +696,7 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
     return changeParticipant(request, env, account, participantAction[1], participantAction[2]);
   }
   if (pathname === '/api/account/pairing-code') {
-    const pairing = await createPairingCode(env, account.id);
+    const pairing = await createPairingCode(env, account.id, { sessionToken: sessionToken(request) });
     return pairing ? json(pairing) : json(PAIRING_LIMITED, 429);
   }
   const revoke = pathname.match(/^\/api\/account\/devices\/([0-9a-f-]{36})\/revoke$/i);

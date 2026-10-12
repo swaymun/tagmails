@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { generateDeviceKey, keyIdFor } from '../agent/device-seal.mjs';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import test from 'node:test';
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { bindings } from './bindings-fixture.mjs';
@@ -378,7 +378,7 @@ test('the owner can page through one email thread without exposing private resul
 });
 
 test('pairing codes stop working at sign-out and are limited per hour', async () => {
-  const { env } = bindings();
+  const { env, sqlite } = bindings();
   env.GOOGLE_CLIENT_ID = clientId;
   env.SITE_ORIGIN = 'https://tagmails.chatgpt.site';
   const options = { verifyIdentity: async () => ({ sub: 'google-sub-1', email: 'owner@gmail.com' }) };
@@ -389,9 +389,18 @@ test('pairing codes stop working at sign-out and are limited per hour', async ()
   const { code } = await (await handleAccountRequest(site('/api/site/pairing-code', 'POST'), env, options)).json();
   assert.equal((await handleAccountRequest(site('/api/site/logout', 'POST'), env, options)).status, 200);
   assert.equal((await pair(code)).status, 409, 'the next person at this browser cannot use the old setup prompt');
+  // A code made with a site session dies with that session, even one issued as the sign-out landed.
+  const session = `tm_ses_${randomBytes(32).toString('base64url')}`;
+  sqlite.prepare("INSERT INTO sessions (token_hash, account_id, expires_at) VALUES (?, 'account-1', datetime('now', '+1 day'))")
+    .run(createHash('sha256').update(session).digest('hex'));
+  const bySession = new Request('https://relay.test/api/site/pairing-code', { method: 'POST',
+    headers: { Origin: env.SITE_ORIGIN, Authorization: `Bearer ${session}` } });
+  const racing = await (await handleAccountRequest(bySession, env, options)).json();
+  sqlite.prepare('UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP').run();
+  assert.equal((await pair(racing.code)).status, 409);
   const burst = await Promise.all([...Array(PAIRING_CODES_PER_HOUR + 10)].map(() =>
     handleAccountRequest(site('/api/site/pairing-code', 'POST'), env, options)));
-  assert.equal(burst.filter((response) => response.status === 200).length, PAIRING_CODES_PER_HOUR - 1);
+  assert.equal(burst.filter((response) => response.status === 200).length, PAIRING_CODES_PER_HOUR - 2);
   assert.equal((await handleAccountRequest(site('/api/site/pairing-code', 'POST'), env, options)).status, 429);
 });
 

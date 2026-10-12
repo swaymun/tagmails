@@ -142,11 +142,12 @@ export async function reconcileOneUnknownOutbox(env, {
   // blocked, its charge released and its stored copy deleted, so later replies
   // in the thread can go. It is never re-sent (it may have been delivered).
   // Its stored copy is deleted by sweepBlockedCopies (retried until it's gone).
+  // Rows from before sends were tagged count as Cloudflare's while it is the sender.
   const givenUp = await env.DB.prepare(`UPDATE outbox SET state = 'blocked', updated_at = CURRENT_TIMESTAMP
     WHERE job_id = (SELECT job_id FROM outbox WHERE state = 'uncertain'
-      AND json_extract(payload_json, '$.provider') = 'cloudflare'
+      AND COALESCE(json_extract(payload_json, '$.provider'), ?1) = 'cloudflare'
       AND updated_at <= datetime('now', '-30 minutes') ORDER BY updated_at, job_id LIMIT 1)
-    AND state = 'uncertain' RETURNING job_id`).bind().first();
+    AND state = 'uncertain' RETURNING job_id`).bind(env.EMAIL ? 'cloudflare' : 'resend').first();
   if (givenUp) {
     console.error('Uncertain reply given up after 30 minutes', givenUp.job_id);
     await releaseTestEmail(env, givenUp.job_id);
@@ -159,11 +160,10 @@ export async function reconcileOneUnknownOutbox(env, {
   // checked_at, not updated_at: retention reads updated_at as the finish time.
   const row = await env.DB.prepare(`UPDATE outbox SET checked_at = CURRENT_TIMESTAMP
     WHERE job_id = (SELECT job_id FROM outbox WHERE state = 'uncertain' AND payload_json IS NOT NULL
-      AND json_extract(payload_json, '$.provider') IS NOT 'cloudflare'
+      AND COALESCE(json_extract(payload_json, '$.provider'), ?1) = 'resend'
       AND COALESCE(checked_at, updated_at) <= datetime('now', '-15 minutes')
       ORDER BY COALESCE(checked_at, updated_at), job_id LIMIT 1)
-    AND state = 'uncertain' AND json_extract(payload_json, '$.provider') IS NOT 'cloudflare'
-    RETURNING job_id, payload_json`).bind().first();
+    AND state = 'uncertain' RETURNING job_id, payload_json`).bind(env.EMAIL ? 'cloudflare' : 'resend').first();
   if (!row) return { state: 'idle' };
   let payload;
   try { payload = JSON.parse(row.payload_json); }
@@ -452,6 +452,7 @@ export async function purgeSettledOutboundBodies(env) {
       ...(Array.isArray(payload.cc) ? { cc: payload.cc } : {}),
       ...(typeof payload.subjectHash === 'string' ? { subjectHash: payload.subjectHash } : { subject: payload.subject }),
       tags: payload.tags,
+      ...(typeof payload.provider === 'string' ? { provider: payload.provider } : {}),
     };
     try {
       await env.MAIL.delete(payload.heldKey ?? `outbound/${row.account_id}/${row.job_id}.json`);
@@ -571,12 +572,12 @@ async function sendPrepared(env, row, payload, { sendEmail, getSentEmail, provid
     }
   }
   if (!await recipientsStillAuthorized(env, row.thread_id, payload)) {
-    await env.DB.prepare("UPDATE outbox SET state = 'blocked', payload_json = NULL, updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'sending'")
+    // payload_json keeps bodyStored/heldKey until the copy is gone (sweepBlockedCopies retries).
+    await env.DB.prepare("UPDATE outbox SET state = 'blocked', updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'sending'")
       .bind(row.job_id).run();
     await releaseTestEmail(env, row.job_id);
-    if (!sealed || heldKey) {
-      try { await env.MAIL.delete(heldKey ?? objectKey); }
-      catch (error) { console.error('Blocked outbox payload deletion is delayed', error); }
+    if (await deleteOutboundCopy(env, row.job_id) || (sealed && !heldKey)) {
+      await env.DB.prepare("UPDATE outbox SET payload_json = NULL WHERE job_id = ? AND state = 'blocked'").bind(row.job_id).run();
     }
     return { state: 'blocked', jobId: row.job_id };
   }
@@ -618,7 +619,7 @@ export async function sendNextOutbox(env, options = {}) {
     console.error('Outbox send needs reconciliation after interrupted Worker', stale.job_id);
     return { state: 'uncertain', jobId: stale.job_id };
   }
-  const accepted = await env.DB.prepare(`SELECT o.job_id, o.provider_email_id, j.thread_id
+  const accepted = await env.DB.prepare(`SELECT o.job_id, o.provider_email_id, j.thread_id, o.payload_json
     FROM outbox o JOIN jobs j ON j.id = o.job_id
     JOIN threads t ON t.id = j.thread_id JOIN accounts a ON a.id = t.account_id
     WHERE o.state = 'accepted' AND a.active = 1
@@ -626,7 +627,15 @@ export async function sendNextOutbox(env, options = {}) {
         SELECT 1 FROM messages m WHERE m.thread_id = j.thread_id
           AND m.provider_email_id = o.provider_email_id AND m.direction = 'outbound'))
     ORDER BY COALESCE(o.checked_at, o.updated_at), o.job_id LIMIT 1`).bind().first();
-  if (accepted) return finalize(env, accepted, getSentEmail);
+  if (accepted) {
+    // Ask the service that sent it: a Resend send accepted before a switch to
+    // Cloudflare still needs Resend's lookup for its Message-ID.
+    let sentBy = null;
+    try { sentBy = JSON.parse(accepted.payload_json ?? 'null')?.provider ?? null; } catch { /* Untagged. */ }
+    const lookup = !options.getSentEmail && sentBy && sentBy !== outbound.provider
+      ? senders({ ...env, EMAIL: sentBy === 'cloudflare' ? env.EMAIL : undefined }).getSentEmail : getSentEmail;
+    return finalize(env, accepted, lookup);
+  }
 
   // Replies for sealed mail are sent from memory (deliverReply) or by their
   // computer (sendHeldReply), never from here.

@@ -282,6 +282,12 @@ test('pair returns a working one-time code and the commands for this relay', asy
   const hosted = (await tool(env, tokens.access_token, 'pair')).data;
   assert.equal(hosted.commands[0], `tagmails pair ${hosted.pairingCode}`,
     'reached through tagmails.com, the hosted relay still pairs without --relay');
+  // Removing the app voids a code it made that wasn't used yet.
+  assert.equal((await oauth(env, '/oauth/revoke', form({ token: tokens.access_token }))).status, 200);
+  const late = await handleAccountRequest(new Request(`${ORIGIN}/api/device/pair`, { method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: hosted.pairingCode, token: `tm_dev_${'b'.repeat(43)}`, name: 'Other Mac' }) }), env);
+  assert.equal(late.status, 409);
 });
 
 test('runs and run cover only this account and tolerate a missing or unreadable result', async () => {

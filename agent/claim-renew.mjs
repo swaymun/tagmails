@@ -51,8 +51,10 @@ export async function whileHoldingClaim(claim, work, { release = async () => {},
   const stop = keepClaim(claim, () => { lost = true; }, options);
   try {
     const value = await work();
-    // A renewal still in flight could report the loss after we return: wait
-    // for it, then ask once more, so a lost lease never reaches the agent.
+    // A renewal still in flight could report the loss after we return: stop
+    // starting new ones, wait for it, then ask once more, so a lost lease never
+    // reaches the agent.
+    stop();
     await stop.settled();
     if (!lost) {
       try { await (options.renew ?? renewClaim)(claim); }

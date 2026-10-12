@@ -145,7 +145,8 @@ async function pair(env, ctx, args) {
       : { model: saved.model, effort: effort ?? saved.effort, speed: speed ?? saved.speed };
   }
   const harness = agent ?? harnessOf(settings.model);
-  const pairing = await createPairingCode(env, ctx.account.id);
+  // The code dies with this connection: removing the app before it's used voids it.
+  const pairing = await createPairingCode(env, ctx.account.id, { grantId: ctx.grantId });
   if (!pairing) throw new ToolError('Too many pairing codes this hour. Try again later.');
   const { code, expiresInSeconds } = pairing;
   const relay = ctx.relayOrigin === HOSTED_RELAY ? '' : ` --relay ${ctx.relayOrigin}`;

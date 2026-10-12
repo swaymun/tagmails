@@ -66,7 +66,7 @@ test('settled replies purge rendered bodies while retaining delivery and reactio
   assert.equal(await purgeSettledOutboundBodies(env), 0);
   assert.equal(objects.has(key), false);
   const compact = JSON.parse(sqlite.prepare("SELECT payload_json FROM outbox WHERE job_id = 'job-1'").get().payload_json);
-  assert.deepEqual(Object.keys(compact).sort(), ['from', 'subject', 'tags', 'to']);
+  assert.deepEqual(Object.keys(compact).sort(), ['from', 'provider', 'subject', 'tags', 'to']);
   assert.equal(compact.subject, 'Re: Shared work');
   assert.deepEqual(await reaction(env, { providerEmailId: 'reaction-1', from: 'owner@gmail.com',
     targetId: '<sent-1@tagmails.test>' }), { accepted: true, reaction: true, duplicate: false });
@@ -271,6 +271,11 @@ test('a reply that cannot be rendered is blocked, and a Cloudflare send failure 
   let looked = 0;
   assert.equal((await reconcileOneUnknownOutbox(env, { listSentEmails: async () => { looked += 1; return { data: { data: [] } }; } })).state, 'uncertain');
   assert.equal(looked, 1);
+  // An untagged row from before tagging counts as Cloudflare's while Cloudflare sends, and is given up too.
+  await queuedTurn(fixture, { number: 6, from: 'owner@gmail.com', to: ['agent@wonder.test'], threadId: 'thread-6' });
+  assert.equal((await sendNextOutbox(env, { sendEmail: async () => { throw new Error('refused'); } })).state, 'uncertain');
+  sqlite.prepare("UPDATE outbox SET payload_json = json_remove(payload_json, '$.provider'), updated_at = datetime('now', '-31 minutes') WHERE job_id = 'job-6'").run();
+  assert.deepEqual(await reconcileOneUnknownOutbox(env), { state: 'blocked', jobId: 'job-6' });
 });
 
 test('a failed copy to storage sets that reply aside, and Message-ID polling never moves the retention clock', async () => {
