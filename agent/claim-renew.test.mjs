@@ -12,12 +12,13 @@ test('a relay-backed runtime renews with its device credential and lease ID', as
   const tokenFile = path.join(directory, 'token');
   fs.writeFileSync(tokenFile, 'tm_dev_fake_test_token');
   let received;
+  let status = 200;
   const server = http.createServer(async (request, response) => {
     let body = '';
     for await (const chunk of request) body += chunk;
     received = { path: request.url, authorization: request.headers.authorization, body: JSON.parse(body) };
-    response.writeHead(200, { 'content-type': 'application/json' });
-    response.end('{"renewed":true}');
+    response.writeHead(status, { 'content-type': 'application/json' });
+    response.end(status === 200 ? '{"renewed":true}' : '{}');
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => server.close());
@@ -36,6 +37,12 @@ test('a relay-backed runtime renews with its device credential and lease ID', as
     path: '/api/device/renew', authorization: 'Bearer tm_dev_fake_test_token',
     body: { jobId: 'job-1', leaseId: 'lease-1' },
   });
+  // A revoked computer (401) stops at once, like a replaced lease (409); a relay hiccup (502) is retried.
+  for (const [code, gone] of [[401, true], [409, true], [502, undefined]]) {
+    status = code;
+    const error = await renewClaim({ jobId: 'job-1', claimId: 'lease-1' }).catch((caught) => caught);
+    assert.equal(error.leaseGone, gone, String(code));
+  }
 });
 
 test('a lease survives network blips and stops only when gone or truly expired', async () => {

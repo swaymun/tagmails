@@ -15,7 +15,8 @@ export async function renewClaim(claim) {
   const response = await fetch(url, {
     method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(10_000),
   });
-  if (response.status === 409) throw Object.assign(new Error('Claim lease was replaced'), { leaseGone: true });
+  // 409: the lease expired or moved. 401/403: this computer was revoked.
+  if ([401, 403, 409].includes(response.status)) throw Object.assign(new Error('Claim lease is gone'), { leaseGone: true });
   const result = response.ok ? await response.json() : null;
   if (!result?.renewed) throw new Error('Claim renewal failed');
   return { steers: Array.isArray(result.steers) ? result.steers : [] };

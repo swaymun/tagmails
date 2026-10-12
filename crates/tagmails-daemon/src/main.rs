@@ -202,6 +202,24 @@ fn relay_post(
     Ok(response.json()?)
 }
 
+/// Tells the relay a run is starting. False only when the relay refuses: the
+/// device was revoked (401/403) or the lease expired or moved (409). Then no
+/// agent may start. A network error or an older relay still runs the job;
+/// lease renewal catches a lost lease within its window.
+fn lease_still_held(client: &Client, base: &str, token: &str, job_id: &str, lease_id: &str) -> bool {
+    match relay_post(client, base, "/api/device/started", token, json!({"jobId":job_id,"leaseId":lease_id})) {
+        Ok(_) => true,
+        Err(error) => {
+            let status = error.downcast_ref::<reqwest::Error>().and_then(reqwest::Error::status).map(|status| status.as_u16());
+            if matches!(status, Some(401 | 403 | 409)) {
+                return false;
+            }
+            eprintln!("Run start could not be reported: {error}");
+            true
+        }
+    }
+}
+
 fn run_adapter_json(
     script: &str,
     workspace: &Path,
@@ -831,14 +849,9 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
                 claim["model"]["id"].as_str().unwrap_or("unknown model"),
                 workspace.display()
             );
-            if let Err(error) = relay_post(
-                client,
-                base,
-                "/api/device/started",
-                token,
-                json!({"jobId":job_id,"leaseId":lease_id}),
-            ) {
-                eprintln!("Status reaction could not be queued: {error}");
+            if !lease_still_held(client, base, token, &job_id, &lease_id) {
+                eprintln!("{job_id}: the relay revoked this computer or replaced the lease; not running it");
+                return Ok(());
             }
             // Only the owner's own reply may show their instructions; a
             // participant run never reports them, even if they changed meanwhile.
@@ -1258,6 +1271,29 @@ mod tests {
 
     use super::*;
     use std::net::TcpListener;
+
+    #[test]
+    fn a_revoked_device_or_replaced_lease_never_starts_the_agent() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let statuses = ["401 Unauthorized", "409 Conflict", "404 Not Found", "200 OK"];
+        let server = thread::spawn(move || {
+            for status in statuses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut bytes = [0u8; 4096];
+                let length = stream.read(&mut bytes).unwrap();
+                assert!(String::from_utf8_lossy(&bytes[..length]).starts_with("POST /api/device/started"));
+                let body = if status.starts_with("200") { "{\"started\":true}" } else { "{}" };
+                let response = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        let client = Client::new();
+        let held: Vec<bool> = (0..4).map(|_| lease_still_held(&client, &base, "tm_dev_x", "job", "lease")).collect();
+        // 401 revoked and 409 replaced stop the run; an older relay (404) or success runs it.
+        assert_eq!(held, [false, false, true, true]);
+        server.join().unwrap();
+    }
 
     #[test]
     fn relay_claim_rejects_tampered_payload() {
