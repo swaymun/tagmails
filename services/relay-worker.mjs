@@ -295,12 +295,13 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
   const guests = owner ? visibleGuests(message, ownerEmail, agentAddresses) : [];
   // With a computer that registered a sealing key, everything kept about this
   // email is sealed to that key; the relay keeps only routing metadata.
-  const target = await sealTarget(env.DB, account.id, threadId);
+  // The model catalog names the computer a new thread is routed to (and pinned to).
+  const catalog = await accountModelCatalog(env.DB, account.id, threadId);
+  const target = await sealTarget(env.DB, account.id, threadId, catalog.deviceId);
   const objectKey = `inbound/${account.id}/${message.providerEmailId}.${target ? 'sealed' : 'eml'}`;
   if (target) await storeSealedRequest(env, target, objectKey, message, agent);
   else await env.MAIL.put(objectKey, message.rawMime, { httpMetadata: { contentType: 'message/rfc822' } });
   const statements = [];
-  const catalog = await accountModelCatalog(env.DB, account.id, threadId);
   const subject = message.subject.slice(0, 300);
   if (!threadId) statements.push(env.DB.prepare('INSERT INTO threads (id, account_id, subject, device_id) VALUES (?, ?, ?, ?)')
     .bind(newThreadId, account.id, target ? await sealedSubject(target, subject) : await sealText(env, subject), catalog.deviceId));

@@ -495,3 +495,36 @@ test('mail sealed to a key no paired computer holds fails instead of waiting for
   await tendSealedReplies(relay.env);
   assert.equal(relay.sqlite.prepare('SELECT state FROM jobs').get().state, 'failed');
 });
+
+test('a held reply its computer can no longer open is dropped so the thread moves on', async () => {
+  const relay = await sealedRelay();
+  const first = await relay.email();
+  let { claim } = await relay.claim();
+  await relay.post('/api/device/complete', completion(await openClaim(claim, relay.deviceKey)));
+  relay.sqlite.prepare("UPDATE outbox SET state = 'uncertain'").run();
+  await relay.email({ inReplyTo: first });
+  ({ claim } = await relay.claim());
+  const opened = await openClaim(claim, relay.deviceKey);
+  assert.equal((await relay.post('/api/device/complete', completion(opened))).reply, 'held');
+  await tendSealedReplies(relay.env);
+  assert.equal(relay.sqlite.prepare('SELECT state FROM outbox WHERE job_id = ?').get(opened.jobId).state, 'queued');
+  // The computer refuses held replies older than a week; the relay gives up on them too.
+  relay.sqlite.prepare("UPDATE outbox SET updated_at = datetime('now', '-8 days') WHERE job_id = ?").run(opened.jobId);
+  await tendSealedReplies(relay.env);
+  assert.equal(relay.sqlite.prepare('SELECT state FROM outbox WHERE job_id = ?').get(opened.jobId).state, 'blocked');
+  assert.equal(relay.objects.has(`outbound/account-1/${opened.jobId}.json`), false);
+});
+
+test('mail is sealed to the computer it is routed to, or kept for an older computer that can run it', async () => {
+  const relay = await sealedRelay();
+  // An older computer without a key has the freshest model list, so the relay routes the new thread there.
+  const oldToken = `tm_dev_${randomBytes(32).toString('base64url')}`;
+  relay.sqlite.prepare(`INSERT INTO devices (id, account_id, token_hash, model_catalog_json, model_catalog_at)
+    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`).run('device-old', 'account-1', createHash('sha256').update(oldToken).digest('hex'),
+    JSON.stringify([{ id: 'gpt-6-sol', name: 'GPT-6 Sol', efforts: ['medium'], speeds: ['standard'] }]));
+  await relay.email();
+  const message = relay.sqlite.prepare('SELECT m.seal_key_id, t.device_id FROM messages m JOIN threads t ON t.id = m.thread_id').get();
+  assert.deepEqual({ ...message }, { seal_key_id: null, device_id: 'device-old' });
+  assert.equal((await relay.claim()).claimed, false, 'the keyed computer does not take the older one\'s thread');
+  assert.equal((await relay.claim(oldToken)).claimed, true);
+});

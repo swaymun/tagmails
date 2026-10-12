@@ -633,26 +633,39 @@ export async function sendHeldReply(env, device, jobId, payload, options = {}) {
   return sendPrepared(env, row, payload, senders(env, options), { sealed: true, held: true });
 }
 
-// Wakes computers that hold a reply whose turn has come. Sealed replies that
-// were never rendered (the Worker stopped between storing a completion and
-// sending) can't be recovered by the relay; they are blocked after 15 minutes.
+// Upkeep for sealed mail, which the relay can't read to recover:
+// - a reply that was never rendered (the Worker stopped between storing a
+//   completion and sending it, and the computer didn't retry) is blocked;
+// - a held reply its computer can no longer open (older than the 7 days the
+//   computer accepts, or sealed to a key no paired computer holds) is blocked
+//   and deleted, so later replies in its thread aren't stuck behind it;
+// - a queued job nobody can run (the relay's own question was never sent, or
+//   its key is gone) fails, and its credit is released;
+// - computers holding a reply whose turn has come are woken.
 export async function tendSealedReplies(env) {
-  const stranded = await env.DB.prepare(`SELECT o.job_id FROM outbox o JOIN jobs j ON j.id = o.job_id
-    JOIN messages m ON m.id = j.message_id
-    WHERE o.state = 'queued' AND o.payload_json IS NULL AND m.seal_key_id IS NOT NULL
-      AND o.updated_at <= datetime('now', '-15 minutes') LIMIT 10`).bind().all();
+  const stranded = await env.DB.prepare(`SELECT o.job_id, t.account_id, ${HELD_FOR} AS held FROM outbox o
+    JOIN jobs j ON j.id = o.job_id JOIN messages m ON m.id = j.message_id JOIN threads t ON t.id = j.thread_id
+    WHERE o.state = 'queued' AND m.seal_key_id IS NOT NULL AND (
+      (o.payload_json IS NULL AND o.updated_at <= datetime('now', '-15 minutes')) OR
+      (${HELD_FOR} IS NOT NULL AND (o.updated_at <= datetime('now', '-7 days') OR NOT EXISTS (SELECT 1 FROM devices d
+        WHERE d.key_id = ${HELD_FOR} AND d.account_id = t.account_id AND d.revoked_at IS NULL))))
+    LIMIT 10`).bind().all();
   for (const row of stranded.results ?? stranded) {
-    console.error('Sealed reply was never rendered', row.job_id);
-    await blockRow(env, row.job_id);
+    console.error('Sealed reply can no longer be sent', row.job_id);
+    if ((await blockRow(env, row.job_id)).state === 'blocked' && row.held) {
+      await env.MAIL.delete(`outbound/${row.account_id}/${row.job_id}.json`);
+    }
   }
-  // Same for the relay's own question to sealed mail, which is answered at
-  // intake, and for mail sealed to a key no paired computer holds any more
-  // (the computer was re-paired or revoked): nobody can open or answer it.
-  await env.DB.prepare(`UPDATE jobs SET state = 'failed' WHERE state = 'queued'
-    AND created_at <= datetime('now', '-15 minutes')
-    AND message_id IN (SELECT m.id FROM messages m WHERE m.seal_key_id IS NOT NULL
-      AND (json_type(jobs.model_json, '$.error') = 'text' OR NOT EXISTS (SELECT 1 FROM devices d
-        WHERE d.key_id = m.seal_key_id AND d.revoked_at IS NULL)))`).bind().run();
+  const orphans = await env.DB.prepare(`SELECT j.id FROM jobs j JOIN messages m ON m.id = j.message_id
+    WHERE j.state = 'queued' AND j.created_at <= datetime('now', '-15 minutes') AND m.seal_key_id IS NOT NULL
+      AND (json_type(j.model_json, '$.error') = 'text' OR NOT EXISTS (SELECT 1 FROM devices d
+        WHERE d.key_id = m.seal_key_id AND d.account_id = m.account_id AND d.revoked_at IS NULL))
+    LIMIT 10`).bind().all();
+  for (const row of orphans.results ?? orphans) {
+    const failed = await env.DB.prepare("UPDATE jobs SET state = 'failed' WHERE id = ? AND state = 'queued' RETURNING id")
+      .bind(row.id).first();
+    if (failed) await releaseTestEmail(env, row.id);
+  }
   const waiting = await env.DB.prepare(`SELECT DISTINCT t.account_id FROM outbox o JOIN jobs j ON j.id = o.job_id
     JOIN threads t ON t.id = j.thread_id
     WHERE o.state = 'queued' AND ${HELD_FOR} IS NOT NULL AND ${IN_ORDER} LIMIT 20`).bind().all();

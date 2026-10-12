@@ -11,16 +11,33 @@ export { isDeviceSealed, keyIdFor, validPublicKey };
 
 const MAX_ATTACHMENTS = 5;
 
-// The device a new message is sealed to: the thread's computer when it is
-// still paired (an older computer without a key keeps relay-key sealing so it
-// can run its thread), otherwise the account's newest computer with a key.
-// Returns null when the message keeps relay-key sealing.
-export async function sealTarget(db, accountId, threadId) {
+// The device a new message is sealed to, which must be the one that will run
+// it: the thread's computer while it is still paired (one without a key keeps
+// relay-key sealing so it can still run its thread); for an unpinned thread,
+// the key its earlier mail was sealed to; for a new thread, the computer the
+// relay routes it to (`routedDeviceId`, the freshest model catalog); and with
+// no routed computer, the account's newest computer with a key. Returns null
+// when the message keeps relay-key sealing.
+export async function sealTarget(db, accountId, threadId, routedDeviceId = null) {
+  const device = async (sql, ...args) => {
+    const row = await db.prepare(sql).bind(...args).first();
+    return row && { found: true, target: row.public_key ? { deviceId: row.id, publicKey: row.public_key, keyId: row.key_id } : null };
+  };
   if (threadId) {
-    const pinned = await db.prepare(`SELECT d.id, d.public_key, d.key_id FROM threads t
+    const pinned = await device(`SELECT d.id, d.public_key, d.key_id FROM threads t
       JOIN devices d ON d.id = t.device_id
-      WHERE t.id = ? AND t.account_id = ? AND d.revoked_at IS NULL`).bind(threadId, accountId).first();
-    if (pinned) return pinned.public_key ? { deviceId: pinned.id, publicKey: pinned.public_key, keyId: pinned.key_id } : null;
+      WHERE t.id = ? AND t.account_id = ? AND d.revoked_at IS NULL`, threadId, accountId);
+    if (pinned) return pinned.target;
+    const earlier = await db.prepare(`SELECT m.seal_key_id FROM messages m JOIN threads t ON t.id = m.thread_id
+      WHERE m.thread_id = ? AND t.account_id = ? AND t.device_id IS NULL AND m.seal_key_id IS NOT NULL
+      ORDER BY m.rowid DESC LIMIT 1`).bind(threadId, accountId).first();
+    const same = earlier && await newestKeyedDevice(db, accountId, earlier.seal_key_id);
+    if (same) return same;
+  }
+  if (routedDeviceId) {
+    const routed = await device(`SELECT id, public_key, key_id FROM devices
+      WHERE id = ? AND account_id = ? AND revoked_at IS NULL`, routedDeviceId, accountId);
+    if (routed) return routed.target;
   }
   return newestKeyedDevice(db, accountId);
 }

@@ -864,16 +864,23 @@ fn relay_iteration(client: &Client, settings: &Settings) -> Result<bool, Box<dyn
     }
 }
 
+static SENDING_HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Claim the next job, skipping project folders other running jobs are using.
 fn claim_next(client: &Client, settings: &Settings, busy: &[String]) -> Result<Option<Value>, Box<dyn Error>> {
     let token = settings.token.as_str();
     let response = relay_post(client, &settings.relay, "/api/device/claim", token, json!({"busyFolders": busy}))?;
-    if response["pendingSends"] == true {
-        // Replies the relay held sealed to this machine; it opens and returns them.
-        match device_key(&["send-pending"], None, Some(&settings.relay)) {
-            Ok(_) => println!("Sent held replies."),
-            Err(error) => eprintln!("Held replies could not be sent: {error}"),
-        }
+    if response["pendingSends"] == true && !SENDING_HELD.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        // Replies the relay held sealed to this machine; it opens and returns
+        // them. In the background, so a job claimed in this same response keeps its lease.
+        let relay = settings.relay.clone();
+        thread::spawn(move || {
+            match device_key(&["send-pending"], None, Some(&relay)) {
+                Ok(_) => println!("Sent held replies."),
+                Err(error) => eprintln!("Held replies could not be sent: {error}"),
+            }
+            SENDING_HELD.store(false, std::sync::atomic::Ordering::SeqCst);
+        });
     }
     if response["claimed"] != true {
         return Ok(None);
@@ -953,6 +960,7 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
     // Sealed mail: files ride along with the completion so the relay never stores them.
     let sealed = claim["sealed"] == true;
     let mut inline_files: Vec<Value> = Vec::new();
+    let mut inline_bytes: u64 = 0;
     if result["state"] == "completed" && wants_answer_file(&claim) {
         if sealed {
             inline_files.push(json!({"name":"answer.txt","mimeType":"text/plain","content":STANDARD.encode(answer_file(&result))}));
@@ -998,7 +1006,9 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
                 // file over the whole reply's budget never does. An older relay
                 // without the route endpoint just takes the upload.
                 let route = file.as_ref().ok().map(|(_, size)| {
-                    if *size > EMAIL_FILE_BYTES {
+                    // Sealed mail's files travel together in the completion, so
+                    // they share one reply budget here (the relay sees no upload).
+                    if *size > EMAIL_FILE_BYTES || (sealed && inline_bytes + *size > EMAIL_FILE_BYTES) {
                         return json!({"route": "none", "reason": "too-large"});
                     }
                     relay_post(client, base, "/api/device/file-route", token,
@@ -1013,6 +1023,7 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
                         if required { Err(format!("not sent ({reason})").into()) } else { Ok(()) }
                     }
                     (Ok((file, size)), _) if sealed => read_capped(&file, size).map(|bytes| {
+                        inline_bytes += bytes.len() as u64;
                         inline_files.push(json!({"name": filename, "mimeType": mime_type, "content": STANDARD.encode(bytes)}));
                     }),
                     (Ok((file, size)), _) => {
@@ -1060,15 +1071,19 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
         body["subject"] = claim["request"]["subject"].clone();
         body["files"] = json!(inline_files);
     }
-    let bytes = body.to_string().len() as u64;
-    let completion: Value = client
-        .post(format!("{}/api/device/complete", base.trim_end_matches('/')))
-        .timeout(Duration::from_secs(30 + bytes / 250_000))
-        .bearer_auth(token)
-        .json(&body)
-        .send()?
-        .error_for_status()?
-        .json()?;
+    let completion = match complete_job(client, base, token, &body) {
+        // A sealed reply whose files the relay refused still goes out, naming them as not sent.
+        Err(error) if sealed && !inline_files.is_empty() && error.to_string().contains("400") => {
+            eprintln!("{job_id}: completion with files was refused ({error}); sending without them");
+            let mut unsent = body["result"]["unsentFiles"].as_array().cloned().unwrap_or_default();
+            unsent.extend(inline_files.iter().map(|file| json!({"name": file["name"], "reason": "failed"})));
+            unsent.truncate(5);
+            body["result"]["unsentFiles"] = json!(unsent);
+            body["files"] = json!([]);
+            complete_job(client, base, token, &body)?
+        }
+        other => other?,
+    };
     if completion["completed"] != true {
         return Err("Relay did not acknowledge the completion".into());
     }
@@ -1077,6 +1092,32 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
         result["state"].as_str().unwrap_or("unknown")
     );
     Ok(())
+}
+
+/// Posts a completion. For sealed mail the relay sends the reply from this
+/// request; if it couldn't ("delayed"), the same completion is posted again so
+/// the relay can retry the send (it never sends twice).
+fn complete_job(client: &Client, base: &str, token: &str, body: &Value) -> Result<Value, Box<dyn Error>> {
+    let bytes = body.to_string().len() as u64;
+    let post = || -> Result<Value, Box<dyn Error>> {
+        Ok(client
+            .post(format!("{}/api/device/complete", base.trim_end_matches('/')))
+            .timeout(Duration::from_secs(30 + bytes / 250_000))
+            .bearer_auth(token)
+            .json(body)
+            .send()?
+            .error_for_status()?
+            .json()?)
+    };
+    let mut completion = post()?;
+    for wait in [5, 20, 60] {
+        if completion["reply"] != "delayed" {
+            break;
+        }
+        thread::sleep(Duration::from_secs(wait));
+        completion = post().unwrap_or(completion);
+    }
+    Ok(completion)
 }
 
 fn read_token(path: &Path) -> Result<String, Box<dyn Error>> {

@@ -69,11 +69,10 @@ content stays on the computer, in the Codex or Claude session.
   stored, not mail in flight. Only sender-side encryption or a user-owned
   mailbox would change that.
 - The private key sits next to the device token. An agent run with owner access
-  can read that folder, as it can read the token.
-- Several computers on one account: a new thread is sealed to the newest
-  computer with a key, and only that computer runs it. A thread pinned to a
-  computer without a key keeps relay-key storage so that computer can still run
-  it. Re-pairing creates a new key. Queued mail sealed to a key that no paired
+  could read that folder; Codex owner write turns are denied both files.
+- Several computers on one account: mail is sealed to the computer its thread
+  is routed to, and only that computer runs it. A computer without a key gets
+  relay-key storage so it can still run its threads. Re-pairing creates a new key. Queued mail sealed to a key that no paired
   computer still holds fails after 15 minutes without a reply; the run page
   shows the failure.
 - Computers older than 0.2.24, and anything stored before a computer
