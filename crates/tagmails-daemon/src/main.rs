@@ -21,7 +21,7 @@ mod push;
 mod service;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const DEFAULT_RELAY: &str = "https://tagmails-relay-dev.saimun-shahee.workers.dev";
+const DEFAULT_RELAY: &str = "https://relay.tagmails.com";
 
 /// What a relay watcher needs. `workspace: None` means project routing: the
 /// relay picks one of this machine's published projects (or a chat folder)

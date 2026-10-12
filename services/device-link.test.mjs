@@ -78,7 +78,7 @@ test('expired links, strangers on a private relay and bad requests pair nothing'
 
 test('skill.md tells an agent how to pair, adding --relay only for a self-hosted relay', async () => {
   const { env } = setup();
-  env.PUBLIC_ORIGIN = 'https://tagmails-relay-dev.saimun-shahee.workers.dev';
+  env.PUBLIC_ORIGIN = 'https://relay.tagmails.com';
   env.SITE_ORIGIN = 'https://tagmails.com';
   const hosted = await (await relay.fetch(new Request(`${ORIGIN}/skill.md`), env)).text();
   assert.match(hosted, /^---\nname: tagmails\n/);

@@ -3,7 +3,7 @@
 // own --relay flag.
 
 // The daemon pairs with this relay unless told otherwise (DEFAULT_RELAY in crates/tagmails-daemon).
-const HOSTED_RELAY = 'https://tagmails-relay-dev.saimun-shahee.workers.dev';
+const HOSTED_RELAY = 'https://relay.tagmails.com';
 // The first release whose `tagmails pair` can pair by link.
 const MIN_VERSION = '0.2.28';
 
