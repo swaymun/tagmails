@@ -108,8 +108,9 @@ function run(prompt) {
   assert.ok(!calls[0].args.includes('--resume'));
   assert.ok(calls[1].args.includes('33333333-3333-4333-8333-333333333333'));
   assert.ok(calls[1].prompt.includes('Continue the summary.'));
+
   assert.equal(calls[0].hadApiKey, false);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'sessions.json'))).threads['thread-1:guest'].workspace, fs.realpathSync(workspace));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'sessions.json'))).threads['thread-1:guest:owner@gmail.com'].workspace, fs.realpathSync(workspace));
 
   const budgetFailure = await runClaim(claim('job-3', '[budget-fail]'));
   assert.equal(budgetFailure.state, 'failed');
@@ -142,7 +143,7 @@ function run(prompt) {
   assert.equal(writeCalls[3].hadApiKey, false);
   assert.match(writeCalls[3].prompt, /read and edit files in the selected workspace/);
   assert.doesNotMatch(writeCalls[3].args.join(' '), /Bash|WebFetch|WebSearch/);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'write-sessions.json'))).threads['thread-1:guest'].workspace, fs.realpathSync(workspace));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'write-sessions.json'))).threads['thread-1:guest:owner@gmail.com'].workspace, fs.realpathSync(workspace));
   // An owner email loads the owner's own Claude Code setup and connectors.
   const ownerClaim = claim('job-owner', 'Make a Google Doc from the notes.');
   ownerClaim.request.fromOwner = true;
@@ -164,6 +165,12 @@ function run(prompt) {
   assert.equal((await runClaim(claim('job-2', 'Continue.'))).runtime, 'claude-cli-write');
   const resumedWrite = fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).at(-1);
   assert.ok(resumedWrite.args.includes('33333333-3333-4333-8333-333333333333'));
+  // Another participant on the thread gets their own session, never this one.
+  const bob = claim('job-bob', 'What did the others ask?');
+  bob.request.from = 'bob@gmail.com';
+  await runClaim(bob);
+  const bobCall = fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).at(-1);
+  assert.ok(!bobCall.args.includes('--resume'));
   const writeFailure = await runClaim({ ...claim('job-3'), model: { id: 'not-a-claude-model', effort: 'medium' } });
   assert.match(writeFailure.checks[0], /partial changes/);
   const denied = await runClaim(claim('job-4', '[outside-denied]'));

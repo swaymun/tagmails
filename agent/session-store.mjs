@@ -45,9 +45,12 @@ export async function updateStore(file, change, label = 'session') {
   });
 }
 
-// Owner and participant turns on one email thread never share an agent
-// session: the owner's history holds their instructions and tool results, and a
-// participant's text must not ride into an owner turn with owner access.
+// Each sender on one email thread has their own agent session: the owner's
+// history holds their instructions and tool results, a participant's text must
+// not ride into an owner turn with owner access, and one participant's private
+// reply to the agent must not reach another participant through a resumed
+// session. (Mappings saved as `<thread>:guest` by 0.2.22-0.2.23 are not reused.)
 export function sessionKey(claim) {
-  return `${claim.threadId}:${claim.request?.fromOwner === true ? 'owner' : 'guest'}`;
+  if (claim.request?.fromOwner === true) return `${claim.threadId}:owner`;
+  return `${claim.threadId}:guest:${String(claim.request?.from ?? '').toLowerCase()}`;
 }
