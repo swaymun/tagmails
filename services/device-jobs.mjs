@@ -264,6 +264,10 @@ async function started(env, device, body) {
   return json({ started: true });
 }
 
+// The Rust daemon cuts the text it adds (checks, the instructions notice) by
+// characters, so limits count code points: 300 emoji are 600 UTF-16 units.
+function characters(text) { return [...text].length; }
+
 function validResult(value) {
   if (!value || !['completed', 'failed', 'needs_approval', 'needs_clarification'].includes(value.state) ||
       typeof value.summary !== 'string' || !value.summary.trim() || value.summary.length > 500 ||
@@ -272,7 +276,7 @@ function validResult(value) {
   const transcript = value.transcript;
   const artifactIds = value.artifactIds;
   return ['details', 'checks'].every((key) => value[key] === undefined ||
-    (Array.isArray(value[key]) && value[key].length <= 12 && value[key].every((item) => typeof item === 'string' && item.length <= 300))) &&
+    (Array.isArray(value[key]) && value[key].length <= 12 && value[key].every((item) => typeof item === 'string' && characters(item) <= 300))) &&
     (transcript === undefined || (transcript?.version === 1 && typeof transcript.truncated === 'boolean' &&
       Array.isArray(transcript.events) && transcript.events.length <= 48 &&
       transcript.events.every((event, index) => event && ['request', 'assistant', 'tool', 'reasoning'].includes(event.kind) &&
@@ -282,7 +286,7 @@ function validResult(value) {
         event.text.length <= (index === transcript.events.length - 1 && event.kind === 'assistant' &&
           event.phase !== 'commentary' ? 8000 : 800)))) &&
     (value.instructionsNotice === undefined || (typeof value.instructionsNotice === 'string' &&
-      value.instructionsNotice.length > 0 && value.instructionsNotice.length <= 300)) &&
+      value.instructionsNotice.length > 0 && characters(value.instructionsNotice) <= 300)) &&
     // Daemon 0.2.19 may still report Drive files; they're ignored.
     (value.driveFileIds === undefined || (Array.isArray(value.driveFileIds) && value.driveFileIds.length <= 5)) &&
     (value.unsentFiles === undefined || (Array.isArray(value.unsentFiles) && value.unsentFiles.length <= 5 &&

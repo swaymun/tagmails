@@ -122,6 +122,8 @@ test('a paired device receives a signed, account-scoped claim and completes it o
   assert.equal((await call(env, paired.token, 'complete', { ...lease,
     result: { ...result, transcript: { ...result.transcript, events: [
       ...result.transcript.events.slice(0, -1), { kind: 'assistant', text: 'x'.repeat(8001) }] } } })).status, 400);
+  assert.equal((await call(env, paired.token, 'complete', { ...lease,
+    result: { ...result, instructionsNotice: '🙂'.repeat(301) } })).status, 400);
   assert.deepEqual(await call(env, paired.token, 'complete', { ...lease, result }), {
     status: 200, body: { completed: true, duplicate: false },
   });
@@ -170,6 +172,17 @@ test('a Gmail owner receives one ordered status reaction per durable task stage'
     ['received', 'completed'].map((status) => ({ status, state: 'accepted' })));
   assert.ok(sent[0].includes(`In-Reply-To: <status-turn@gmail.com>`));
   assert.equal(sent.length, 2);
+});
+
+test('text the daemon cut at 300 characters is accepted even when every character is an emoji', async () => {
+  const { env, sqlite } = bindings();
+  const paired = device(sqlite);
+  await inbound(env);
+  const claimed = envelope((await call(env, paired.token, 'claim')).body);
+  const emoji = '🙂'.repeat(300);
+  assert.deepEqual((await call(env, paired.token, 'complete', { jobId: claimed.jobId, leaseId: claimed.leaseId,
+    result: { state: 'completed', summary: 'Done.', checks: [emoji], instructionsNotice: emoji } })).body,
+  { completed: true, duplicate: false });
 });
 
 test('same-thread turns wait and stay with the Mac that owns their local session', async () => {
