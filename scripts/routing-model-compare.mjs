@@ -11,7 +11,7 @@
 // therefore identical; the CLI models just can't hedge below Jev's thresholds.
 //
 //   node scripts/routing-model-compare.mjs [--providers jev,haiku,luna] [--tasks model,project,steer]
-//        [--only id,id] [--rerun-failed] [--concurrency 3] [--out .local/routing-compare-DATE]
+//        [--effort low|medium] [--only id,id] [--rerun-failed] [--concurrency 3] [--out .local/routing-compare-DATE]
 //
 // Jev key: TYPESAFE_API_KEY or ~/.config/wonder/jev.json. CLI models use the local
 // subscriptions (no API key). Set LUNA_PRICE_IN / LUNA_PRICE_OUT ($ per million
@@ -31,6 +31,7 @@ const providers = opt('providers', 'jev,haiku,luna').split(',');
 const tasks = opt('tasks', 'model,project,steer').split(',');
 const only = opt('only') ? new Set(opt('only').split(',')) : null;
 const concurrency = Number(opt('concurrency', 3));
+const effort = opt('effort', 'low');
 const outDir = path.resolve(opt('out', '.local/routing-compare-2026-10-12'));
 const JEV_RATE = 0.042 / 1e6;
 const CLI_TIMEOUT = 120000;
@@ -67,7 +68,7 @@ function parseJson(text) {
 
 const SYSTEM = 'You are a classification function inside an email router. Answer with one JSON object only, no prose, no code fence.';
 async function askHaiku(prompt) {
-  const out = JSON.parse(await run('claude', ['-p', '--model', 'claude-haiku-5-5', '--effort', 'low', '--tools', '',
+  const out = JSON.parse(await run('claude', ['-p', '--model', 'claude-haiku-5-5', '--effort', effort, '--tools', '',
     '--no-session-persistence', '--setting-sources', '', '--disable-slash-commands', '--strict-mcp-config',
     '--system-prompt', SYSTEM, '--output-format', 'json'], prompt));
   if (out.is_error) throw new Error(`claude error: ${String(out.result).slice(0, 200)}`);
@@ -76,7 +77,7 @@ async function askHaiku(prompt) {
     outTok: u.output_tokens ?? 0, costUsd: out.total_cost_usd ?? null };
 }
 async function askLuna(prompt) {
-  const out = await run('codex', ['exec', '-m', 'gpt-6-luna', '-c', 'model_reasoning_effort="low"', '-s', 'read-only',
+  const out = await run('codex', ['exec', '-m', 'gpt-6-luna', '-c', `model_reasoning_effort="${effort}"`, '-s', 'read-only',
     '--skip-git-repo-check', '--ephemeral', '--json', '-C', scratch, '-'], `${SYSTEM}\n\n${prompt}`);
   let text = null, usage = {};
   for (const line of out.split('\n')) {
@@ -211,7 +212,7 @@ for (const task of tasks) for (const provider of ['jev', 'haiku', 'luna']) {
   lines.push(`| ${task} | ${provider} | ${s.correct}/${s.n} | ${s.p50} | ${s.p95} | ${s.inTok} | ${money(s.costPerCall)} | ${s.errors} | ${task === 'project' ? s.wrongFolder : '-'} |`);
 }
 const failIds = [...new Set(all.filter((r) => !r.ok).map((r) => `${r.task}/${r.id}`))];
-const failures = ['', '### Failures (cases any provider missed)', '', '| case | expected | jev | haiku 5.5 low | luna low |', '|---|---|---|---|---|'];
+const failures = ['', '### Failures (cases any provider missed)', '', `| case | expected | jev | haiku 5.5 ${effort} | luna ${effort} |`, '|---|---|---|---|---|'];
 for (const id of failIds) {
   const [task, ...rest] = id.split('/'); const caseId = rest.join('/');
   const cell = (p) => { const r = all.find((x) => x.provider === p && x.task === task && x.id === caseId);
