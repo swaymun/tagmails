@@ -114,9 +114,9 @@ function startFlags({ model, effort, speed }) {
 function setupPrompt(agent, pairCommand, startCommand) {
   return `Set up TagMails on this computer so emails to my agent address run here with ${agent}.
 
-1. If \`tagmails --version\` fails, install it:
-   - with Homebrew: brew install swaymun/tagmails/tagmails
-   - otherwise: curl -fsSL https://tagmails.com/install.sh | sh (needs Node.js 20+)
+1. If \`tagmails --version\` fails or shows a version older than 0.2.27, install or upgrade it:
+   - with Homebrew: brew install swaymun/tagmails/tagmails (or brew upgrade tagmails)
+   - otherwise: curl -fsSL https://tagmails.com/install.sh | sh (needs Node.js 20.16+)
 2. Check that ${agent} is installed and signed in on this computer.
 3. Pair this computer. The code works once and expires in 10 minutes:
    ${pairCommand}
@@ -125,7 +125,7 @@ function setupPrompt(agent, pairCommand, startCommand) {
 5. Replies can attach only 3.5 MB of files. If you have a connected app for storage (for example Google Drive or Dropbox), save where larger files should go:
    tagmails set --instructions "For files too large for email, upload them to my <that storage> and reply with the link."
    If you have none, skip this step and tell me.
-6. Run \`tagmails status\` and show me the output.
+6. Run \`tagmails doctor\` and show me the output. If a check fails, fix what it says and run it again.
 
 Don't send any email or change project files while setting this up. If a step fails, show me the error instead of working around it.`;
 }
@@ -156,7 +156,7 @@ async function pair(env, ctx, args) {
   return { pairingCode: code, expiresInSeconds, expiresAt: new Date(Date.now() + expiresInSeconds * 1000).toISOString(),
     agent: label,
     install: { homebrew: 'brew install swaymun/tagmails/tagmails', script: 'curl -fsSL https://tagmails.com/install.sh | sh' },
-    commands: [pairCommand, startCommand, 'tagmails status'],
+    commands: [pairCommand, startCommand, 'tagmails doctor'],
     setupPrompt: setupPrompt(label, pairCommand, startCommand),
     note: 'Run these on the Mac or Linux computer that should do the work (or paste setupPrompt into Codex or Claude Code there). The code works once, for 10 minutes. Call status afterwards to see the computer check in.' };
 }

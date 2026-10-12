@@ -2360,8 +2360,11 @@ fn command_doctor() -> Result<(), Box<dyn Error>> {
     check(service.starts_with("running"), &format!("background service ({service})"), "run `tagmails start --projects`");
     check(paths::adapters_dir().is_ok(), "agent adapters installed", "reinstall: `brew reinstall swaymun/tagmails/tagmails` or the install script");
     let node = probe("node", &["--version"]).unwrap_or_default();
-    let major = node.trim().trim_start_matches('v').split('.').next().and_then(|value| value.parse::<u32>().ok()).unwrap_or(0);
-    check(major >= 20, &format!("Node.js 20+ ({})", if node.trim().is_empty() { "not found" } else { node.trim() }), "install Node.js 20 or newer");
+    // The adapters' PDF reader needs process.getBuiltinModule (Node 20.16+, 22.3+).
+    let version: Vec<u32> = node.trim().trim_start_matches('v').split('.').map(|part| part.parse().unwrap_or(0)).collect();
+    let (major, minor) = (version.first().copied().unwrap_or(0), version.get(1).copied().unwrap_or(0));
+    let supported = major > 22 || (major == 22 && minor >= 3) || (major == 20 && minor >= 16);
+    check(supported, &format!("Node.js 20.16+ ({})", if node.trim().is_empty() { "not found" } else { node.trim() }), "install Node.js 20.16 or newer");
     let codex = found("codex") != "not found";
     let claude = found("claude") != "not found";
     check(codex || claude, "Codex or Claude Code installed", "install the Codex CLI (`npm i -g @openai/codex`) or Claude Code");
