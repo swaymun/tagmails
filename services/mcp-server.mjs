@@ -291,7 +291,7 @@ async function callTool(env, ctx, params, options) {
   if (!tool) return { error: [-32602, `Unknown tool: ${String(params?.name).slice(0, 80)}`] };
   const args = params.arguments ?? {};
   const fail = (message) => ({ result: { content: [{ type: 'text', text: message }], isError: true } });
-  if (!allowed(tool, ctx.scopes)) return fail(`This connection was not given ${tool.scope}. Reconnect TagMails and allow it.`);
+  if (!allowed(tool, ctx.scopes)) return { insufficientScope: tool.scope };
   if (typeof args !== 'object' || Array.isArray(args) || args === null) return fail('Arguments must be an object.');
   const unknown = Object.keys(args).filter((key) => !(key in tool.inputSchema.properties));
   if (unknown.length) return fail(`Unknown argument: ${unknown[0].slice(0, 40)}.`);
@@ -323,9 +323,25 @@ async function readBody(request) {
   return JSON.parse(new TextDecoder().decode(Buffer.concat(chunks)));
 }
 
+// The transport spec asks servers to refuse unexpected browser origins (DNS
+// rebinding). CLIs and hosted clients send no Origin; browsers on this relay,
+// the Site, Claude, ChatGPT or localhost tools are allowed.
+function originAllowed(request, env) {
+  const origin = request.headers.get('origin');
+  if (!origin) return true;
+  let url;
+  try { url = new URL(origin); } catch { return false; }
+  if (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) return true;
+  const allowed = [new URL(request.url).origin, 'https://claude.ai', 'https://chatgpt.com',
+    ...[env.SITE_ORIGIN, env.SITE_ALLOWED_ORIGINS, env.MCP_ALLOWED_ORIGINS].flatMap((value) => String(value ?? '').split(','))
+      .map(configuredOrigin).filter(Boolean)];
+  return allowed.includes(url.origin);
+}
+
 export async function handleMcpRequest(request, env, { stripeFetch = fetch } = {}) {
   const url = new URL(request.url);
   if (url.pathname !== '/mcp') return null;
+  if (!originAllowed(request, env)) return Response.json({ error: 'Origin not allowed' }, { status: 403, headers: { 'Cache-Control': 'no-store' } });
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: OPEN_CORS });
   if (!env.DB) throw new Error('Account database is not configured');
   const grant = await mcpGrantFor(request, env);
@@ -378,6 +394,13 @@ export async function handleMcpRequest(request, env, { stripeFetch = fetch } = {
   }
   if (method === 'tools/call') {
     const outcome = await callTool(env, ctx, params, { stripeFetch });
+    if (outcome.insufficientScope) {
+      // A machine-readable challenge lets the client ask the owner for the wider scope.
+      const scope = [...grant.scopes, outcome.insufficientScope].join(' ');
+      return Response.json(rpcError(id, -32001, `This connection was not given ${outcome.insufficientScope}. Reconnect TagMails and allow it.`),
+        { status: 403, headers: { 'Cache-Control': 'no-store', ...OPEN_CORS, 'WWW-Authenticate':
+          `Bearer error="insufficient_scope", scope="${scope}", resource_metadata="${resourceMetadataUrl(request)}"` } });
+    }
     return reply(outcome.error ? rpcError(id, ...outcome.error) : rpc(id, outcome.result));
   }
   return reply(rpcError(id, -32601, `Method not found: ${method.slice(0, 80)}`));

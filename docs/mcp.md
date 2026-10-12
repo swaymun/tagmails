@@ -29,4 +29,6 @@ The client opens a TagMails page that asks you to sign in with Google: the same 
 - Scopes: `tagmails.read` (`status`, `runs`, `run`) and `tagmails.manage` (`pair`, `billing`, `revoke_device`). No scope requested means both.
 - Access tokens last 1 hour. Refresh tokens last 30 days and rotate on every use; reusing an old one more than a minute later revokes the whole connection. `POST /oauth/revoke` with either token, or the `disconnect` tool, ends a connection at once. Codes and tokens are stored only as hashes.
 - Every token is bound to one account; tools read and change only that account's rows.
-- Limits: bad tokens and sign-in attempts share `AUTH_RATE_LIMIT` per IP; signed-in calls share `PUBLIC_RATE_LIMIT` per account.
+- Tokens are issued only for `<relay>/mcp` (a different `resource` gets `invalid_target`). A tool the connection's scope doesn't cover returns 403 with `insufficient_scope`.
+- `/mcp` refuses browser `Origin`s other than the relay, the Site, claude.ai, chatgpt.com, localhost and `MCP_ALLOWED_ORIGINS`; requests without an Origin are fine.
+- Limits: bad tokens and sign-in attempts share `AUTH_RATE_LIMIT` per IP, token requests share it per client, and signed-in calls share `PUBLIC_RATE_LIMIT` per account.

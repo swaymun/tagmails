@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { googleSignInConfigured, ownerAccount, verifyGoogleCredential } from './account-auth.mjs';
 import { ICON_LINKS } from './brand-icons.mjs';
-import { rateLimited, tooManyRequests } from './rate-limit.mjs';
+import { rateLimited, rateLimitedKey, tooManyRequests } from './rate-limit.mjs';
 
 // OAuth 2.1 authorization server for the MCP endpoint, per the MCP
 // authorization spec: protected-resource and server metadata, dynamic client
@@ -291,28 +291,41 @@ const revokeGrant = (env, grantId) => env.DB.prepare(
 async function exchangeCode(env, params) {
   const code = params.get('code');
   if (!AUTH_CODE.test(code ?? '')) return null;
-  const row = await env.DB.prepare(`UPDATE mcp_auth_codes SET used_at = CURRENT_TIMESTAMP
-    WHERE code_hash = ? AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP
-    RETURNING client_id, account_id, redirect_uri, code_challenge, scope`).bind(hash(code)).first();
-  if (!row) {
+  const codeHash = hash(code);
+  const row = await env.DB.prepare(`SELECT client_id, account_id, redirect_uri, code_challenge, scope, grant_id,
+    used_at IS NULL AND expires_at > CURRENT_TIMESTAMP AS usable FROM mcp_auth_codes WHERE code_hash = ?`).bind(codeHash).first();
+  if (!row) return null;
+  if (!row.usable) {
     // A replayed code revokes whatever it was exchanged for (RFC 6749 4.1.2).
-    const used = await env.DB.prepare('SELECT grant_id FROM mcp_auth_codes WHERE code_hash = ? AND grant_id IS NOT NULL')
-      .bind(hash(code)).first();
-    if (used) await revokeGrant(env, used.grant_id);
+    if (row.grant_id) await revokeGrant(env, row.grant_id);
     return null;
   }
   const verifier = params.get('code_verifier');
-  if (row.client_id !== params.get('client_id') || row.redirect_uri !== params.get('redirect_uri') ||
+  const redirectUri = params.get('redirect_uri');
+  // OAuth 2.1 drops redirect_uri from the token request; when sent, it must match.
+  if (row.client_id !== params.get('client_id') || (redirectUri !== null && redirectUri !== row.redirect_uri) ||
       !VERIFIER.test(verifier ?? '') ||
-      createHash('sha256').update(verifier).digest('base64url') !== row.code_challenge) return null;
-  const active = await env.DB.prepare('SELECT id FROM accounts WHERE id = ? AND active = 1').bind(row.account_id).first();
-  if (!active) return null;
+      createHash('sha256').update(verifier).digest('base64url') !== row.code_challenge) {
+    await env.DB.prepare('UPDATE mcp_auth_codes SET used_at = CURRENT_TIMESTAMP WHERE code_hash = ? AND used_at IS NULL')
+      .bind(codeHash).run();
+    return null;
+  }
+  // The grant is created and the code spent in one transaction, so a racing
+  // replay either finds the code unspent or finds the grant it must revoke.
   const grantId = randomUUID();
-  await env.DB.batch([
-    env.DB.prepare('INSERT INTO mcp_grants (id, client_id, account_id, scope) VALUES (?, ?, ?, ?)')
-      .bind(grantId, row.client_id, row.account_id, row.scope),
-    env.DB.prepare('UPDATE mcp_auth_codes SET grant_id = ? WHERE code_hash = ?').bind(grantId, hash(code)),
+  const [created] = await env.DB.batch([
+    env.DB.prepare(`INSERT INTO mcp_grants (id, client_id, account_id, scope)
+      SELECT ?, c.client_id, c.account_id, c.scope FROM mcp_auth_codes c JOIN accounts a ON a.id = c.account_id
+      WHERE c.code_hash = ? AND c.used_at IS NULL AND c.expires_at > CURRENT_TIMESTAMP AND a.active = 1`)
+      .bind(grantId, codeHash),
+    env.DB.prepare(`UPDATE mcp_auth_codes SET used_at = CURRENT_TIMESTAMP,
+      grant_id = (SELECT id FROM mcp_grants WHERE id = ?) WHERE code_hash = ? AND used_at IS NULL`).bind(grantId, codeHash),
   ]);
+  if (!(created.meta?.changes ?? created.changes)) {
+    const spent = await env.DB.prepare('SELECT grant_id FROM mcp_auth_codes WHERE code_hash = ?').bind(codeHash).first();
+    if (spent?.grant_id) await revokeGrant(env, spent.grant_id);
+    return null;
+  }
   return issueTokens(env, grantId, row.scope);
 }
 
@@ -344,6 +357,13 @@ async function tokenRequest(request, env) {
   const grantType = params.get('grant_type');
   if (!['authorization_code', 'refresh_token'].includes(grantType)) {
     return oauthError('unsupported_grant_type', 'Use authorization_code or refresh_token.');
+  }
+  // Tokens are only for this relay's MCP endpoint (RFC 8707).
+  if (!resourceMatches(request, params.get('resource'))) return oauthError('invalid_target', 'Unknown resource.');
+  // Each registered client gets a bounded number of token requests; hosted
+  // clients share IP addresses, so the client, not the IP, is the key.
+  if (await rateLimitedKey(env, 'AUTH_RATE_LIMIT', `token:${String(params.get('client_id')).slice(0, 40)}`)) {
+    return tooManyRequests(OPEN_CORS);
   }
   const response = grantType === 'authorization_code' ? await exchangeCode(env, params) : await refreshTokens(env, params);
   if (response) return response;

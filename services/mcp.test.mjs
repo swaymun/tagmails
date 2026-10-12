@@ -148,6 +148,37 @@ test('codes are single use, and replaying one revokes the tokens it produced', a
   assert.equal((await mcp(env, tokens.access_token, 'tools/list')).response.status, 401);
 });
 
+test('the token endpoint binds tokens to /mcp, allows OAuth 2.1 requests without redirect_uri, and limits each client', async () => {
+  const { env } = setup();
+  const client = (await registerClient(env)).body;
+  const codeFor = async (challenge) => new URL((await (await approve(env, authorizeQuery(client.client_id, challenge))).json()).redirect)
+    .searchParams.get('code');
+  const first = pkce();
+  const elsewhere = await oauth(env, '/oauth/token', form({ grant_type: 'authorization_code', code: await codeFor(first.challenge),
+    client_id: client.client_id, code_verifier: first.verifier, resource: 'https://unrelated.example/mcp' }));
+  assert.equal((await elsewhere.json()).error, 'invalid_target');
+  const second = pkce();
+  const issued = await oauth(env, '/oauth/token', form({ grant_type: 'authorization_code', code: await codeFor(second.challenge),
+    client_id: client.client_id, code_verifier: second.verifier, resource: `${ORIGIN}/mcp` }));
+  assert.equal(issued.status, 200, 'redirect_uri may be omitted');
+  const counts = new Map();
+  env.AUTH_RATE_LIMIT = { async limit({ key }) { counts.set(key, (counts.get(key) ?? 0) + 1); return { success: counts.get(key) <= 1 }; } };
+  const refresh = () => oauth(env, '/oauth/token', form({ grant_type: 'refresh_token', client_id: client.client_id,
+    refresh_token: `tm_mcr_${'z'.repeat(43)}` }));
+  assert.equal((await refresh()).status, 400);
+  assert.equal((await refresh()).status, 429);
+});
+
+test('the MCP endpoint refuses unexpected browser origins', async () => {
+  const { env } = setup();
+  const { tokens } = await connect(env);
+  const call = (origin) => handleMcpRequest(new Request(`${ORIGIN}/mcp`, { method: 'POST', headers: {
+    Authorization: `Bearer ${tokens.access_token}`, 'Content-Type': 'application/json', ...(origin ? { Origin: origin } : {}) },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }) }), env);
+  assert.equal((await call('https://evil.example')).status, 403);
+  for (const origin of [null, 'https://claude.ai', 'http://localhost:6274', ORIGIN]) assert.equal((await call(origin)).status, 200, origin);
+});
+
 test('registration and authorization accept only safe, registered return addresses', async () => {
   const { env, sqlite } = setup();
   for (const uri of ['javascript:alert(1)', 'http://example.com/callback', 'https://claude.ai/cb#frag', 'data:text/html,x']) {
@@ -216,9 +247,10 @@ test('a read-only connection sees and runs only read tools', async () => {
   assert.equal(tokens.scope, 'tagmails.read');
   const names = (await mcp(env, tokens.access_token, 'tools/list')).body.result.tools.map((item) => item.name);
   assert.deepEqual(names, ['status', 'runs', 'run', 'disconnect']);
-  const refused = await tool(env, tokens.access_token, 'pair');
-  assert.equal(refused.isError, true);
-  assert.match(refused.content[0].text, /tagmails\.manage/);
+  const refused = await mcp(env, tokens.access_token, 'tools/call', { name: 'pair', arguments: {} });
+  assert.equal(refused.response.status, 403);
+  assert.match(refused.response.headers.get('www-authenticate'),
+    /^Bearer error="insufficient_scope", scope="tagmails\.read tagmails\.manage", resource_metadata=/);
 });
 
 test('pair returns a working one-time code and the commands for this relay', async () => {
