@@ -454,6 +454,12 @@ test('raw MIME import rejects automated mail and unauthorized guest replies', as
   const auto = ['From: owner@gmail.com', 'To: agent@wonder.test', 'Message-ID: <auto@example.test>',
     'Auto-Submitted: auto-replied', 'Content-Type: text/plain', '', 'Away.'].join('\r\n');
   await assert.rejects(lab.importMime(Buffer.from(auto)), /Automatic response/);
+  // Vacation responders that predate RFC 3834 mark themselves other ways.
+  for (const marker of ['Precedence: auto_reply', 'Precedence: bulk', 'X-Autoreply: yes', 'X-Autorespond: yes']) {
+    await assert.rejects(lab.importMime(Buffer.from(auto.replace('Auto-Submitted: auto-replied', marker))), /Automatic response/, marker);
+  }
+  const human = auto.replace('Auto-Submitted: auto-replied', 'Auto-Submitted: no').replace('<auto@', '<human@');
+  assert.equal((await lab.importMime(Buffer.from(human))).accepted, true);
   const owner = lab.send({ from: 'owner@gmail.com', subject: 'Shared', body: 'Please review.' });
   const parent = lab.state.threads[0].messages[0].id;
   const guest = ['From: guest@gmail.com', 'To: agent@wonder.test', 'Subject: Re: Shared',

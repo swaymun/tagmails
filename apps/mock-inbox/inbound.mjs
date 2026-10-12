@@ -24,6 +24,17 @@ function previewable(mimeType, bytes) {
   return false;
 }
 
+// Out-of-office replies and other robot mail must never start a turn: a
+// vacation responder answering every agent reply would loop and bill the owner.
+// RFC 3834 Auto-Submitted, plus the older Precedence and X-Autore* markers.
+function automatic(headers) {
+  const value = (name) => headers.find((header) => header.key === name)?.value?.trim().toLowerCase();
+  const submitted = value('auto-submitted');
+  return Boolean((submitted && submitted !== 'no') ||
+    ['bulk', 'junk', 'list', 'auto_reply'].includes(value('precedence')) ||
+    headers.some((header) => ['x-autoreply', 'x-autorespond', 'x-autoresponder'].includes(header.key)));
+}
+
 export async function parseInbound(raw, agentAddress = 'agent@wonder.test', {
   verifiedDeliveryToAgent = false,
   maxRawBytes = MAX_RAW_BYTES,
@@ -46,8 +57,7 @@ export async function parseInbound(raw, agentAddress = 'agent@wonder.test', {
   const bcc = addresses(email.bcc);
   if (!verifiedDeliveryToAgent && ![...to, ...cc, ...bcc].includes(agentAddress)) throw new Error(`The email must include ${agentAddress} as a recipient`);
   if (!email.messageId || !/^<[^<>\s]+@[^<>\s]+>$/.test(email.messageId)) throw new Error('The email needs a valid Message-ID');
-  const autoSubmitted = email.headers.find((header) => header.key === 'auto-submitted')?.value?.toLowerCase();
-  if (autoSubmitted && autoSubmitted !== 'no') throw new Error('Automatic response email was ignored');
+  if (automatic(email.headers)) throw new Error('Automatic response email was ignored');
   const reactionParts = email.attachments.filter((part) => part.mimeType === 'text/vnd.google.email-reaction+json');
   if (reactionParts.length) {
     // Gmail also allows inline files in a surrounding multipart/related part.
