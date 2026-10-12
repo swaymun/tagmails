@@ -298,37 +298,43 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
   // The model catalog names the computer a new thread is routed to (and pinned to).
   const catalog = await accountModelCatalog(env.DB, account.id, threadId);
   const target = await sealTarget(env.DB, account.id, threadId, catalog.deviceId);
-  const objectKey = `inbound/${account.id}/${message.providerEmailId}.${target ? 'sealed' : 'eml'}`;
+  // With no computer to seal it to, the email is not kept at all: the relay
+  // answers from memory and stores only metadata (SEALED_STORAGE_REQUIRED;
+  // without it, mail keeps the older relay-key storage).
+  const refused = !target && env.SEALED_STORAGE_REQUIRED === 'true';
+  const stopped = threadUnavailable || refused;
+  const objectKey = `inbound/${account.id}/${message.providerEmailId}.${target ? 'sealed' : refused ? 'unstored' : 'eml'}`;
   if (target) await storeSealedRequest(env, target, objectKey, message, agent);
-  else await env.MAIL.put(objectKey, message.rawMime, { httpMetadata: { contentType: 'message/rfc822' } });
+  else if (!refused) await env.MAIL.put(objectKey, message.rawMime, { httpMetadata: { contentType: 'message/rfc822' } });
   const statements = [];
   const subject = message.subject.slice(0, 300);
   if (!threadId) statements.push(env.DB.prepare('INSERT INTO threads (id, account_id, subject, device_id) VALUES (?, ?, ?, ?)')
-    .bind(newThreadId, account.id, target ? await sealedSubject(target, subject) : await sealText(env, subject), catalog.deviceId));
+    .bind(newThreadId, account.id, target ? await sealedSubject(target, subject) : refused ? '' : await sealText(env, subject), catalog.deviceId));
   statements.push(env.DB.prepare(`INSERT INTO messages
     (id, account_id, thread_id, provider_email_id, message_id, direction, sender_email, object_key, agent_email, seal_key_id, headers_json)
     VALUES (?, ?, ?, ?, ?, 'inbound', ?, ?, ?, ?, ?)`).bind(id, account.id, newThreadId, message.providerEmailId, message.messageId,
-    message.from, objectKey, agent, target?.keyId ?? null,
-    target ? JSON.stringify({ to: message.to ?? [], cc: message.cc ?? [], parentIds: message.parentIds ?? [] }) : null));
+    // 'none' marks mail that was never stored: only an in-memory reply can answer it.
+    message.from, objectKey, agent, target?.keyId ?? (refused ? 'none' : null),
+    target || refused ? JSON.stringify({ to: message.to ?? [], cc: message.cc ?? [], parentIds: message.parentIds ?? [] }) : null));
   for (const guest of guests) {
     statements.push(env.DB.prepare(`INSERT INTO participants (thread_id, email) VALUES (?, ?)
       ON CONFLICT(thread_id, email) DO UPDATE SET revoked_at = NULL`).bind(newThreadId, guest));
   }
   const jobId = randomUUID();
-  const previousJob = threadId && !threadUnavailable ? await env.DB.prepare(`SELECT j.model_json FROM jobs j
+  const previousJob = threadId && !stopped ? await env.DB.prepare(`SELECT j.model_json FROM jobs j
     JOIN messages m ON m.id = j.message_id
     WHERE j.thread_id = ? AND json_extract(j.model_json, '$.id') IS NOT NULL
     ORDER BY m.rowid DESC LIMIT 1`).bind(threadId).first() : null;
   const priorModel = previousJob?.model_json ? JSON.parse(previousJob.model_json) : null;
   // Project routing: replies stay in the thread's folder. A reply to "which
   // project?" is routed together with the request that prompted the question.
-  const previousWorkspace = threadId && !threadUnavailable ? await env.DB.prepare(`SELECT j.workspace_json FROM jobs j
+  const previousWorkspace = threadId && !stopped ? await env.DB.prepare(`SELECT j.workspace_json FROM jobs j
     JOIN messages m ON m.id = j.message_id
     WHERE j.thread_id = ? AND j.workspace_json IS NOT NULL
     ORDER BY m.rowid DESC LIMIT 1`).bind(threadId).first() : null;
   const priorWorkspace = previousWorkspace ? JSON.parse(previousWorkspace.workspace_json) : null;
   if (priorWorkspace?.pending) priorWorkspace.pending = await openText(env, priorWorkspace.pending);
-  const projects = threadUnavailable || priorWorkspace?.kind ? [] : await accountProjectCatalog(env, account.id, threadId, catalog.deviceId);
+  const projects = stopped || priorWorkspace?.kind ? [] : await accountProjectCatalog(env, account.id, threadId, catalog.deviceId);
   const subjectLine = String(message.subject ?? '').replace(/[\r\n]+/g, ' ').slice(0, 300).trim();
   const requestText = `${subjectLine ? `Subject: ${subjectLine}\n` : ''}${currentText(message.body)}`.slice(0, 4000);
   // A sealed thread keeps only the relay's own question, not the request.
@@ -338,7 +344,7 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
       ? `${subjectLine ? `Subject: ${subjectLine}\n` : ''}The agent asked: ${priorWorkspace.asked}\nThe sender replied:\n${currentText(message.body)}`
       : requestText;
   const [routedModel, workspace] = await Promise.all([
-    threadUnavailable ? null : routeModel(message.body, account.default_model, {
+    stopped ? null : routeModel(message.body, account.default_model, {
       apiKey: env.TYPESAFE_API_KEY, fetcher: fetchModel, priorModel, subject: message.subject,
       pilotCodexModel: env.PILOT_CODEX_MODEL,
       defaultEffort: account.default_effort, defaultSpeed: account.default_speed,
@@ -359,11 +365,17 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
   if (model?.id?.startsWith('claude-') && env.CLAUDE_ROUTE_ENABLED !== 'true') {
     model = { error: 'Claude models are not enabled in this pilot. Ask for an available OpenAI model or omit the model to use your default.' };
   }
-  const followUp = threadUnavailable || model?.error ? null : await steerTarget(env, agent, threadId, message, fetchModel);
+  const followUp = stopped || model?.error ? null : await steerTarget(env, agent, threadId, message, fetchModel);
   // A bare acknowledgement ("Thanks!") mid-run is recorded and dropped: no turn, no reply, no charge.
   const acknowledged = Boolean(followUp?.ack);
   const steerOf = followUp && !followUp.ack ? followUp.id : null;
-  const unavailableResult = threadUnavailable ? {
+  const unavailableResult = refused ? {
+    runtime: 'relay', state: 'failed',
+    summary: owner
+      ? 'No computer with TagMails 0.2.24 or later is connected, so this email was not kept or run. On your computer run `brew upgrade tagmails && tagmails start` (or `tagmails pair` on a new one), then send it again.'
+      : 'The account owner\'s computer isn\'t connected to TagMails, so this email was not kept or run. Ask the owner to reconnect it, then send it again.',
+    checks: ['No local agent ran. TagMails stores mail only sealed to a connected computer.'],
+  } : threadUnavailable ? {
     runtime: 'relay', state: 'failed',
     summary: owner
       ? 'This thread\'s Mac was revoked, so the task did not run. Start a new email to your agent address to begin a new session.'
@@ -380,14 +392,14 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
   statements.push(env.DB.prepare(`INSERT INTO jobs (id, thread_id, message_id, state, model_json, result_key, workspace_json, steer_of, steer_state)
     SELECT ?1, ?2, ?3, CASE WHEN ${steerLive} THEN 'completed' ELSE ?4 END, ?5, ?6, ?7,
       CASE WHEN ${steerLive} THEN ?8 END, CASE WHEN ${steerLive} THEN 'pending' END`)
-    .bind(jobId, newThreadId, id, threadUnavailable ? 'failed' : acknowledged ? 'completed' : 'queued',
+    .bind(jobId, newThreadId, id, stopped ? 'failed' : acknowledged ? 'completed' : 'queued',
       model && JSON.stringify(model), resultKey, workspaceJson, steerOf));
-  if (!threadUnavailable && !acknowledged && !model?.error && env.STATUS_REACTIONS_ENABLED === 'true' && message.from.endsWith('@gmail.com')) {
+  if (!stopped && !acknowledged && !model?.error && env.STATUS_REACTIONS_ENABLED === 'true' && message.from.endsWith('@gmail.com')) {
     // Reactions are opt-in per account (off by default).
     statements.push(env.DB.prepare(`INSERT INTO status_reactions (job_id, status)
       SELECT ?, 'received' WHERE (SELECT status_reactions FROM accounts WHERE id = ?) = 1`).bind(jobId, account.id));
   }
-  if (threadUnavailable && await relayReplyAllowed(env, account.id)) {
+  if (stopped && await relayReplyAllowed(env, account.id)) {
     statements.push(env.DB.prepare('INSERT INTO outbox (job_id) VALUES (?)').bind(jobId));
   }
   try {
@@ -404,10 +416,10 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
   if (steerOf && (await env.DB.prepare('SELECT steer_state FROM jobs WHERE id = ?').bind(jobId).first())?.steer_state === 'pending') {
     return Response.json({ accepted: true, duplicate: false, steering: true });
   }
-  if (threadUnavailable) {
+  if (stopped) {
     await chargeRelayReply(env, jobId);
-    if (target) await deliverReply(env, jobId, { result: unavailableResult, subject: message.subject });
-    return Response.json({ accepted: true, duplicate: false, threadUnavailable: true });
+    if (target || refused) await deliverReply(env, jobId, { result: unavailableResult, subject: message.subject });
+    return Response.json({ accepted: true, duplicate: false, ...(refused ? { notStored: true } : { threadUnavailable: true }) });
   }
   // The relay's own question for sealed mail goes out now, while the subject is in memory.
   if (target && model?.error) {

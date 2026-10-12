@@ -584,3 +584,24 @@ test('a sealed run abandoned after three lapsed leases still tells the sender', 
   assert.equal(relay.sent[0].headers['In-Reply-To'], relay.sqlite.prepare("SELECT message_id FROM messages WHERE direction = 'inbound'").get().message_id);
   assert.deepEqual(relay.leaks(), []);
 });
+
+test('with sealed storage required, mail for an account without a keyed computer is answered, not kept', async () => {
+  const relay = await sealedRelay();
+  relay.rawEnv.SEALED_STORAGE_REQUIRED = 'true';
+  relay.env.SEALED_STORAGE_REQUIRED = 'true';
+  // An older computer without a key gets no work.
+  const oldToken = `tm_dev_${randomBytes(32).toString('base64url')}`;
+  relay.sqlite.prepare('INSERT INTO devices (id, account_id, token_hash) VALUES (?, ?, ?)')
+    .run('device-old', 'account-1', createHash('sha256').update(oldToken).digest('hex'));
+  const refused = await relay.device('/api/device/claim', { method: 'POST', body: '{}' }, oldToken);
+  assert.equal(refused.status, 426);
+  // With the keyed computer revoked, a new email is answered from memory and nothing is stored.
+  relay.sqlite.prepare("UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE id = 'device-1'").run();
+  await relay.email();
+  assert.equal(relay.objects.size, [...relay.objects.keys()].filter((key) => key.endsWith('/unavailable.json')).length, 'only the relay\'s own answer');
+  assert.equal(relay.sent.length, 1);
+  assert.equal(relay.sent[0].subject, 'Re: Quarterly Falcon plan');
+  assert.match(relay.sent[0].text, /not kept or run/);
+  assert.equal(relay.sqlite.prepare('SELECT state FROM jobs').get().state, 'failed');
+  assert.deepEqual(relay.leaks(), []);
+});

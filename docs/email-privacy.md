@@ -78,21 +78,24 @@ content stays on the computer, in the Codex or Claude session.
   classifier is the remaining guard (in testing it refused even a plain `cat`
   of `device-key` as credential exploration). Participant runs have no Bash.
 - Several computers on one account: mail is sealed to the computer its thread
-  is routed to, and only that computer runs it. A computer without a key gets
-  relay-key storage so it can still run its threads. Re-pairing creates a new key. Queued mail sealed to a key that no paired
-  computer still holds fails after 15 minutes without a reply; the run page
-  shows the failure.
-- Computers older than 0.2.24, and anything stored before a computer
-  registered its key, keep `STORAGE_KEY` sealing. The operator can open those
-  until retention deletes them.
+  is routed to, and only that computer runs it. Re-pairing creates a new key.
+  Queued mail sealed to a key that no paired computer still holds fails after
+  15 minutes without a reply; the run page shows the failure.
+- No relay-key fallback (`SEALED_STORAGE_REQUIRED`, on in production since
+  2026-10-12). When no paired computer has a key (none paired yet, or all
+  revoked), an email is read in memory, answered with "no computer is
+  connected, send it again", and not stored; only its metadata is kept.
+  Computers older than 0.2.24 get no work (`/api/device/claim` answers 426).
+  Relay-key data stored before the cut-off was purged
+  (`scripts/purge-relay-key-data.mjs`).
 
 ## Why the gate exists
 
 Resend's team dashboard displays received email bodies and attachments. Resend
 retains email and log data for 30 days on Free, Pro, and Scale plans. The
-TagMails relay separately keeps content in R2 and D1. For a computer with a
-sealing key it is sealed to that key (above). Otherwise it is sealed with the
-Worker's `STORAGE_KEY`, which the operator controls. Scheduled cleanup (`services/inbound-retention.mjs`) applies
+TagMails relay separately keeps content in R2 and D1, sealed to the
+computer's key (above). The relay's own replies ("which project?" and the
+like) stay sealed with the Worker's `STORAGE_KEY`, which the operator controls. Scheduled cleanup (`services/inbound-retention.mjs`) applies
 one rule per kind of content:
 
 - **Raw inbound mail** (MIME and attachments) is deleted 7 days after its job
@@ -143,7 +146,7 @@ Sources: [Resend inbound visibility](https://resend.com/blog/inbound-emails),
 3. Done for computers on 0.2.24+: stored mail and results are sealed to a key
    held only by the paired computer (see the first section). Still open: move
    Jev classification to the device if the relay must not see task text, and
-   retire relay-key storage once no older computers remain.
+   relay-key storage for mail was retired on 2026-10-12.
 4. Recheck all vendor dashboards, logs, backups, and administrator access with
    real test messages. Publish a precise privacy statement before customer
    signup. A service that controls ordinary SMTP intake can still inspect

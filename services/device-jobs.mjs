@@ -552,6 +552,11 @@ export async function handleDeviceRequest(request, env) {
   });
   if (url.pathname === '/api/device/push') return openDevicePush(request, env, device);
   if (url.pathname === '/api/device/attachment') return attachment(request, env, device, url);
+  // Computers older than 0.2.24 have no sealing key and could only read
+  // relay-key mail, which is no longer stored; they get no work.
+  if (url.pathname === '/api/device/claim' && !device.key_id && env.SEALED_STORAGE_REQUIRED === 'true') {
+    return json({ error: 'Update TagMails to 0.2.24 or later: brew upgrade tagmails && tagmails start' }, 426);
+  }
   if (url.pathname === '/api/device/claim') return claim(env, device, await busyFolders(request));
   if (url.pathname === '/api/device/artifacts') return uploadRunArtifact(request, env, device);
   if (url.pathname === '/api/device/pending-sends') return json({ replies: await heldReplies(env, device) });
