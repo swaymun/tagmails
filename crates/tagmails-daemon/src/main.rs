@@ -1207,6 +1207,14 @@ fn run_relay(settings: &Settings, once: bool, reload: bool) -> Result<(), Box<dy
         if reload && !once {
             // A half-written or broken file keeps the settings already running.
             let config = match read_config() {
+                // A file that disappeared mid-run is not a choice of the defaults.
+                Ok(_) if !paths::config_file().exists() && seen_config != json!({}) => {
+                    if config_error.is_none() {
+                        eprintln!("Keeping the current settings: {} is missing", paths::config_file().display());
+                    }
+                    config_error = Some("missing".into());
+                    seen_config.clone()
+                }
                 Ok(config) => {
                     config_error = None;
                     config

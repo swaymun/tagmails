@@ -51,6 +51,12 @@ export async function whileHoldingClaim(claim, work, { release = async () => {},
   const stop = keepClaim(claim, () => { lost = true; }, options);
   try {
     const value = await work();
+    // A renewal still in flight could report the loss after we return; ask
+    // once more now, so a revoked or replaced lease never reaches the agent.
+    if (!lost) {
+      try { await (options.renew ?? renewClaim)(claim); }
+      catch (error) { if (error.leaseGone) lost = true; }
+    }
     if (lost) {
       await release(value);
       throw Object.assign(new Error('Claim lease was lost while preparing the run'), { leaseGone: true });

@@ -122,6 +122,9 @@ test('preparing a run renews the lease, and a lease lost meanwhile releases the 
   await assert.rejects(whileHoldingClaim({}, slow, { every: 5, release: async (value) => released.push(value),
     renew: async () => { throw Object.assign(new Error('gone'), { leaseGone: true }); } }), /lost while preparing/);
   assert.deepEqual(released, [{ staged: true }]);
+  // Preparation that ends before the first renewal still checks the lease before the agent starts.
+  await assert.rejects(whileHoldingClaim({}, async () => ({ staged: true }), { every: 60_000,
+    renew: async () => { throw Object.assign(new Error('gone'), { leaseGone: true }); } }), /lost while preparing/);
 });
 
 test('an agent CLI that ignores SIGTERM is killed', async () => {
