@@ -99,7 +99,7 @@ export async function sendWithCloudflare(env, payload) {
 // The agent's own name (the part before @ in its address) is the display name, so mail shows as "swagbot".
 export function senderName({ from, replyTo }) {
   const name = String(replyTo ?? from ?? '').split('@')[0].replace(/[^\w.+-]/g, '');
-  return name || 'TagMails';
+  return name || 'Tagmails';
 }
 
 export function cloudflareMessageId(id) {

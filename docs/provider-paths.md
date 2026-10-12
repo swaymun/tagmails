@@ -1,11 +1,11 @@
-# Provider path for a paid TagMails beta
+# Provider path for a paid Tagmails beta
 
 Private decision draft, October 3, 2026. No inquiry has been submitted and no
 provider approval is implied by the owner-only development pilot.
 
 ## Product facts to disclose
 
-- TagMails gives each verified Gmail user an address on `tagmails.com`. An email
+- Tagmails gives each verified Gmail user an address on `tagmails.com`. An email
   starts or resumes a coding-agent turn on that user's paired Mac; the hosted
   relay handles intake, queueing, a threaded reply, a private receipt, and
   expiring file transfer.
@@ -13,7 +13,7 @@ provider approval is implied by the owner-only development pilot.
   does not sell, pool, or transfer model tokens. The current five-cent wallet is
   Stripe **test mode**; the candidate customer price is fifteen cents per turn,
   subject to measured costs and provider approval.
-- The user signs in to Codex or Claude locally on their Mac. TagMails does not
+- The user signs in to Codex or Claude locally on their Mac. Tagmails does not
   receive that provider credential. The server is remotely hosted, and the
   source repository is currently private. The present live pilot has one owner,
   uses Codex app-server locally, and is not open for customer signup.
@@ -26,7 +26,7 @@ Use the [official commercial interest form](https://openai.com/form/sign-in-with
 when the company contact fields and public website are ready. Select **Sign in
 and ChatGPT plan use for AI requests**. Proposed text for the product field:
 
-> TagMails is an email-native coding-agent service. A customer verifies a Gmail
+> Tagmails is an email-native coding-agent service. A customer verifies a Gmail
 > address, pairs their own Mac, and emails an agent address. A hosted relay
 > receives and queues the email and sends the result back in the same thread.
 > The agent runs locally on that customer's Mac with their own Codex sign-in.
@@ -45,14 +45,14 @@ website without checking that the recipient can open it.
 OpenAI's [plan-usage overview](https://developers.openai.com/siwc/token-sharing-open-source)
 directs paid or remotely hosted apps to that form. Its
 [quickstart](https://developers.openai.com/siwc/quickstart) describes selected
-private clients; neither page confirms TagMails' eligibility.
+private clients; neither page confirms Tagmails' eligibility.
 
 ## Anthropic: prepared product-path question
 
 Send through an official Anthropic business/developer support route after
 confirming the recipient. Proposed message:
 
-> We are building TagMails, an email-native coding-agent service. Each user
+> We are building Tagmails, an email-native coding-agent service. Each user
 > would install a local daemon on their own Mac and authenticate their own
 > Claude Code or Claude Agent SDK session. Our hosted relay receives their
 > email, queues the job, and sends the agent's reply. We intend to charge a

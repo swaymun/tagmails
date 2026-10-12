@@ -86,7 +86,7 @@ pub fn launchd_plist(binary: &Path, logs: &Path, path_env: &str) -> String {
 pub fn systemd_unit(binary: &Path, path_env: &str) -> String {
     // systemd unit values are not shell-parsed; quote the binary path for spaces.
     format!(
-        "[Unit]\nDescription=TagMails email agent\nAfter=network-online.target\nWants=network-online.target\n\n\
+        "[Unit]\nDescription=Tagmails email agent\nAfter=network-online.target\nWants=network-online.target\n\n\
 [Service]\nExecStart=\"{}\" run\nRestart=always\nRestartSec=10\nEnvironment=\"PATH={}\"\n\n\
 [Install]\nWantedBy=default.target\n",
         binary.display(),
@@ -184,7 +184,7 @@ fn start_background(binary: &Path) -> Result<String, Box<dyn Error>> {
     let child = command.spawn()?;
     write_private(&pid_file(), &format!("{}\n", child.id()))?;
     Ok(format!(
-        "Started TagMails in the background (pid {}). Logs: {}\n\
+        "Started Tagmails in the background (pid {}). Logs: {}\n\
 No systemd user session here, so it won't restart after a reboot; run `tagmails start` again then.",
         child.id(),
         logs.display()
@@ -229,7 +229,7 @@ pub fn start(binary: &Path) -> Result<String, Box<dyn Error>> {
         }
         if !output.status.success() {
             return Err(format!(
-                "launchd did not start TagMails: {}",
+                "launchd did not start Tagmails: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
             )
             .into());
@@ -242,7 +242,7 @@ pub fn start(binary: &Path) -> Result<String, Box<dyn Error>> {
         let output = quiet(Command::new("systemctl").args(["--user", "enable", "--now", UNIT]))?;
         if !output.status.success() {
             return Err(format!(
-                "systemd did not start TagMails: {}",
+                "systemd did not start Tagmails: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
             )
             .into());
@@ -260,13 +260,13 @@ pub fn stop() -> Result<String, Box<dyn Error>> {
     if cfg!(target_os = "macos") {
         let domain = format!("gui/{}", uid()?);
         let _ = quiet(Command::new("launchctl").args(["bootout", &format!("{domain}/{LABEL}")]));
-        return Ok("Stopped TagMails. It will not start at login until `tagmails start`.".into());
+        return Ok("Stopped Tagmails. It will not start at login until `tagmails start`.".into());
     }
     if has_systemd() {
         quiet(Command::new("systemctl").args(["--user", "disable", "--now", UNIT]))?;
-        return Ok("Stopped TagMails.".into());
+        return Ok("Stopped Tagmails.".into());
     }
-    Ok(if stop_background() { "Stopped TagMails." } else { "TagMails was not running." }.into())
+    Ok(if stop_background() { "Stopped Tagmails." } else { "Tagmails was not running." }.into())
 }
 
 pub fn uninstall() -> Result<String, Box<dyn Error>> {
@@ -279,7 +279,7 @@ pub fn uninstall() -> Result<String, Box<dyn Error>> {
     if has_systemd() {
         let _ = quiet(Command::new("systemctl").args(["--user", "daemon-reload"]));
     }
-    Ok(format!("{message}\nRemoved the TagMails service file.").trim().to_owned())
+    Ok(format!("{message}\nRemoved the Tagmails service file.").trim().to_owned())
 }
 
 /// A one-line description of the service state.
@@ -344,11 +344,11 @@ mod tests {
     fn launchd_plist_runs_the_binary_and_escapes_paths() {
         let plist = launchd_plist(
             Path::new("/opt/homebrew/bin/tagmails"),
-            Path::new("/Users/a&b/Library/Logs/TagMails"),
+            Path::new("/Users/a&b/Library/Logs/Tagmails"),
             "/opt/homebrew/bin:/usr/bin",
         );
         assert!(plist.contains("<string>/opt/homebrew/bin/tagmails</string><string>run</string>"));
-        assert!(plist.contains("/Users/a&amp;b/Library/Logs/TagMails/tagmails.log"));
+        assert!(plist.contains("/Users/a&amp;b/Library/Logs/Tagmails/tagmails.log"));
         assert!(!plist.contains("TAGMAILS_DEVICE_TOKEN"));
     }
 

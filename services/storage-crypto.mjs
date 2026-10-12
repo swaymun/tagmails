@@ -1,4 +1,4 @@
-// Encryption at rest for message content. Everything TagMails keeps that a
+// Encryption at rest for message content. Everything Tagmails keeps that a
 // person wrote or an agent answered (raw mail, results, files, reply payloads,
 // subjects) is sealed with AES-256-GCM under STORAGE_KEY, a Worker secret.
 // Nobody browsing R2 or D1 sees plaintext; reading it requires the secret.

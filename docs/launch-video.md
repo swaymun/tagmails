@@ -1,10 +1,10 @@
-# TagMails motion video brief
+# Tagmails motion video brief
 
 Status: production brief for Claude Code; no video has been produced. Final copy and screen captures must be updated from the working live product before release.
 
 ## The idea
 
-**Give your agent an email address.** A person has a task while away from their desk. They add TagMails to an ordinary email thread, choose Codex or Claude, and continue their day. The agent works on the connected Mac and replies in the same thread with a clear outcome and a link to the run record. Another authorized participant replies with a follow-up. The thread, context, and agent session continue together.
+**Give your agent an email address.** A person has a task while away from their desk. They add Tagmails to an ordinary email thread, choose Codex or Claude, and continue their day. The agent works on the connected Mac and replies in the same thread with a clear outcome and a link to the run record. Another authorized participant replies with a follow-up. The thread, context, and agent session continue together.
 
 Audience: people who already use Codex or Claude Code and want to assign work from a phone or a shared email thread. The emotional turn is from “I need to get back to my computer” to “I can send this now and inspect the result later.” Keep the product recognizable as email throughout; the browser account page appears only briefly for setup.
 
@@ -17,11 +17,11 @@ Audience: people who already use Codex or Claude Code and want to assign work fr
 | 11–17s | A thin line connects inbox → paired Mac → Codex/Claude. The Mac shows a short verified run state, not a fabricated code montage. | “Runs on your connected Mac.” |
 | 17–25s | A result email arrives in the same thread. Show a readable outcome, two checks, and an owner run-receipt link. | “The answer comes back here.” |
 | 25–33s | An owner adds a teammate in Cc; teammate replies with one follow-up. The conversation grows by one turn and the agent responds. | “Bring the right people in.” |
-| 33–42s | Pull back to a simple setup screen: Google sign-in, paired Mac, selected workspace. End on TagMails wordmark and the real launch URL. | “Give your agent an email address.” |
+| 33–42s | Pull back to a simple setup screen: Google sign-in, paired Mac, selected workspace. End on Tagmails wordmark and the real launch URL. | “Give your agent an email address.” |
 
 ## Motion and sound
 
-- Use restrained typographic motion, a white and warm-neutral palette, and one green accent from the TagMails account prototype. Email cards should move like actual conversation turns; avoid generic AI particles, glowing brains, and unreadable terminal text.
+- Use restrained typographic motion, a white and warm-neutral palette, and one green accent from the Tagmails account prototype. Email cards should move like actual conversation turns; avoid generic AI particles, glowing brains, and unreadable terminal text.
 - Keep the task and result legible at phone size. Use 16:9 as the master, then recompose the same scenes for 9:16 and square. Do not crop a desktop recording into a narrow frame.
 - Prefer a subtle send/receive rhythm and light UI sounds. The film must work muted with captions. Voiceover is optional; the screen copy carries the story.
 - Build the cards, text, arrows, and transitions as editable code or project assets. Use live product screenshots only after the matching flow works; synthetic fixtures must be labeled as a concept in any prelaunch cut.

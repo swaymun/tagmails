@@ -547,7 +547,7 @@ test('a reply after a relay-only answer also hands the agent the original reques
   await inbound(env, 'unrun-1', 'Model: Gemini Ultra\nWrite travel guide scripts for Madrid and Paris.');
   assert.equal(await completeOneModelClarification(env), true);
   assert.equal((await call(env, paired.token, 'claim')).body.claimed, false);
-  await inbound(env, 'unrun-2', 'try now?\n\nOn Mon, TagMails wrote:\n> That model is unavailable.', ['<unrun-1@gmail.com>']);
+  await inbound(env, 'unrun-2', 'try now?\n\nOn Mon, Tagmails wrote:\n> That model is unavailable.', ['<unrun-1@gmail.com>']);
   const claim = envelope((await call(env, paired.token, 'claim')).body);
   assert.match(claim.request.body, /owner@gmail\.com wrote \(the relay replied without running an agent\):\nModel: Gemini Ultra\nWrite travel guide scripts for Madrid and Paris\./);
   assert.match(claim.request.body, /The current message:\ntry now\?/);
@@ -695,7 +695,7 @@ test('the relay takes only files that fit in the email; others are named as not 
   const lease = envelope((await call(env, mac.token, 'claim')).body);
   const route = async (name, size) => (await call(env, mac.token, 'file-route', { jobId: lease.jobId, leaseId: lease.leaseId, name, mimeType: 'application/pdf', size })).body;
   assert.deepEqual(await route('summary.pdf', 200_000), { route: 'relay' });
-  // TagMails doesn't host files: too big for email, or not a type mail opens, is never uploaded.
+  // Tagmails doesn't host files: too big for email, or not a type mail opens, is never uploaded.
   assert.deepEqual(await route('tokyo.pdf', 65_364_035), { route: 'none', reason: 'too-large' });
   assert.deepEqual(await route('scripts.zip', 2_000), { route: 'none', reason: 'too-large' });
   assert.deepEqual(await route('more.pdf', 3_600_000), { route: 'none', reason: 'too-large' });
@@ -756,7 +756,7 @@ test('emails that arrive before the Mac reports its routing continue with what i
   const { env, sqlite } = bindings();
   const paired = device(sqlite);
   const send = sender(env);
-  await send('early-1', 'owner@gmail.com', 'Use Claude on the footer in TagMails.');
+  await send('early-1', 'owner@gmail.com', 'Use Claude on the footer in Tagmails.');
   const claimed = envelope((await call(env, paired.token, 'claim', { routing: 'local' })).body);
   // While the Mac is still classifying, a thank-you (offered to the run) and a follow-up
   // that cannot steer (it has an attachment, so it waits as its own job) arrive.
@@ -790,7 +790,7 @@ test('the Mac\'s routing report reaches only the same sender\'s waiting emails, 
   const paired = device(sqlite);
   const send = sender(env);
   const file = { attachments: [{ filename: 'a.txt', contentType: 'text/plain', size: 1 }] };
-  await send('prop-1', 'owner@gmail.com', 'Use Claude on the footer in TagMails.');
+  await send('prop-1', 'owner@gmail.com', 'Use Claude on the footer in Tagmails.');
   const claimed = envelope((await call(env, paired.token, 'claim', { routing: 'local' })).body);
   sqlite.prepare('INSERT INTO participants (thread_id, email) VALUES (?, ?)').run(claimed.threadId, 'guest@gmail.com');
   await send('prop-2', 'guest@gmail.com', 'Also see this file.', ['<prop-1@gmail.com>'], file);

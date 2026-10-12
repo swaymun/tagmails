@@ -51,7 +51,7 @@ export function renderResult(result) {
   const links = safeLinks.map(({ label, url }) =>
     `<a href="${escapeHtml(url)}" style="${linkStyle}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`);
   const brandUrl = safeUrl(result.brandUrl);
-  const brand = brandUrl ? `<a class="brand" href="${escapeHtml(brandUrl)}" target="_blank" rel="noopener noreferrer" aria-label="TagMails website" style="color:#1d2420;font-weight:600;text-decoration:none"><span class="mark" aria-hidden="true" style="display:inline-block;background:#1d2420;color:#d0f06c;border-radius:4px;padding:0 4px;margin-right:3px;font-size:11px;line-height:16px">↗</span>tagmails<span style="color:#7aa33a">.</span></a>` : '';
+  const brand = brandUrl ? `<a class="brand" href="${escapeHtml(brandUrl)}" target="_blank" rel="noopener noreferrer" aria-label="Tagmails website" style="color:#1d2420;font-weight:600;text-decoration:none"><span class="mark" aria-hidden="true" style="display:inline-block;background:#1d2420;color:#d0f06c;border-radius:4px;padding:0 4px;margin-right:3px;font-size:11px;line-height:16px">↗</span>tagmails<span style="color:#7aa33a">.</span></a>` : '';
   const footerItems = [...links, status ? `<span style="color:#1d2420">${escapeHtml(status)}</span>` : null,
     ...(result.meta ?? []).map((item) => `<span>${escapeHtml(item)}</span>`), brand].filter(Boolean);
   const footerHtml = footerItems.map((item, index) =>
@@ -73,7 +73,7 @@ export function renderResult(result) {
     ...(notices.length ? ['', ...notices] : []),
     ...(bodyNotes.length ? ['', ...bodyNotes] : []), '', '—',
     [...safeLinks.map(({ label, url }) => `${label}: ${url}`), status, ...(result.meta ?? []),
-      brandUrl ? `TagMails: ${brandUrl}` : null]
+      brandUrl ? `Tagmails: ${brandUrl}` : null]
       .filter(Boolean).join(' · ')].join('\n');
   return { html, text };
 }

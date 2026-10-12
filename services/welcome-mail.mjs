@@ -4,7 +4,7 @@ import { renderResult } from '../apps/mock-inbox/mail.mjs';
 import { emailPriceMillicents } from './email-charges.mjs';
 
 export function welcomeEmail({ env, ownerEmail, deviceName: rawName, siteOrigin }) {
-  // The paired computer chose this name; it must not become Markdown (a link) in TagMails' own email.
+  // The paired computer chose this name; it must not become Markdown (a link) in Tagmails' own email.
   const deviceName = String(rawName).replace(/[\\`*_[\]()<>#!|~]/g, '').trim() || 'Your computer';
   const cents = emailPriceMillicents(env) / 1000;
   const price = `$${(cents / 100).toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
@@ -13,11 +13,11 @@ export function welcomeEmail({ env, ownerEmail, deviceName: rawName, siteOrigin 
   const answer = [
     'Hi there,',
     '',
-    `Thanks for choosing TagMails! **${deviceName}** is connected. From now on, email this address from ${ownerEmail} and your agent on that computer will do the work and reply right here, in the same thread.`,
+    `Thanks for choosing Tagmails! **${deviceName}** is connected. From now on, email this address from ${ownerEmail} and your agent on that computer will do the work and reply right here, in the same thread.`,
     '',
     siteOrigin
-      ? `**First, add a balance.** Emails wait until your balance covers them. Each email you send to TagMails costs ${price}, so $10 covers about ${replies.toLocaleString('en-US')} emails. [Top up your balance](${siteOrigin}/#billing)`
-      : `**First, add a balance.** Emails wait until your balance covers them. Each email you send to TagMails costs ${price}.`,
+      ? `**First, add a balance.** Emails wait until your balance covers them. Each email you send to Tagmails costs ${price}, so $10 covers about ${replies.toLocaleString('en-US')} emails. [Top up your balance](${siteOrigin}/#billing)`
+      : `**First, add a balance.** Emails wait until your balance covers them. Each email you send to Tagmails costs ${price}.`,
     '',
     '**Try it now:** reply to this email with something you\'d like done, for example "What changed in my projects this week?"',
     '',
@@ -38,10 +38,10 @@ export function welcomeEmail({ env, ownerEmail, deviceName: rawName, siteOrigin 
     '- Permissions and folders change only with `tagmails start`.',
     '',
     'Happy emailing,',
-    'TagMails',
+    'Tagmails',
   ].join('\n');
   const { html, text } = renderResult({ state: 'completed', answer, brandUrl: siteOrigin });
-  return { subject: `Welcome to TagMails: ${deviceName} is ready`, html, text };
+  return { subject: `Welcome to Tagmails: ${deviceName} is ready`, html, text };
 }
 
 // Best effort: pairing never fails because this email couldn't be sent.

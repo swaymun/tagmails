@@ -20,6 +20,18 @@
         "/Users/saimun/CodexProjects/personal-monorepo/projects/comic-maker/server.mjs"
       ],
       "port": 4310
+    },
+    {
+      "name": "storyboard",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "/Users/saimun/CodexProjects/personal-monorepo/projects/storyboard-viewer/packages/cli/dist/cli.js",
+        "serve",
+        "/Users/saimun/Storyboards/tagmails-nose-goes.sbd",
+        "--port",
+        "4400"
+      ],
+      "port": 4400
     }
   ]
 }

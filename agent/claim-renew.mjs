@@ -82,7 +82,7 @@ export async function whileHoldingClaim(claim, work, { release = async () => {},
 }
 
 // SIGTERM, then SIGKILL if the agent CLI ignores it. Without this, a stuck
-// CLI keeps its job slot and can keep working after TagMails gave up on it.
+// CLI keeps its job slot and can keep working after Tagmails gave up on it.
 export function terminate(child, graceMs = Number(process.env.TAGMAILS_KILL_GRACE_MS || 5_000)) {
   if (child.exitCode !== null || child.signalCode !== null) return;
   child.kill('SIGTERM');

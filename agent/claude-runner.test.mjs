@@ -227,7 +227,7 @@ test('owner allow rules name each MCP server and the tagmails CLI', async () => 
   assert.deepEqual(mcpAllowRules('Checking MCP server health…\n\nclaude.ai Google Drive: https://drivemcp.googleapis.com/mcp/v1 - ✔ Connected\nblender: uvx blender-mcp - ✗ Failed to connect\n'),
     ['mcp__claude_ai_Google_Drive__*', 'mcp__blender__*']);
   assert.deepEqual(mcpAllowRules('No MCP servers configured.'), []);
-  // Without connectors the owner can still change TagMails settings by email.
+  // Without connectors the owner can still change Tagmails settings by email.
   assert.deepEqual(ownerAllowRules('No MCP servers configured.'), ['--allowedTools', 'Bash(tagmails status)', 'Bash(tagmails set:*)']);
 });
 

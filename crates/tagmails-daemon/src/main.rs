@@ -575,7 +575,7 @@ fn pair_relay(base: &str, code: &str, path: &Path, name: &str, public_key: Optio
             }
             return match device_is_paired(&client, base, token) {
                 Ok(true) => {
-                    println!("Existing device token is active on this relay. Confirm its account in TagMails setup.");
+                    println!("Existing device token is active on this relay. Confirm its account in Tagmails setup.");
                     Ok(())
                 }
                 Ok(false) => Err("Existing device token is not active on this relay. Move it aside and create a new pairing code before retrying.".into()),
@@ -981,7 +981,7 @@ fn upload_file(
     Ok(())
 }
 
-/// TagMails' recommended permissions, used until `tagmails start --access ...`
+/// Tagmails' recommended permissions, used until `tagmails start --access ...`
 /// or `--claude-permission ...` chooses others. Only the machine sets these.
 const DEFAULT_ACCESS: &str = "write";
 const DEFAULT_CLAUDE_PERMISSION: &str = "auto";
@@ -1435,13 +1435,13 @@ fn run_relay(settings: &Settings, once: bool, reload: bool) -> Result<(), Box<dy
     if !once {
         match &settings.workspace {
             Some(workspace) => println!(
-                "TagMails {VERSION} watching {} ({} access in {}).",
+                "Tagmails {VERSION} watching {} ({} access in {}).",
                 settings.relay,
                 settings.access,
                 workspace.display()
             ),
             None => println!(
-                "TagMails {VERSION} watching {} ({} access, project routing).",
+                "Tagmails {VERSION} watching {} ({} access, project routing).",
                 settings.relay, settings.access
             ),
         }
@@ -2080,7 +2080,7 @@ fn run_lab() -> Result<(), Box<dyn Error>> {
         None
     };
     let client = Client::builder().timeout(Duration::from_secs(10)).build()?;
-    println!("TagMails Rust {runtime} daemon polling {base}. Press Ctrl-C to stop.");
+    println!("Tagmails Rust {runtime} daemon polling {base}. Press Ctrl-C to stop.");
     loop {
         match post(&client, &base, "/api/claim", json!({"jobId":selected_job})) {
             Ok(claim) if claim["claimed"] == true => {
@@ -2131,7 +2131,7 @@ fn run_lab() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-const HELP: &str = "TagMails: email your coding agent.
+const HELP: &str = "Tagmails: email your coding agent.
 
 Usage:
   tagmails pair [--no-wait] [--name NAME] [--relay URL]
@@ -2158,7 +2158,7 @@ Usage:
   tagmails --version
 
 --access and --claude-permission set what agents may do on this machine; only this
-machine sets them. TagMails recommends Codex write and Claude auto (the default).
+machine sets them. Tagmails recommends Codex write and Claude auto (the default).
 Full access and bypass apply only after you choose --access full or
 --claude-permission bypass here.
 
@@ -2168,9 +2168,9 @@ when you ask by email); permissions and folders change only with `tagmails start
 terminal. --instructions are standing instructions every one of your emails follows
 (for example where to put files too large for email); a reply says when they change.
 
-`tagmails pair` with no code prints a link to approve it (https://tagmails.com/connect for the hosted service). By default TagMails picks one of
+`tagmails pair` with no code prints a link to approve it (https://tagmails.com/connect for the hosted service). By default Tagmails picks one of
 your recent Codex or Claude project folders for each new email (--projects). Use
---workspace to pin every email to one folder instead. To pick the folder, TagMails
+--workspace to pin every email to one folder instead. To pick the folder, Tagmails
 shares each project's name, README excerpt, top-level files and, with the default
 --routing-context full, the first line of your last few sessions there.";
 
@@ -2185,7 +2185,7 @@ fn option(args: &[String], name: &str) -> Result<Option<String>, Box<dyn Error>>
 }
 
 /// The saved settings. A missing file is the defaults; an unreadable or
-/// malformed one is an error, never the defaults: those are TagMails'
+/// malformed one is an error, never the defaults: those are Tagmails'
 /// recommended permissions and project routing, which can be broader than
 /// what the owner chose (`--access read`, a pinned workspace).
 fn read_config() -> Result<Value, String> {
@@ -2582,7 +2582,7 @@ fn set_instructions(text: Option<&str>) -> Result<String, Box<dyn Error>> {
     let Some(text) = text.map(str::trim).filter(|text| !text.is_empty()) else {
         match fs::remove_file(paths::email_instructions_file()) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
-            _ => return Ok("Cleared your TagMails instructions.".into()),
+            _ => return Ok("Cleared your Tagmails instructions.".into()),
         }
     };
     if text.chars().count() > MAX_INSTRUCTIONS || text.contains('\0') {
@@ -2590,7 +2590,7 @@ fn set_instructions(text: Option<&str>) -> Result<String, Box<dyn Error>> {
     }
     create_private_dir(&paths::email_settings_dir())?;
     write_private_file(&paths::email_instructions_file(), format!("{text}\n").as_bytes())?;
-    Ok("Saved your TagMails instructions; every email you send from now on follows them.".into())
+    Ok("Saved your Tagmails instructions; every email you send from now on follows them.".into())
 }
 
 /// A reply line naming instructions that changed during a run, so a change an
@@ -2600,12 +2600,12 @@ fn instructions_change_note(before: &Option<String>, after: &Option<String>) -> 
         return None;
     }
     Some(match after {
-        None => "Your TagMails instructions were cleared during this run.".into(),
+        None => "Your Tagmails instructions were cleared during this run.".into(),
         Some(text) => {
             let text = text.trim();
             let shown: String = text.chars().take(200).collect();
             let more = if text.chars().count() > 200 { "…" } else { "" };
-            format!("Your TagMails instructions changed during this run. They now read: \"{shown}{more}\"")
+            format!("Your Tagmails instructions changed during this run. They now read: \"{shown}{more}\"")
         }
     })
 }
@@ -2643,7 +2643,7 @@ fn command_doctor() -> Result<(), Box<dyn Error>> {
             println!("  FAIL  {label}\n        fix: {fix}");
         }
     };
-    println!("TagMails {VERSION} doctor");
+    println!("Tagmails {VERSION} doctor");
     let token = read_token(&paths::token_file());
     check(token.is_ok(), "paired with a relay", "copy the setup prompt at https://tagmails.com, or run `tagmails pair <code>`");
     if let Ok(token) = &token {
@@ -2687,7 +2687,7 @@ fn command_doctor() -> Result<(), Box<dyn Error>> {
             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
             .and_then(|value| value["projects"].as_array().map(Vec::len)).unwrap_or(0);
         check(projects > 0, &format!("project folders found ({projects})"),
-            "open a project once in Codex or Claude Code so TagMails can route emails to it; until then emails run in a chat folder");
+            "open a project once in Codex or Claude Code so Tagmails can route emails to it; until then emails run in a chat folder");
     }
     if failures == 0 {
         println!("All good. Email your agent address to try it.");
@@ -2741,7 +2741,7 @@ fn command_status() -> Result<(), Box<dyn Error>> {
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .and_then(|value| value["projects"].as_array().map(Vec::len));
-    println!("TagMails {VERSION}");
+    println!("Tagmails {VERSION}");
     println!("  Connection  {connection}");
     println!("  Relay       {relay}");
     println!("  Service     {}", service::status());
@@ -2790,7 +2790,7 @@ fn command_status() -> Result<(), Box<dyn Error>> {
 }
 
 /// Find an email thread's local agent session and resume it in the matching
-/// CLI. Sessions live in TagMails' own agent homes, separate from yours.
+/// CLI. Sessions live in Tagmails' own agent homes, separate from yours.
 fn command_open(args: &[String]) -> Result<(), Box<dyn Error>> {
     let thread = args.get(1).ok_or("Pass the thread ID shown on the run page")?;
     let base = paths::home().join(".tagmails");

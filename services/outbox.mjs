@@ -319,7 +319,7 @@ async function prepare(env, row, material = null) {
       content: bytes.toString('base64') });
     attachedBytes += bytes.length;
   }
-  // TagMails doesn't host files: whatever didn't fit in this email is named so
+  // Tagmails doesn't host files: whatever didn't fit in this email is named so
   // the owner can ask the agent to put it in their own storage.
   const attachedNames = new Set(attachments.map((file) => file.filename));
   const leftOut = [...[...files, ...inline ?? []].filter((file) => !attachedNames.has(file.name)).map((file) => file.name),
@@ -374,7 +374,7 @@ async function prepare(env, row, material = null) {
   });
   // A sealed job's failure notice written without its computer (it stopped
   // responding) has no subject to reuse; it goes out under a plain one.
-  inbound.subject = material ? material.subject ?? 'Your TagMails task' : await openText(env, inbound.subject);
+  inbound.subject = material ? material.subject ?? 'Your Tagmails task' : await openText(env, inbound.subject);
   if (typeof inbound.subject !== 'string' || /[\r\n]/.test(inbound.subject)) throw new InvalidOutboxSource('Outbox subject is missing or contains a line break');
   return {
     from: testSender ?? agent, ...(testSender ? { replyTo: agent } : {}),

@@ -17,7 +17,7 @@ const fixtures = [
       'GPT-6 Sol', 'High', 'Fast', 'Balance $9.25'],
     textOnlyPhrases: ['No domain was purchased.', 'Reply with the next decision.'],
     absent: ['Done', 'Waiting for your reply', 'file attached'],
-    footerOrder: ['Transcript', 'GPT-6 Sol', 'High', 'Fast', 'Balance $9.25', 'TagMails'],
+    footerOrder: ['Transcript', 'GPT-6 Sol', 'High', 'Fast', 'Balance $9.25', 'Tagmails'],
     links: [{ label: 'Transcript', url: 'https://example.test/runs/1' }],
   },
   {
@@ -106,7 +106,7 @@ for (const fixture of fixtures) {
     if (!text.includes(`${link.label}: ${link.url}`) || !html.includes(`href="${escapeHtml(link.url)}"`)) failures.push(`Link missing: ${link.label}`);
   }
   const brandUrl = fixture.result.brandUrl && new URL(fixture.result.brandUrl).href;
-  if (brandUrl && (!text.includes(`TagMails: ${brandUrl}`) ||
+  if (brandUrl && (!text.includes(`Tagmails: ${brandUrl}`) ||
       !html.includes(`href="${escapeHtml(brandUrl)}"`) || !html.includes('class="mark"'))) {
     failures.push('Brand link or mark is missing');
   }

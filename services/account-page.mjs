@@ -5,7 +5,7 @@ export function accountPage() {
   const nonce = randomBytes(16).toString('base64');
   const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Account · TagMails</title>${ICON_LINKS}
+<title>Account · Tagmails</title>${ICON_LINKS}
 <style nonce="${nonce}">
   :root{font:16px/1.5 system-ui,sans-serif;color:#242424;background:#f7f4ed}
   body{margin:0}main{max-width:680px;margin:8vh auto;padding:0 24px 80px}
@@ -251,7 +251,7 @@ document.addEventListener('DOMContentLoaded', () => {
     <select id="defaultModel"><option value="gpt-6.1-sol">Codex Sol · medium</option>
       <option value="claude-sonnet-5-5" disabled>Claude Code · on hold</option></select>
     <button id="saveDefaultModel" class="secondary">Save default model</button>
-    <p class="muted">This private Mac pilot uses GPT-6 Sol while GPT-6.1 Sol is unavailable with its ChatGPT account. No model line is required. Ask naturally, such as “use Luna Medium for this” or “use Codex Fast,” to choose a model, effort, or available speed. When effort is unclear, TagMails uses Medium. Unsupported runtime choices receive a no-charge notice. Claude subscription requests are paused in this pilot.</p>
+    <p class="muted">This private Mac pilot uses GPT-6 Sol while GPT-6.1 Sol is unavailable with its ChatGPT account. No model line is required. Ask naturally, such as “use Luna Medium for this” or “use Codex Fast,” to choose a model, effort, or available speed. When effort is unclear, Tagmails uses Medium. Unsupported runtime choices receive a no-charge notice. Claude subscription requests are paused in this pilot.</p>
     <button id="signOut" class="secondary">Sign out</button></section>
   <section class="card"><h2>Pair a Mac</h2><p>Install the agent (<code>brew install swaymun/tagmails/tagmails</code> or <code>curl -fsSL https://tagmails.com/install.sh | sh</code>), create a one-time code, then run the pairing command. The device token stays on your computer.</p>
     <button id="pair">Create pairing code</button><p><code id="pairCode"></code></p><pre id="pairCommand"></pre>
@@ -296,7 +296,7 @@ export function runReceiptPage(run) {
   const listCost = run.result?.reportedListCostUsd;
   const list = (items) => `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${escapeHtml(run.subject ?? 'Email')} · TagMails run</title>${ICON_LINKS}<style nonce="${nonce}">
+<title>${escapeHtml(run.subject ?? 'Email')} · Tagmails run</title>${ICON_LINKS}<style nonce="${nonce}">
 :root{font:16px/1.55 system-ui,sans-serif;color:#242424;background:#f7f4ed}body{margin:0}main{max-width:720px;margin:7vh auto;padding:0 24px 80px}
 a{color:#255d53}a:focus-visible{outline:3px solid #b98432;outline-offset:3px}.eyebrow{letter-spacing:.12em;text-transform:uppercase;font-size:.72rem;font-weight:700;color:#57776f}
 h1{font-size:clamp(2rem,6vw,3.25rem);line-height:1.1;margin:.35em 0}h2{font-size:1.05rem;margin:28px 0 8px}p{margin:8px 0 16px}.card{background:#fff;border:1px solid #ddd9cf;border-radius:14px;padding:24px;margin:24px 0}
@@ -305,7 +305,7 @@ h1{font-size:clamp(2rem,6vw,3.25rem);line-height:1.1;margin:.35em 0}h2{font-size
 </style></head><body><main><p class="eyebrow">tagmails. / run receipt</p><a href="/account">Account</a>
 <h1>${escapeHtml(run.subject ?? 'Email')}</h1><span class="status">${title}</span>
 <section class="card"><h2>Outcome</h2><p>${escapeHtml(run.result?.summary ?? (run.sealed
-    ? 'The email, reply and transcript are sealed to your computer, so TagMails can\'t show them. Open the session on that computer.'
+    ? 'The email, reply and transcript are sealed to your computer, so Tagmails can\'t show them. Open the session on that computer.'
     : run.state === 'failed'
     ? 'This run stopped before an agent result was saved. If it may have edited files, inspect the workspace.'
     : 'The agent has not submitted a result yet.'))}</p>
@@ -317,7 +317,7 @@ ${run.deliveryRecipients?.length ? `<h2>Recipient delivery</h2>${list(run.delive
 ${details.length ? `<h2>What happened</h2>${list(details)}` : ''}
 ${checks.length ? `<h2>Checks and limits</h2>${list(checks)}` : ''}
 ${hasUsage ? `<h2>Model usage reported by the local CLI</h2><p>${escapeHtml(usage.inputTokens)} input tokens (${escapeHtml(usage.cachedInputTokens)} cached, ${escapeHtml(usage.cacheCreationInputTokens)} cache creation); ${escapeHtml(usage.outputTokens)} output tokens (${escapeHtml(usage.reasoningOutputTokens)} reasoning).</p>` : ''}
-${typeof listCost === 'number' && Number.isFinite(listCost) && listCost >= 0 ? `<p>List-equivalent model cost reported by the CLI: $${escapeHtml(listCost.toFixed(6))}. This is not a TagMails charge.</p>` : ''}
+${typeof listCost === 'number' && Number.isFinite(listCost) && listCost >= 0 ? `<p>List-equivalent model cost reported by the CLI: $${escapeHtml(listCost.toFixed(6))}. This is not a Tagmails charge.</p>` : ''}
 <div class="meta"><span><strong>Sender</strong>${escapeHtml(run.sender_email)}</span><span><strong>Received</strong>${escapeHtml(run.created_at)} UTC</span>
 ${run.selectedModel ? `<span><strong>Model route</strong>${escapeHtml(run.selectedModel)}</span>` : ''}
 <span><strong>Attempts</strong>${escapeHtml(run.attempts)}</span><span><strong>Provider send</strong>${escapeHtml(run.delivery_state ?? 'Not queued')}</span></div></section>

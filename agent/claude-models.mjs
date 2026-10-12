@@ -39,5 +39,5 @@ export async function probeClaudeModels({ load = () => import('@anthropic-ai/cla
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try { process.stdout.write(`${JSON.stringify(await probeClaudeModels())}\n`); process.exit(0); }
-  catch (error) { process.stderr.write(`TagMails Claude models: ${error.message}\n`); process.exit(1); }
+  catch (error) { process.stderr.write(`Tagmails Claude models: ${error.message}\n`); process.exit(1); }
 }

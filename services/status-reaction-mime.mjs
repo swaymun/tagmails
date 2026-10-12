@@ -3,15 +3,15 @@ const ADDRESS = /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/;
 const JOB_ID = /^[0-9a-f-]{36}$/i;
 
 const STATUS = {
-  received: { emoji: '👀', text: 'TagMails received your request.' },
-  working: { emoji: '📝', text: 'TagMails is working on your request.' },
-  completed: { emoji: '✅', text: 'TagMails completed your request. A result email will follow.' },
-  failed: { emoji: '⚠️', text: 'TagMails could not complete your request. An explanation will follow.' },
+  received: { emoji: '👀', text: 'Tagmails received your request.' },
+  working: { emoji: '📝', text: 'Tagmails is working on your request.' },
+  completed: { emoji: '✅', text: 'Tagmails completed your request. A result email will follow.' },
+  failed: { emoji: '⚠️', text: 'Tagmails could not complete your request. An explanation will follow.' },
 };
 
 function encodedSubject(subject) {
   const clean = String(subject ?? '').replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
-  const value = /^re:/i.test(clean) ? clean : `Re: ${clean || 'Your TagMails request'}`;
+  const value = /^re:/i.test(clean) ? clean : `Re: ${clean || 'Your Tagmails request'}`;
   const words = [];
   let chunk = '';
   for (const character of value) {
@@ -34,7 +34,7 @@ export function buildStatusReaction({ jobId, status, from, to, targetMessageId, 
   const boundary = `tagmails-${jobId}-${status}`;
   const reaction = Buffer.from(JSON.stringify({ version: 1, emoji: selected.emoji })).toString('base64');
   const raw = [
-    `From: ${from.split('@')[0].replace(/[^\w.+-]/g, '') || 'TagMails'} <${from}>`, `To: <${to}>`, `Subject: ${encodedSubject(subject)}`,
+    `From: ${from.split('@')[0].replace(/[^\w.+-]/g, '') || 'Tagmails'} <${from}>`, `To: <${to}>`, `Subject: ${encodedSubject(subject)}`,
     `Date: ${new Date().toUTCString()}`,
     `Message-ID: <${jobId}.${status}@${from.split('@')[1]}>`,
     `In-Reply-To: ${targetMessageId}`, `References: ${targetMessageId}`,

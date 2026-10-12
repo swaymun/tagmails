@@ -40,7 +40,7 @@ test('a computer pairs once its owner opens the link, checks the code and signs 
 
   const page = await link(env, `/connect?code=${code}`);
   const html = await page.text();
-  assert.match(html, /Connect “Studio Mac” to TagMails/, 'the page names the computer before approval');
+  assert.match(html, /Connect “Studio Mac” to Tagmails/, 'the page names the computer before approval');
   assert.ok(html.includes(`<strong>${code}</strong>`), 'and shows the code to check against the terminal');
   assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
   assert.match(await (await link(env, '/connect?code=BBBB-BBBB')).text(), /That link has expired or was already used/);

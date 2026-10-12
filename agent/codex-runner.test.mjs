@@ -227,7 +227,7 @@ test('Codex passes advertised effort and fast tier and records reasoning summari
   assert.equal(turn.params.effort, 'medium');
   assert.equal(turn.params.serviceTierForTurn, 'priority');
   // The model and settings go to the app-server, never into the prompt text.
-  assert.match(turn.params.input[0].text, /routing preferences TagMails has already applied/);
+  assert.match(turn.params.input[0].text, /routing preferences Tagmails has already applied/);
   assert.doesNotMatch(turn.params.input[0].text, /gpt-6-luna/);
 });
 
@@ -485,11 +485,11 @@ test('owner standing instructions reach owner prompts only', async (t) => {
   fs.writeFileSync(path.join(dir, 'email', 'instructions.md'), 'Put files too large for email in my Google Drive.\n');
   const owner = claim('job-instructions', 'thread-instructions');
   owner.request.fromOwner = true;
-  assert.match(promptFor(owner), /standing instructions for TagMails[^\n]*\nPut files too large for email in my Google Drive\./);
+  assert.match(promptFor(owner), /standing instructions for Tagmails[^\n]*\nPut files too large for email in my Google Drive\./);
   const participant = claim('job-instructions-2', 'thread-instructions');
   participant.request.fromOwner = false;
-  assert.doesNotMatch(promptFor(participant), /Google Drive|standing instructions for TagMails/);
-  // Changing TagMails settings and using connectors are owner powers.
+  assert.doesNotMatch(promptFor(participant), /Google Drive|standing instructions for Tagmails/);
+  // Changing Tagmails settings and using connectors are owner powers.
   const ownerTools = process.env.TAGMAILS_OWNER_TOOLS;
   delete process.env.TAGMAILS_OWNER_TOOLS;
   try {

@@ -47,7 +47,7 @@ async function codexProjects({ withHistory = true, home = process.env.CODEX_HOME
   });
   const timer = setTimeout(() => { fail(new Error('Codex project list timed out')); child.kill(); }, 10_000);
   try {
-    await request('initialize', { clientInfo: { name: 'tagmails', title: 'TagMails', version: '0.2.2' },
+    await request('initialize', { clientInfo: { name: 'tagmails', title: 'Tagmails', version: '0.2.2' },
       capabilities: { experimentalApi: true } });
     child.stdin.write(`${JSON.stringify({ method: 'initialized', params: {} })}\n`);
     const list = await request('project/list', { limit: 100 });
@@ -74,9 +74,9 @@ export function humanRequest(text) {
   let t = String(text ?? '')
     .replace(/<(recommended_plugins|environment_context|in-app-browser-context|codex_internal_context|system-reminder|local-command-[a-z]+|command-[a-z]+)[^>]*>[\s\S]*?<\/\1>/g, ' ')
     .replace(/<image[^>]*>\s*<\/image>/g, ' ');
-  // A TagMails turn's prompt is an email; it never becomes routing history
+  // A Tagmails turn's prompt is an email; it never becomes routing history
   // (the relay keeps that history readable, while mail is sealed).
-  if (/^\s*You are working through TagMails:/.test(t)) return null;
+  if (/^\s*You are working through Tagmails:/.test(t)) return null;
   const request = t.match(/##\s*My request:\s*([\s\S]*)/);
   if (request?.[1].trim()) t = request[1];
   t = t.replace(/\s+/g, ' ').trim();
@@ -245,7 +245,7 @@ export async function inventory({ sources, home = os.homedir(), context = proces
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try { process.stdout.write(`${JSON.stringify(await inventory())}\n`); }
   catch (error) {
-    process.stderr.write(`TagMails project list: ${error.message}\n`);
+    process.stderr.write(`Tagmails project list: ${error.message}\n`);
     process.exitCode = 1;
   }
 }

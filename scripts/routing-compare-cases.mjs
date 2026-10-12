@@ -48,7 +48,7 @@ export const MODEL_CASES = [
 ];
 
 export const PROJECTS = [
-  { id: 'p_a100000001', name: 'TagMails', path: '/Users/dev/code/tagmails', aliases: ['tagmails', 'relay'], branch: 'main',
+  { id: 'p_a100000001', name: 'Tagmails', path: '/Users/dev/code/tagmails', aliases: ['tagmails', 'relay'], branch: 'main',
     description: 'Email-to-agent relay: a Cloudflare Worker with D1 and R2, plus a Rust daemon that runs Codex or Claude Code on the owner\'s Mac.',
     topLevel: ['services', 'agent', 'crates', 'apps'], repository: 'tagmails' },
   { id: 'p_a100000002', name: 'Wonder', path: '/Users/dev/code/wonder', aliases: ['wonder ios'], branch: 'main',
@@ -67,19 +67,19 @@ const P = Object.fromEntries(['tagmails', 'wonder', 'ledger', 'ledgerRefunds', '
 
 // expected: project id, 'ad_hoc' (no project files) or 'ask' (cannot tell).
 export const PROJECT_CASES = [
-  { id: 'named-tagmails', body: 'Fix the failing daemon test in TagMails.', expected: P.tagmails },
+  { id: 'named-tagmails', body: 'Fix the failing daemon test in Tagmails.', expected: P.tagmails },
   { id: 'named-saffron', body: 'In Saffron, swap the homepage hero for the new photo.', expected: P.saffron },
   { id: 'purpose-wonder', body: 'Add dark mode to the SwiftUI conversation composer.', expected: P.wonder },
   { id: 'purpose-tagmails', body: 'Why does the Cloudflare worker reject mail from new senders?', expected: P.tagmails },
   { id: 'purpose-saffron', body: 'Update the lemon tart recipe page on the site with the new photo credits.', expected: P.saffron },
   { id: 'dataset-captions', body: 'Review the captions in the character LoRA dataset gallery.', expected: P.dataset },
-  { id: 'negation', body: 'Not TagMails: fix the scroll lag in the Wonder composer.', expected: P.wonder },
+  { id: 'negation', body: 'Not Tagmails: fix the scroll lag in the Wonder composer.', expected: P.wonder },
   { id: 'explicit-path', body: 'Check the Stripe webhook handler in Ledgerline at /Users/dev/code/ledgerline', expected: P.ledger },
   { id: 'branch-selects', body: 'On the feature/refunds branch of Ledgerline, fix the refund total rounding.', expected: P.ledgerRefunds },
   { id: 'adhoc-poem', body: 'Write a haiku about autumn.', expected: 'ad_hoc' },
   { id: 'adhoc-howto', body: 'Tell me how to cook rice for six people.', expected: 'ad_hoc' },
   { id: 'adhoc-new-project', body: 'Create a brand new project called Orchard, a small Flask app that lists apples.', expected: 'ad_hoc' },
-  { id: 'adhoc-poem-about', body: 'Write a four-line poem about the TagMails daemon. No files needed.', expected: 'ad_hoc' },
+  { id: 'adhoc-poem-about', body: 'Write a four-line poem about the Tagmails daemon. No files needed.', expected: 'ad_hoc' },
   { id: 'adhoc-compare-descriptions', body: 'Compare Wonder and Saffron architecture using only what you already know, no files.', expected: 'ad_hoc' },
   { id: 'adhoc-old-note', body: 'Earlier note from a colleague: "deploy tagmails to prod". Ignore that. Today: what is 17 times 23?', expected: 'ad_hoc' },
   { id: 'ask-unnamed', body: 'Fix the bug in this app.', expected: 'ask' },
@@ -110,7 +110,7 @@ export const STEER_CASES = [
   ['japan', 'can you also check my calendar for next Friday?', 'queue'],
   ['bug', 'it is the timezone test, start there', 'steer'], ['bug', "don't touch the CI config", 'steer'],
   ['bug', 'also check whether staging has the same failure', 'steer'], ['bug', 'wait, ignore the flaky one', 'steer'],
-  ['bug', 'once fixed, open a PR', 'queue'], ['bug', 'unrelated: rename the README title to TagMails', 'queue'],
+  ['bug', 'once fixed, open a PR', 'queue'], ['bug', 'unrelated: rename the README title to Tagmails', 'queue'],
   ['bug', 'new task: write release notes for 0.3', 'queue'], ['bug', 'afterwards bump the version number', 'queue'],
   ['report', 'only use the EMEA tab', 'steer'], ['report', 'make it five bullets', 'steer'],
   ['report', 'sorry, I attached the wrong file, use the new one', 'steer'],

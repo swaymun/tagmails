@@ -18,7 +18,7 @@ The agent returns a structured result; the relay, not the model, builds the emai
 - Markdown renders to inline-styled HTML: paragraphs, bold/italic, lists (nested), code spans and blocks, tables, quotes. Everything is escaped first; only `https` links survive. Local file links (`/Users/...`) keep their label as plain text.
 - One quiet footer line: `Transcript · GPT-6 Luna Medium · in <project> · Balance $8.85 · tagmails.` Failed and approval replies add "Stopped" / "Needs approval". Relay-only replies (clarifications, a revoked computer) have no run link.
 - The plain-text part carries the same answer and footer.
-- Mail is sent as `TagMails <agent address>`.
+- Mail is sent as `Tagmails <agent address>`.
 
 ## Attachments
 

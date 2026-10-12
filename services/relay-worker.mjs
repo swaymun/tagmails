@@ -68,7 +68,7 @@ export async function parentThread(db, accountId, parentIds) {
     WHERE t.account_id = ? AND m.account_id = ? AND m.message_id IN (${candidates.map(() => '?').join(', ')})`)
     .bind(accountId, accountId, ...candidates).all();
   const threads = new Map((rows.results ?? rows).map((row) => [row.message_id, row.thread_id]));
-  // Status messages ("TagMails received your request.") carry <jobId.status@domain>; a reply to one stays in its thread.
+  // Status messages ("Tagmails received your request.") carry <jobId.status@domain>; a reply to one stays in its thread.
   const statusJobs = candidates.map((id) => id.match(/^<([0-9a-f-]{36})\.(?:received|working|completed|failed)@/i)?.[1]).filter(Boolean);
   if (statusJobs.length) {
     const jobs = await db.prepare(`SELECT j.id, j.thread_id FROM jobs j JOIN threads t ON t.id = j.thread_id
@@ -357,9 +357,9 @@ async function acceptMessage(env, message) {
   const unavailableResult = refused ? {
     runtime: 'relay', state: 'failed',
     summary: owner
-      ? 'No computer with TagMails 0.2.24 or later is connected, so this email was not kept or run. On your computer run `brew upgrade tagmails && tagmails start` (or `tagmails pair` on a new one), then send it again.'
-      : 'The account owner\'s computer isn\'t connected to TagMails, so this email was not kept or run. Ask the owner to reconnect it, then send it again.',
-    checks: ['No local agent ran. TagMails stores mail only sealed to a connected computer.'],
+      ? 'No computer with Tagmails 0.2.24 or later is connected, so this email was not kept or run. On your computer run `brew upgrade tagmails && tagmails start` (or `tagmails pair` on a new one), then send it again.'
+      : 'The account owner\'s computer isn\'t connected to Tagmails, so this email was not kept or run. Ask the owner to reconnect it, then send it again.',
+    checks: ['No local agent ran. Tagmails stores mail only sealed to a connected computer.'],
   } : threadUnavailable ? {
     runtime: 'relay', state: 'failed',
     summary: owner

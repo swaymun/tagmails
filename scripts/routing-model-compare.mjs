@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Compares the models that can route TagMails mail on the owner's own machine: Claude
+// Compares the models that can route Tagmails mail on the owner's own machine: Claude
 // Haiku 5.5 (`claude -p`) and GPT-6 Luna (`codex exec`), on the three routing tasks (model
 // choice, project folder, mid-run steer/queue/ack). The routers run as in production
 // (agent/routing-model.mjs, routing-steer.mjs, project-routing.mjs); only the classifier is

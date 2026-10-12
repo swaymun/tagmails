@@ -79,7 +79,7 @@ async function startCheckout(env, account, { successUrl, cancelUrl }, stripeFetc
     'payment_method_types[0]': 'card',
     'line_items[0][price_data][currency]': 'usd',
     'line_items[0][price_data][unit_amount]': String(TOP_UP_CENTS),
-    'line_items[0][price_data][product_data][name]': billingLive(env) ? 'TagMails balance ($10)' : 'TagMails test balance ($10)',
+    'line_items[0][price_data][product_data][name]': billingLive(env) ? 'Tagmails balance ($10)' : 'Tagmails test balance ($10)',
     'line_items[0][quantity]': '1',
   });
   const response = await stripeFetch('https://api.stripe.com/v1/checkout/sessions', {

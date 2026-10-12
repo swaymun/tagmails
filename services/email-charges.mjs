@@ -102,10 +102,10 @@ export async function testWalletSnapshot(env, accountId) {
 
 // Unpaid relay replies an account may send per day. Without a cap, an account
 // with no balance could mail 'Model: nonexistent' with a Cc again and again and
-// have TagMails send each Cc'd stranger a free reply.
+// have Tagmails send each Cc'd stranger a free reply.
 export const FREE_RELAY_REPLIES_PER_DAY = 5;
 
-// Whether TagMails may write this account a reply of its own now: always when
+// Whether Tagmails may write this account a reply of its own now: always when
 // the balance covers it, otherwise within the daily free allowance.
 export async function relayReplyAllowed(env, accountId) {
   if (!testBillingEnabled(env)) return true;
@@ -121,7 +121,7 @@ export async function relayReplyAllowed(env, accountId) {
   return row.balance >= emailPriceMillicents(env) || row.free < FREE_RELAY_REPLIES_PER_DAY;
 }
 
-// Replies TagMails writes itself (a question back, a revoked computer) are
+// Replies Tagmails writes itself (a question back, a revoked computer) are
 // charged when the balance covers them, and still sent free when it doesn't
 // (up to FREE_RELAY_REPLIES_PER_DAY).
 export async function chargeRelayReply(env, jobId) {

@@ -4,7 +4,7 @@ Status: internal working plan, 2026-10-03. No public launch date is set. An owne
 
 ## Positioning
 
-**Give your agent an email address.** Send a task to TagMails from Gmail and get the result back in the same conversation. The connected Mac runs the work. The verified development pilot is owner-only with Codex; a later reply continues its session. The first public examples should focus on a catch-up from a messy thread, a concrete analysis task, and a follow-up decision. Show the agent's actual output, check results, and limitations.
+**Give your agent an email address.** Send a task to Tagmails from Gmail and get the result back in the same conversation. The connected Mac runs the work. The verified development pilot is owner-only with Codex; a later reply continues its session. The first public examples should focus on a catch-up from a messy thread, a concrete analysis task, and a follow-up decision. Show the agent's actual output, check results, and limitations.
 
 The initial audience is developers already using Codex on a Mac. Keep the pilot to the owner's verified Gmail address and one selected local workspace. A customer beta using a personal Codex plan requires the provider's supported commercial path or confirmation; Claude Code customer execution requires API authentication or Anthropic approval. Keep the email and storage price separate from any later API-funded model cost. The [internal pricing model](pricing.md) uses current public rate cards to define what to measure; do not publish a task price until provider terms, live usage, and refunds are resolved.
 
@@ -63,7 +63,7 @@ Review first-task completion, time to first reply, second-turn rate, reaction fe
 
 ## Decisions still needed
 
-- The user purchased `tagmails.com`. Resolve the active `TagMail` email-product naming risk and obtain trademark clearance before broadly launching the TagMails brand.
+- The user purchased `tagmails.com`. Resolve the active `TagMail` email-product naming risk and obtain trademark clearance before broadly launching the Tagmails brand.
 - Shared threads and Bcc invitations are deferred; revisit their access and provider-plan design in a later release.
 - Set retention and the final exchange price after measuring live delivery and model use.
 - API-funded model execution remains outside the first beta by user decision. If a customer Claude route is still wanted, revisit that decision or obtain an approved alternative from Anthropic.

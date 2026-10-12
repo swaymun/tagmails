@@ -1,4 +1,4 @@
-// Where TagMails keeps its files on a Unix machine.
+// Where Tagmails keeps its files on a Unix machine.
 //
 // macOS and Linux share the config location so an existing pilot token at
 // ~/.config/tagmails/device-token keeps working. Data and logs follow each
@@ -34,7 +34,7 @@ pub fn data_dir() -> PathBuf {
         return PathBuf::from(dir);
     }
     if cfg!(target_os = "macos") {
-        home().join("Library/Application Support/TagMails")
+        home().join("Library/Application Support/Tagmails")
     } else {
         xdg("XDG_DATA_HOME", ".local/share").join("tagmails")
     }
@@ -42,7 +42,7 @@ pub fn data_dir() -> PathBuf {
 
 pub fn log_dir() -> PathBuf {
     if cfg!(target_os = "macos") {
-        home().join("Library/Logs/TagMails")
+        home().join("Library/Logs/Tagmails")
     } else {
         xdg("XDG_STATE_HOME", ".local/state").join("tagmails")
     }
@@ -52,7 +52,7 @@ pub fn config_file() -> PathBuf {
     config_dir().join("config.json")
 }
 
-/// The only TagMails settings an email-started agent may write: model defaults
+/// The only Tagmails settings an email-started agent may write: model defaults
 /// from `tagmails set`. Permissions and folders stay in config.json.
 pub fn email_settings_dir() -> PathBuf {
     config_dir().join("email")
@@ -131,6 +131,6 @@ pub fn adapters_dir() -> Result<PathBuf, String> {
         .flatten()
         .find(|dir| has_adapters(dir))
         .ok_or_else(|| {
-            "Agent adapters are missing. Reinstall TagMails, or set TAGMAILS_ADAPTERS_DIR.".into()
+            "Agent adapters are missing. Reinstall Tagmails, or set TAGMAILS_ADAPTERS_DIR.".into()
         })
 }

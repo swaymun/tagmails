@@ -439,7 +439,7 @@ export async function failOneAbandonedJob(env) {
   if (!row) return false;
   const key = `results/${row.account_id}/${row.id}/abandoned.json`;
   const result = { runtime: 'relay', state: 'failed',
-    summary: `Your computer started this task ${MAX_ATTEMPTS} times and stopped responding each time (it may have slept, restarted or crashed), so TagMails stopped retrying. Reply to try again.`,
+    summary: `Your computer started this task ${MAX_ATTEMPTS} times and stopped responding each time (it may have slept, restarted or crashed), so Tagmails stopped retrying. Reply to try again.`,
     checks: ['The agent may have made partial changes before it stopped.'] };
   await env.MAIL.put(key, JSON.stringify(result), { httpMetadata: { contentType: 'application/json' } });
   const [updated] = await env.DB.batch([
@@ -473,7 +473,7 @@ async function leasedJob(env, device, body) {
     .bind(body.jobId, body.leaseId, device.id, device.account_id).first();
 }
 
-// Where a file the agent attached should go. TagMails doesn't host files:
+// Where a file the agent attached should go. Tagmails doesn't host files:
 // one a mail client can open that still fits in the email goes through relay
 // storage into it; anything else is named in the reply as not sent.
 async function fileRoute(env, device, body) {
@@ -623,7 +623,7 @@ export async function handleDeviceRequest(request, env) {
   // Computers older than 0.2.24 have no sealing key and could only read
   // relay-key mail, which is no longer stored; they get no work.
   if (url.pathname === '/api/device/claim' && !device.key_id && env.SEALED_STORAGE_REQUIRED === 'true') {
-    return json({ error: 'Update TagMails to 0.2.24 or later: brew upgrade tagmails && tagmails start' }, 426);
+    return json({ error: 'Update Tagmails to 0.2.24 or later: brew upgrade tagmails && tagmails start' }, 426);
   }
   if (url.pathname === '/api/device/claim') return claim(env, device, await claimOptions(request));
   if (url.pathname === '/api/device/artifacts') return uploadRunArtifact(request, env, device);

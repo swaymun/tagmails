@@ -1,13 +1,13 @@
 # Email privacy gate for customer beta
 
 The current Resend account is for the owner's development mail only. Do not invite
-customers to send TagMails requests through it. The development Worker permits
+customers to send Tagmails requests through it. The development Worker permits
 Google sign-in only for `PILOT_OWNER_EMAIL` unless `PUBLIC_SIGNUP_ENABLED=true` is
 deliberately configured. The production configuration has no public signup flag.
 
-## What the TagMails operator can and cannot see
+## What the Tagmails operator can and cannot see
 
-This applies to mail for a computer on TagMails 0.2.24 or later. At `tagmails
+This applies to mail for a computer on Tagmails 0.2.24 or later. At `tagmails
 pair` (or the first `tagmails start` of an older pairing) the computer creates an
 X25519 key in its config folder (`device-key`, mode 0600) and registers only the
 public half. The relay seals what it stores to that key
@@ -101,7 +101,7 @@ content stays on the computer, in the Codex or Claude session.
 
 Resend's team dashboard displays received email bodies and attachments. Resend
 retains email and log data for 30 days on Free, Pro, and Scale plans. The
-TagMails relay separately keeps content in R2 and D1, sealed to the
+Tagmails relay separately keeps content in R2 and D1, sealed to the
 computer's key (above). The relay's own replies ("which project?" and the
 like) stay sealed with the Worker's `STORAGE_KEY`, which the operator controls. Scheduled cleanup (`services/inbound-retention.mjs`) applies
 one rule per kind of content:
@@ -126,8 +126,8 @@ an earlier run of a job whose lease was replaced are not tracked in D1 and are
 not yet deleted. D1 keeps metadata indefinitely for threading and billing:
 thread subjects (sealed), sender and recipient addresses, message IDs,
 timestamps, models and project folders. For relay-key mail these properties
-do not meet a promise that the TagMails operator cannot browse customer
-messages; sealed mail is covered above. A shorter TagMails R2 retention period does
+do not meet a promise that the Tagmails operator cannot browse customer
+messages; sealed mail is covered above. A shorter Tagmails R2 retention period does
 not shorten Resend's copy.
 
 Sources: [Resend inbound visibility](https://resend.com/blog/inbound-emails),
@@ -189,17 +189,17 @@ Provider references: [SES Lambda receive event](https://docs.aws.amazon.com/ses/
   38 MB raw message with up to 25 MB of decoded attachments, so those limits
   must be lowered together before migration. Cloudflare outbound mail to
   arbitrary recipients is limited to **5 MiB total**, so replies attach at
-  most 3.5 MB of files and TagMails hosts nothing larger. The 25 MiB outbound exception applies only to
+  most 3.5 MB of files and Tagmails hosts nothing larger. The 25 MiB outbound exception applies only to
   verified destination addresses and is not a customer promise.
 - Sending to arbitrary recipients requires Workers Paid. The current included
   allowance is 3,000 sends per month, then $0.35 per 1,000. This is a provider
-  cost assumption for pricing review, not a confirmed TagMails bill. Email
+  cost assumption for pricing review, not a confirmed Tagmails bill. Email
   Routing itself is available on Workers Free and Paid.
 - Disabling outbound preview removes its body preview, but Cloudflare's email
   activity and analytics still expose metadata such as sender, recipient,
   subject, message ID, and authentication/delivery status. The relay's own R2
   plaintext remains a separate privacy gap.
-- The current Cloudflare account has no Email Routing zone for TagMails. The
+- The current Cloudflare account has no Email Routing zone for Tagmails. The
   domain remains partially verified at Resend despite a publicly resolving
   `rsend` CNAME. A Resend verification restart briefly returned to Pending,
   then to Partially Verified with that record still pending. Do not assume

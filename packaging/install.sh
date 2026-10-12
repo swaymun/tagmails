@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install the TagMails agent on macOS or Linux without Homebrew.
+# Install the Tagmails agent on macOS or Linux without Homebrew.
 #
 #   curl -fsSL https://tagmails.com/install.sh | sh
 #
@@ -52,7 +52,7 @@ main() {
   case "$(uname -s)" in
     Darwin) OS=apple-darwin ;;
     Linux) OS=unknown-linux-gnu ;;
-    *) fail "TagMails supports macOS and Linux. On Windows, use WSL." ;;
+    *) fail "Tagmails supports macOS and Linux. On Windows, use WSL." ;;
   esac
   case "$(uname -m)" in
     arm64|aarch64) ARCH=aarch64 ;;
@@ -73,7 +73,7 @@ main() {
   # Prebuilt binary: no Rust needed.
   if [ -z "${TAGMAILS_FROM_SOURCE:-}" ] && [ -n "$ARCH" ]; then
     ASSET="tagmails-${VERSION}-${ARCH}-${OS}.tar.gz"
-    say "Downloading TagMails $VERSION for $ARCH-$OS…"
+    say "Downloading Tagmails $VERSION for $ARCH-$OS…"
     if fetch "$RELEASE_BASE/$ASSET" "$WORK/agent.tar.gz"; then
       verify "$WORK/agent.tar.gz" "$ASSET"
       tar -xzf "$WORK/agent.tar.gz" -C "$WORK"

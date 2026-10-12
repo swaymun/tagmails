@@ -7,7 +7,7 @@ const account = (sqlite, id = 'account-1') => sqlite.prepare('SELECT id, agent_e
 
 test('usernames are short, plain and not reserved', () => {
   for (const name of ['saimun', 'sai.mun', 'build-bot2', 'a_b']) assert.equal(usernameProblem(name), null, name);
-  for (const name of ['ab', 'x'.repeat(31), '.lead', 'trail-', 'a..b', 'has space', 'émile', 'admin', 'post-master', 'TagMails'])
+  for (const name of ['ab', 'x'.repeat(31), '.lead', 'trail-', 'a..b', 'has space', 'émile', 'admin', 'post-master', 'Tagmails'])
     assert.ok(usernameProblem(name), name);
 });
 

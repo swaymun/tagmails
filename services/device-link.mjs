@@ -110,7 +110,7 @@ function connectPage(env, link, askedFor) {
   const nonce = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString('base64');
   const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Connect a computer · TagMails</title>${ICON_LINKS}
+<title>Connect a computer · Tagmails</title>${ICON_LINKS}
 <style nonce="${nonce}">
   :root{font:16px/1.5 system-ui,sans-serif;color:#242424;background:#f7f4ed}
   body{margin:0}main{max-width:520px;margin:10vh auto;padding:0 20px 60px}
@@ -141,15 +141,15 @@ window.addEventListener('load', () => {
   google.accounts.id.renderButton($('googleButton'), { theme: 'outline', size: 'large', text: 'continue_with' });
 });
 </script></head><body><main>
-${link ? `<h1>Connect “${escapeHtml(link.name)}” to TagMails</h1>
+${link ? `<h1>Connect “${escapeHtml(link.name)}” to Tagmails</h1>
 <div id="form">
 <p>Check that <code>tagmails pair</code> on that computer shows <strong>${displayCode(link.code)}</strong>, then continue with the Google account whose emails it should run.</p>
-<input id="code" type="hidden" value="${displayCode(link.code)}">` : `<h1>Connect a computer to TagMails</h1>
+<input id="code" type="hidden" value="${displayCode(link.code)}">` : `<h1>Connect a computer to Tagmails</h1>
 <div id="form">
 ${askedFor ? '<p>That link has expired or was already used. Run <code>tagmails pair</code> again for a new one, or enter its code here.</p>' : ''}
 <p>Enter the code that <code>tagmails pair</code> shows on the computer, then continue with the Google account whose emails it should run.</p>
 <label for="code">Code</label><input id="code" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="9" placeholder="BCDF-GHJK">`}
-<p class="muted">Only connect a computer you are setting up yourself: whoever controls it will run your TagMails emails.</p>
+<p class="muted">Only connect a computer you are setting up yourself: whoever controls it will run your Tagmails emails.</p>
 <div id="googleButton"></div></div>
 <p id="status" role="status"></p>
 </main></body></html>`;

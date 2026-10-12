@@ -1,6 +1,6 @@
 <p><img src="assets/brand/wordmark.svg" alt="tagmails." height="48"></p>
 
-Email your coding agent: TagMails hands each email to Codex or Claude Code on your own Mac or Linux machine, in the right project folder, and replies in the same Gmail thread.
+Email your coding agent: Tagmails hands each email to Codex or Claude Code on your own Mac or Linux machine, in the right project folder, and replies in the same Gmail thread.
 
 ## Quick start
 
@@ -8,7 +8,7 @@ Email your coding agent: TagMails hands each email to Codex or Claude Code on yo
 2. Click **Copy setup prompt** and paste it into Codex or Claude Code on the Mac or Linux machine that should do the work. It installs `tagmails`, pairs the machine, starts it, and saves where your large files should go.
 3. Email your agent address from that Gmail account. Reply in the thread to continue.
 
-**Or skip the website:** tell Codex or Claude Code on that machine "Read https://tagmails.com/skill.md and set up TagMails". It asks which agent and default model to use, runs `tagmails pair`, and shows you a link; you open it and continue with Google (your first sign-in creates the account).
+**Or skip the website:** tell Codex or Claude Code on that machine "Read https://tagmails.com/skill.md and set up Tagmails". It asks which agent and default model to use, runs `tagmails pair`, and shows you a link; you open it and continue with Google (your first sign-in creates the account).
 
 By hand instead: `brew install swaymun/tagmails/tagmails` (or `curl -fsSL https://tagmails.com/install.sh | sh`, Node.js 20.16+), then `tagmails pair` (open the link it prints) and `tagmails start --projects`.
 
@@ -25,12 +25,12 @@ Gmail thread ◄──────────────── relay outbox �
 ```
 
 - The relay authenticates the sender, picks the model and project folder, and pushes the job to your paired machine.
-- The daemon runs the agent in that folder and uploads the result; the relay replies in the thread with up to 3.5 MB of email-safe attachments. TagMails hosts nothing larger.
+- The daemon runs the agent in that folder and uploads the result; the relay replies in the thread with up to 3.5 MB of email-safe attachments. Tagmails hosts nothing larger.
 - `apps/mock-inbox` runs the whole loop locally without real mail.
 
 ## Permissions
 
-Defaults are **TagMails recommended permissions**: Codex `write` with Codex's automatic reviewer deciding sandbox escalations, and Claude Code `auto`. They change only with `tagmails start` on the machine.
+Defaults are **Tagmails recommended permissions**: Codex `write` with Codex's automatic reviewer deciding sandbox escalations, and Claude Code `auto`. They change only with `tagmails start` on the machine.
 
 | Flag | Effect |
 | --- | --- |

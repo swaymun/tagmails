@@ -87,8 +87,8 @@ export async function prepareCodexProfile(workspace, access = false) {
 // Owner turns run in the owner's own Codex home, like Wonder's project
 // threads: their config, sign-in, plugins and connectors apply, and the thread
 // shows up in the Codex app so a codex://threads/<id> link can open it. The
-// TagMails permission profile arrives as -c overrides (nothing is written to
-// the owner's config) and desktop control stays off. TagMails keeps its own
+// Tagmails permission profile arrives as -c overrides (nothing is written to
+// the owner's config) and desktop control stays off. Tagmails keeps its own
 // thread-to-session map in a separate folder.
 // Owner write turns work like the Codex app: commands can read this Mac (the
 // toolchain, ~/.gitconfig), write the workspace and temp folders, and use the
@@ -103,7 +103,7 @@ function gitDir(workspace) {
 }
 
 
-// This computer's TagMails credentials: the device token and the private
+// This computer's Tagmails credentials: the device token and the private
 // sealing key that opens the mail the relay stores for it.
 export function deviceSecretFiles(env = process.env) {
   const files = [path.join(tagmailsConfigDir(env), 'device-token'), path.join(tagmailsConfigDir(env), 'device-key')];
@@ -117,11 +117,11 @@ function profileOverride(profile, access, workspace) {
   if (access === 'write') {
     const git = workspace ? gitDir(workspace) : null;
     const repository = git && git !== path.join(workspace, '.git') ? `,${JSON.stringify(git)}="write"` : '';
-    // An email may change TagMails' model defaults (`tagmails set`), which live in
+    // An email may change Tagmails' model defaults (`tagmails set`), which live in
     // their own folder; permissions and folders in config.json stay read-only.
     const settings = `,${JSON.stringify(path.join(tagmailsConfigDir(), 'email'))}="write"`;
     // The run reads the whole Mac and has network, but never this computer's
-    // TagMails credentials: with the token a prompt-injected run could claim
+    // Tagmails credentials: with the token a prompt-injected run could claim
     // the owner's future mail from anywhere, with the key read what's stored.
     const token = deviceSecretFiles().map((file) => `,${JSON.stringify(file)}="deny"`).join('');
     return `permissions.${profile}={extends=":read-only",filesystem={":root"="read",":tmpdir"="write",":slash_tmp"="write",":workspace_roots"={"."="write",".git"="write"}${repository}${settings}${token}},network={enabled=true}}`;

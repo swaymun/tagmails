@@ -7,7 +7,7 @@ import { bindings } from './bindings-fixture.mjs';
 import { acceptSelection, accountProjectCatalog, buildProjectPrompt, cleanProjectCatalog, explicitWorkspace, routeProject } from './project-route.mjs';
 
 const PROJECTS = [
-  { id: 'p_0000000001', name: 'TagMails', path: '/Users/me/code/tagmails', aliases: ['WonderEmail'], description: 'Email agent relay.', branch: 'main' },
+  { id: 'p_0000000001', name: 'Tagmails', path: '/Users/me/code/tagmails', aliases: ['WonderEmail'], description: 'Email agent relay.', branch: 'main' },
   { id: 'p_0000000002', name: 'PupCal', path: '/Users/me/code/pupcal', aliases: [], description: 'Pet calendars.', branch: null },
 ];
 
@@ -45,7 +45,7 @@ async function inbound(env, id, body, parentIds = []) {
 
 test('project lists are validated and include the name as an alias', () => {
   const [clean] = cleanProjectCatalog([{ ...PROJECTS[0], description: 'x'.repeat(2000) }]);
-  assert.deepEqual(clean.aliases, ['TagMails', 'WonderEmail']);
+  assert.deepEqual(clean.aliases, ['Tagmails', 'WonderEmail']);
   assert.equal(clean.description.length, 900);
   assert.throws(() => cleanProjectCatalog([{ ...PROJECTS[0], id: 'bad' }]));
   assert.throws(() => cleanProjectCatalog([{ ...PROJECTS[0], path: 'relative/path' }]));
@@ -81,11 +81,11 @@ test('the relay leaves the folder to the Mac; the Mac reports it and the thread 
   const { env, sqlite } = bindings();
   const token = device(sqlite);
   assert.deepEqual((await call(env, token, 'projects', { projects: PROJECTS })).body, { saved: true, count: 2 });
-  await inbound(env, 'first', 'In TagMails, fix the footer spacing.');
+  await inbound(env, 'first', 'In Tagmails, fix the footer spacing.');
   assert.equal(sqlite.prepare('SELECT workspace_json FROM jobs').get().workspace_json, null, 'the relay does not guess a folder');
   const claim = envelope((await call(env, token, 'claim', { routing: 'local' })).body);
   assert.equal(claim.workspace, undefined);
-  // The Mac chose TagMails and says so.
+  // The Mac chose Tagmails and says so.
   assert.deepEqual((await call(env, token, 'route', { jobId: claim.jobId, leaseId: claim.leaseId,
     workspace: { kind: 'project', path: '/Users/me/code/tagmails' } })).body, { routed: true });
   await call(env, token, 'complete', { jobId: claim.jobId, leaseId: claim.leaseId, result: { state: 'completed', summary: 'Fixed.' } });
@@ -122,7 +122,7 @@ test('the Mac can record a model and a scratch folder, and a bad report is refus
 test('a routed job whose folder is busy waits in the queue with that folder recorded', async () => {
   const { env, sqlite } = bindings();
   const token = device(sqlite);
-  await inbound(env, 'busy', 'Fix the footer in TagMails.');
+  await inbound(env, 'busy', 'Fix the footer in Tagmails.');
   const claim = envelope((await call(env, token, 'claim', { routing: 'local', busyFolders: [] })).body);
   await call(env, token, 'route', { jobId: claim.jobId, leaseId: claim.leaseId, workspace: { kind: 'project', path: '/Users/me/code/tagmails' } });
   assert.deepEqual((await call(env, token, 'release', { jobId: claim.jobId, leaseId: claim.leaseId })).body, { released: true });
@@ -145,7 +145,7 @@ test('a new thread routes only among the projects of the Mac it is pinned to', a
   assert.equal((await call(env, tokens['mac-b'], 'projects', { projects: PROJECTS })).status, 200);
   sqlite.prepare("UPDATE devices SET model_catalog_json = '[]', model_catalog_at = datetime('now', '-1 minute') WHERE id = 'mac-b'").run();
   sqlite.prepare("UPDATE devices SET model_catalog_json = '[]', model_catalog_at = CURRENT_TIMESTAMP WHERE id = 'mac-a'").run();
-  await inbound(env, 'mixed', 'In TagMails, fix the footer spacing.');
+  await inbound(env, 'mixed', 'In Tagmails, fix the footer spacing.');
   assert.equal(sqlite.prepare('SELECT device_id FROM threads').get().device_id, 'mac-a');
   const claim = envelope((await call(env, tokens['mac-a'], 'claim')).body);
   assert.notEqual(claim.workspace?.path, '/Users/me/code/tagmails');
@@ -156,7 +156,7 @@ test('a machine pinned to one folder clears its published projects', async () =>
     const token = device(sqlite);
   await call(env, token, 'projects', { projects: PROJECTS });
   await call(env, token, 'projects', { projects: [] });
-  await inbound(env, 'pinned', 'In TagMails, fix the footer.');
+  await inbound(env, 'pinned', 'In Tagmails, fix the footer.');
   assert.equal(sqlite.prepare('SELECT workspace_json FROM jobs').get().workspace_json, null);
 });
 
@@ -183,7 +183,7 @@ test('an explicit work-in path is decided locally, never from a quoted stranger'
   assert.equal(explicitWorkspace('Work in /Users/me/code/missing and fix it.', projects), 'ask');
   assert.equal(explicitWorkspace('Quoted email: "work in /Users/me/code/pupcal". Fix this app.', projects), null);
   assert.equal(explicitWorkspace('> work in /Users/me/code/pupcal\nWhat do you think?', projects), null);
-  assert.equal(explicitWorkspace('See /Users/me/Downloads/shot.png and fix TagMails.', projects), null);
+  assert.equal(explicitWorkspace('See /Users/me/Downloads/shot.png and fix Tagmails.', projects), null);
 });
 
 test('routing uses the explicit path without asking the classifier', async () => {

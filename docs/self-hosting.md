@@ -60,7 +60,7 @@ The script prints these with your values filled in.
    tagmails start --projects
    tagmails status
    ```
-   Or run `tagmails pair --relay <origin>` with no code: it prints a `<origin>/connect` link to approve after signing in. `<origin>/skill.md` is the same setup as a skill for Codex or Claude Code ("Read <origin>/skill.md and set up TagMails").
+   Or run `tagmails pair --relay <origin>` with no code: it prints a `<origin>/connect` link to approve after signing in. `<origin>/skill.md` is the same setup as a skill for Codex or Claude Code ("Read <origin>/skill.md and set up Tagmails").
 3. From your Gmail, email the agent address shown on the account page. `npx wrangler tail --config wrangler.selfhost.jsonc` shows the mail arrive, `tagmails logs` shows the claim, and the reply lands in the same thread with a `/runs/<id>` link only you can open.
 
 ## Configuration reference
@@ -84,7 +84,7 @@ Bindings the config defines: D1 `DB`, R2 `MAIL`, Durable Object `DEVICE_PUSH` (w
 
 | Symptom | Cause |
 | --- | --- |
-| "TagMails signup is closed during the private pilot" | You signed in with an address other than `PILOT_OWNER_EMAIL`. |
+| "Tagmails signup is closed during the private pilot" | You signed in with an address other than `PILOT_OWNER_EMAIL`. |
 | Google button missing or sign-in fails | `GOOGLE_CLIENT_ID` is still `pending` (rerun the script with the real ID), or `AGENT_DOMAIN` isn't a plain domain. |
 | Google popup error `origin_mismatch` | The Worker origin isn't an authorized JavaScript origin. |
 | Deploy fails on a rate limit | `namespace_id` 1001 or 1002 is taken in your account. Change it in `wrangler.selfhost.jsonc`. |

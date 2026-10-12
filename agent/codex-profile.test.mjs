@@ -72,7 +72,7 @@ test('owner write turns in a repository subfolder may write that repository\'s g
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
-test('owner write turns may change TagMails model defaults, never config.json, and only owner turns get that folder', () => {
+test('owner write turns may change Tagmails model defaults, never config.json, and only owner turns get that folder', () => {
   const settings = JSON.stringify(path.join(os.homedir(), '.config', 'tagmails', 'email'));
   const env = { ...process.env };
   delete process.env.TAGMAILS_CONFIG_DIR; delete process.env.XDG_CONFIG_HOME;
@@ -86,7 +86,7 @@ test('owner write turns may change TagMails model defaults, never config.json, a
   } finally { Object.assign(process.env, env); }
 });
 
-test('owner write turns read the whole Mac except the TagMails device token and sealing key', async (t) => {
+test('owner write turns read the whole Mac except the Tagmails device token and sealing key', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tagmails-token-deny-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const env = { ...process.env };

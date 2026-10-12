@@ -34,7 +34,7 @@ export async function probeCodexModels(workspace) {
       else target.resolve(message.result);
     } else if (message.id !== undefined) {
       child.stdin.write(`${JSON.stringify({ id: message.id, error: { code: -32601,
-        message: 'TagMails catalog probe does not grant runtime requests' } })}\n`);
+        message: 'Tagmails catalog probe does not grant runtime requests' } })}\n`);
     }
   });
   const request = (method, params) => new Promise((resolve, reject) => {
@@ -44,7 +44,7 @@ export async function probeCodexModels(workspace) {
   });
   const timer = setTimeout(() => { fail(new Error('Codex catalog probe timed out')); child.kill(); }, 10_000);
   try {
-    await request('initialize', { clientInfo: { name: 'tagmails', title: 'TagMails', version: '0.1.0' },
+    await request('initialize', { clientInfo: { name: 'tagmails', title: 'Tagmails', version: '0.1.0' },
       capabilities: { experimentalApi: true } });
     child.stdin.write(`${JSON.stringify({ method: 'initialized', params: {} })}\n`);
     restrictedConfiguration(await request('config/read', { cwd: workspace, includeLayers: true }));
@@ -65,7 +65,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     }
     process.stdout.write(`${JSON.stringify(await probeCodexModels(await fs.realpath(selected)))}\n`);
   } catch (error) {
-    process.stderr.write(`TagMails catalog probe: ${error.message}\n`);
+    process.stderr.write(`Tagmails catalog probe: ${error.message}\n`);
     process.exitCode = 1;
   }
 }

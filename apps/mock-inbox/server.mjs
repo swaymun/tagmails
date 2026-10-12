@@ -141,5 +141,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, '127.0.0.1', () => {
-  process.stdout.write(`TagMails internal Gmail lab: http://127.0.0.1:${port}\n`);
+  process.stdout.write(`Tagmails internal Gmail lab: http://127.0.0.1:${port}\n`);
 });

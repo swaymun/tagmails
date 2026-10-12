@@ -121,19 +121,19 @@ async function siteSessionAccount(env, token) {
     .bind(hash(token)).first();
 }
 
-// A site request proves who it is with a TagMails session or a Google ID token.
+// A site request proves who it is with a Tagmails session or a Google ID token.
 async function siteIdentity(env, credential, verifyIdentity) {
   const account = await siteSessionAccount(env, credential);
   if (account) return { sub: account.google_sub, email: account.owner_email };
   return verifyIdentity(credential, env.GOOGLE_CLIENT_ID);
 }
 
-// A verified Google identity becomes its TagMails account: the first sign-in
+// A verified Google identity becomes its Tagmails account: the first sign-in
 // creates it when the relay allows signup (or the identity is the pilot owner).
 export async function ownerAccount(env, identity) {
   if (env.PUBLIC_SIGNUP_ENABLED !== 'true' &&
       identity.email !== String(env.PILOT_OWNER_EMAIL ?? '').trim().toLowerCase()) {
-    return { error: 'This TagMails relay accepts sign-in only from its owner', status: 403 };
+    return { error: 'This Tagmails relay accepts sign-in only from its owner', status: 403 };
   }
   const existing = await env.DB.prepare('SELECT id, active FROM accounts WHERE google_sub = ?')
     .bind(identity.sub).first();

@@ -1,17 +1,17 @@
 const prompts = {
-  codex: `Help me set up TagMails for Codex when the beta installer is available.
+  codex: `Help me set up Tagmails for Codex when the beta installer is available.
 
 1. Explain the local permissions you need and ask me to choose one workspace.
 2. Have me sign in with Google in my browser and verify the Gmail address I will send from.
-3. Pair this Mac through the official TagMails setup flow. Keep my Codex sign-in and project files local.
+3. Pair this Mac through the official Tagmails setup flow. Keep my Codex sign-in and project files local.
 4. Run a synthetic status check and show me the result before trying live email.
 
 Do not send email, spend credits, or change project files until I approve the specific action.`,
-  claude: `Help me set up TagMails for Claude Code when the beta installer is available.
+  claude: `Help me set up Tagmails for Claude Code when the beta installer is available.
 
 1. Explain the local permissions you need and ask me to choose one workspace.
 2. Have me sign in with Google in my browser and verify the Gmail address I will send from.
-3. Pair this Mac through the official TagMails setup flow. Keep my Claude sign-in and project files local.
+3. Pair this Mac through the official Tagmails setup flow. Keep my Claude sign-in and project files local.
 4. Run a synthetic status check and show me the result before trying live email.
 
 Do not send email, spend credits, or change project files until I approve the specific action.`,

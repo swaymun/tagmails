@@ -11,7 +11,7 @@ const catalog = { models: [
   { id: 'gpt-6-luna', name: 'GPT-6 Luna', supportedReasoningEfforts: efforts, serviceTiers: [] },
 ], claudeModels: [] };
 const projects = [
-  { id: 'p_a100000001', name: 'TagMails', path: '/Users/me/tagmails', aliases: [], description: 'Email relay. '.repeat(40), branch: 'main' },
+  { id: 'p_a100000001', name: 'Tagmails', path: '/Users/me/tagmails', aliases: [], description: 'Email relay. '.repeat(40), branch: 'main' },
   { id: 'p_a100000002', name: 'PupCal', path: '/Users/me/pupcal', aliases: [], description: 'Pet calendars.', branch: null },
 ];
 const owner = (body, extra = {}) => ({ threadId: 'thread-1', model: { id: 'gpt-6-sol', effort: 'medium', source: 'default' },
@@ -31,10 +31,10 @@ const quiet = (work) => async (...args) => { const log = console.log; console.lo
 
 test('an owner email is routed to the model it asks for and the folder it means', quiet(async () => {
   const seen = [];
-  const out = await routeClaim({ claim: owner('Use Luna to fix the footer in TagMails.'), catalog, projects,
+  const out = await routeClaim({ claim: owner('Use Luna to fix the footer in Tagmails.'), catalog, projects,
     classifyWith: answering({ route: 'model1', requestedEffort: 'unrequested', effort: 'low', speed: 'none', folder: 'p_a100000001' }, seen) });
   assert.deepEqual(out.model, { id: 'gpt-6-luna', effort: 'low', source: 'classified' });
-  assert.deepEqual(out.workspace, { kind: 'project', id: 'p_a100000001', name: 'TagMails', path: '/Users/me/tagmails' });
+  assert.deepEqual(out.workspace, { kind: 'project', id: 'p_a100000001', name: 'Tagmails', path: '/Users/me/tagmails' });
   // The model and the folder are separate questions, so they classify at the same time.
   assert.deepEqual(seen.map((request) => Object.keys(request.questions)).sort(), [['folder'], ['route', 'requestedEffort', 'effort', 'speed']].sort());
   // Descriptions are cut to one line, so the folder prompt stays short.
@@ -58,10 +58,10 @@ test('an unclear folder asks once, and the reply is routed with the question it 
   assert.equal(ask.model, undefined);
   assert.match(await fs.readFile(path.join(dataDir, 'routing-pending.json'), 'utf8'), /thread-1/);
   const seen = [];
-  const reply = await routeClaim({ claim: owner('TagMails'), catalog, projects, dataDir,
+  const reply = await routeClaim({ claim: owner('Tagmails'), catalog, projects, dataDir,
     classifyWith: answering({ ...none, folder: 'p_a100000001' }, seen) });
   assert.equal(reply.workspace.path, '/Users/me/tagmails');
-  assert.match(seen.find((request) => request.questions.folder).state, /Work in \/Users\/me\/missing[\s\S]*The sender replied:\nTagMails/);
+  assert.match(seen.find((request) => request.questions.folder).state, /Work in \/Users\/me\/missing[\s\S]*The sender replied:\nTagmails/);
   assert.equal(JSON.parse(await fs.readFile(path.join(dataDir, 'routing-pending.json'), 'utf8'))['thread-1'], undefined, 'asked once');
 }));
 
@@ -70,7 +70,7 @@ test('a participant and a thread that has its folder are not re-routed; an expli
   assert.deepEqual(await routeClaim({ claim: owner('Use Luna', { request: { fromOwner: false, subject: 'x', body: 'Use Luna' } }), catalog, projects, classifyWith: never }), {});
   // `Model: Luna` settles the model only; which project is still the Mac's to choose.
   const explicit = [];
-  const picked = await routeClaim({ claim: owner('Model: Luna\nFix the footer in TagMails.', { model: { id: 'gpt-6-luna', effort: 'medium', source: 'explicit' } }), catalog, projects,
+  const picked = await routeClaim({ claim: owner('Model: Luna\nFix the footer in Tagmails.', { model: { id: 'gpt-6-luna', effort: 'medium', source: 'explicit' } }), catalog, projects,
     classifyWith: answering({ folder: 'p_a100000001' }, explicit) });
   assert.equal(picked.workspace.path, '/Users/me/tagmails');
   assert.deepEqual(explicit.map((request) => Object.keys(request.questions)), [['folder']], 'no model question is asked');
@@ -84,7 +84,7 @@ test('a participant and a thread that has its folder are not re-routed; an expli
 test('when no CLI can classify, the job runs with the relay defaults', quiet(async () => {
   const original = console.error; console.error = () => {};
   try {
-    const out = await routeClaim({ claim: owner('Use Luna on TagMails.'), catalog, projects,
+    const out = await routeClaim({ claim: owner('Use Luna on Tagmails.'), catalog, projects,
       classifyWith: async () => { throw new Error('routing unavailable'); } });
     assert.equal(out.workspace, undefined);
     assert.equal(out.model, undefined);
@@ -116,10 +116,10 @@ test('the CLI is asked for JSON only, falls back to the other CLI, and answers o
 
 test('after an answered request the current message is routed, with the earlier requests as folder context only', quiet(async () => {
   const seen = [];
-  const body = 'Earlier in this thread, owner@gmail.com wrote (the relay replied without running an agent):\nUse Gemini to fix the footer in TagMails.\n\nThe current message:\nModel: Luna\nUse Luna instead.';
+  const body = 'Earlier in this thread, owner@gmail.com wrote (the relay replied without running an agent):\nUse Gemini to fix the footer in Tagmails.\n\nThe current message:\nModel: Luna\nUse Luna instead.';
   const out = await routeClaim({ claim: owner(body, { model: { id: 'gpt-6-luna', effort: 'medium', source: 'explicit' }, request: { fromOwner: true, subject: 'Footer', body } }), catalog, projects,
     classifyWith: answering({ folder: 'p_a100000001' }, seen) });
   assert.equal(out.workspace.path, '/Users/me/tagmails');
   assert.equal(seen.length, 1, 'the Model: line of the current message settles the model');
-  assert.match(seen[0].state, /Use Luna instead[\s\S]*Use Gemini to fix the footer in TagMails/);
+  assert.match(seen[0].state, /Use Luna instead[\s\S]*Use Gemini to fix the footer in Tagmails/);
 }));

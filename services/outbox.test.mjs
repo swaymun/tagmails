@@ -314,7 +314,7 @@ test('the result email names the model recorded at receipt, including an explici
   assert.doesNotMatch(sent.html, /Done|Waiting for your reply/);
   for (const content of [sent.text, sent.html.slice(sent.html.indexOf('<footer'))]) {
     assert.ok(content.indexOf('Transcript') < content.indexOf('Claude Sonnet'));
-    assert.ok(content.indexOf('Medium') < content.indexOf('TagMails'));
+    assert.ok(content.indexOf('Medium') < content.indexOf('Tagmails'));
   }
   assert.doesNotMatch(sent.html, /<h2>What happened<\/h2>|<h2>Checks and limits<\/h2>|<ul>/);
   assert.match(sent.html, /class="mark"/);
@@ -823,7 +823,7 @@ test('small output files attach only to an owner-only reply, with exact saved by
   const { env, sqlite } = fixture;
   env.SITE_ORIGIN = 'https://tagmails.example';
   const fileId = '11111111-1111-4111-8111-111111111111';
-  const bytes = Buffer.from('TagMails pilot workspace\n');
+  const bytes = Buffer.from('Tagmails pilot workspace\n');
   await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
   sqlite.prepare(`INSERT INTO run_artifacts
     (id, account_id, job_id, lease_id, object_key, name, mime_type, byte_size)
@@ -870,12 +870,12 @@ test('archives, large, expired, and different-job files are never attached to an
     VALUES (?, 'account-1', ?, 'lease-1', ?, ?, 'text/plain', ?, ?)`)
     .run(id, job, `files/${id}`, name, size, expiry);
   await env.MAIL.put('results/1.json', JSON.stringify({ state: 'completed', summary: 'Files ready.', artifactIds: rows.map(([id]) => id),
-    instructionsNotice: 'Your TagMails instructions changed during this run. They now read: "Use my Drive."' }));
+    instructionsNotice: 'Your Tagmails instructions changed during this run. They now read: "Use my Drive."' }));
   let sent;
   assert.equal((await sendNextOutbox(env, { sendEmail: async (payload) => { sent = payload; return { data: { id: 'large-1' } }; },
     getSentEmail: async () => ({ data: { message_id: '<large-1@tagmails.test>' } }) })).state, 'sent');
   assert.equal(sent.attachments, undefined);
-  // TagMails links no hosted downloads; it names what didn't fit.
+  // Tagmails links no hosted downloads; it names what didn't fit.
   assert.match(sent.text, /Not sent: scripts\.zip, file\.txt\. Email fits 3\.5 MB of files/);
   // Both notices show in the HTML Gmail renders, even beside the transcript link that folds checks away.
   assert.match(sent.html, /Transcript/);

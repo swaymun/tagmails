@@ -1,5 +1,5 @@
 -- Owners can connect Google Drive (drive.file scope) so large run files go
--- straight from their Mac to their own Drive instead of through TagMails storage.
+-- straight from their Mac to their own Drive instead of through Tagmails storage.
 CREATE TABLE drive_connections (
   account_id TEXT PRIMARY KEY REFERENCES accounts(id),
   refresh_token TEXT NOT NULL,

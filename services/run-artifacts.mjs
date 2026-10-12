@@ -2,7 +2,7 @@ import { ATTACHABLE_BYTES } from './email-charges.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 
 export const ARTIFACT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-// TagMails only keeps files long enough to attach them; a run's files must fit
+// Tagmails only keeps files long enough to attach them; a run's files must fit
 // in one email. Bigger files belong in the owner's own storage.
 const MAX_FILE_BYTES = ATTACHABLE_BYTES;
 const MAX_RUN_BYTES = ATTACHABLE_BYTES;

@@ -7,7 +7,7 @@ A person still has to do three things: log Wrangler in to Cloudflare, create the
 ## Setup prompt
 
 ```text
-Set up a self-hosted TagMails relay from this repo by following docs/self-hosting.md.
+Set up a self-hosted Tagmails relay from this repo by following docs/self-hosting.md.
 
 1. Run `npm ci && npm test` and stop if tests fail. Check `npx wrangler whoami`; if it is not
    logged in, ask me to run `npx wrangler login` and wait.

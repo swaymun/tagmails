@@ -85,7 +85,7 @@ fs.writeFileSync(path.join(destination, 'SHA256SUMS'), `${sumsText}\n`);
 
 const asset = (target) => `    url "${releaseBase}/tagmails-${version}-${target}.tar.gz"\n    sha256 "${sums[target]}"`;
 const formula = `class Tagmails < Formula
-  desc "Email your coding agent: runs Codex or Claude Code for mail sent to your TagMails address"
+  desc "Email your coding agent: runs Codex or Claude Code for mail sent to your Tagmails address"
   homepage "https://tagmails.com"
   version "${version}"
   license "MIT"

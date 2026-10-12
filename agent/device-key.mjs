@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // This computer's sealing key. The private key never leaves this file (0600 in
-// the TagMails config folder); the relay only knows the public key and stores
+// the Tagmails config folder); the relay only knows the public key and stores
 // mail, results and held replies sealed to it.
 //
 // CLI (run by the tagmails daemon):

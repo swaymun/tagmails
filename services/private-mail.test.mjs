@@ -241,7 +241,7 @@ test('a multi-person Cloudflare thread runs only for the owner and the people th
 
   // Strangers, before any thread exists.
   await ignored({ from: 'mallory@evil.example' });
-  await ignored({ from: 'second@gmail.com' }); // another TagMails account's owner
+  await ignored({ from: 'second@gmail.com' }); // another Tagmails account's owner
   await ignored({ from: 'owner+agent@gmail.com' }); // a Gmail plus alias is not the owner address
   await ignored({ from: 'owner@gmail.com', sign: false }, 'sender authentication failed');
   await ignored({ from: 'owner@gmail.com', domain: 'evil.example' }, 'sender authentication failed');

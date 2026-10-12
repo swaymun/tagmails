@@ -1,4 +1,4 @@
-# TagMails
+# Tagmails
 
 Email-to-agent relay: a Cloudflare Worker (`services/`, `apps/mock-inbox/`, D1 + R2) hands mail to a Rust daemon on the owner's Mac (`crates/tagmails-daemon/`) that runs Codex or Claude Code through the Node adapters in `agent/`. Site lives in the private `site` submodule. Pilot is owner-only on `tagmails-relay-dev`.
 
@@ -31,7 +31,7 @@ Migrations go in `services/migrations/NNNN_name.sql`; the test fixture applies t
 - **Changes in `crates/`:** rebuild with `cargo build --release -p tagmails-daemon`, then run it directly once (`target/release/tagmails run --once`) or cut a release.
 - **Release:** bump the version in both `agent/package.json` and `crates/tagmails-daemon/Cargo.toml`, run `node scripts/package-agent.mjs` (cross-builds with cargo-zigbuild; `brew install zig`; it also refreshes `site/dist/install.sh`, which the setup prompt runs, so commit and deploy the Site too), upload to the `swaymun/homebrew-tagmails` release, update `Formula/tagmails.rb`, then `brew upgrade tagmails && tagmails status`. A relay change that needs a newer daemon must degrade gracefully for older ones (e.g. extra response fields are ignored).
 - Jobs run in parallel (default 3, `TAGMAILS_MAX_JOBS`), one per project folder: claims send `busyFolders` and the relay skips jobs routed there. Runners share `sessions.json` files, so write them only through `agent/session-store.mjs`.
-- Owner `write` turns: Codex reads the whole Mac, writes the workspace, temp, the repo's git folder and TagMails' email-settings folder (model defaults only), and has network (so `git push`/`gh` work); anything else goes to Codex's auto-reviewer instead of failing as "Needs approval". Claude `auto` drops `--restricted`, runs like Claude Code, and pre-allows the owner's connectors, `tagmails status` and `tagmails set`. Participants keep the closed profiles. Codex's own state (`~/.codex`) stays read-only, so an app that runs a nested `codex` needs a workspace-local `CODEX_HOME`.
+- Owner `write` turns: Codex reads the whole Mac, writes the workspace, temp, the repo's git folder and Tagmails' email-settings folder (model defaults only), and has network (so `git push`/`gh` work); anything else goes to Codex's auto-reviewer instead of failing as "Needs approval". Claude `auto` drops `--restricted`, runs like Claude Code, and pre-allows the owner's connectors, `tagmails status` and `tagmails set`. Participants keep the closed profiles. Codex's own state (`~/.codex`) stays read-only, so an app that runs a nested `codex` needs a workspace-local `CODEX_HOME`.
 - A new project folder is routable only after a Codex project or Claude session exists there (`agent/project-inventory.mjs`); restart the service to republish sooner than the 15-minute refresh.
 - Logs: `tagmails logs`; each job logs a `running <model> in <folder>` line and its result state. Reinstall the service: `tagmails uninstall && tagmails start ...`.
 

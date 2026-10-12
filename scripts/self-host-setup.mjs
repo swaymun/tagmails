@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Set up or update a self-hosted TagMails relay on Cloudflare. Safe to rerun:
+// Set up or update a self-hosted Tagmails relay on Cloudflare. Safe to rerun:
 // it creates only what is missing, keeps saved values, and redeploys.
 //
 //   node scripts/self-host-setup.mjs
