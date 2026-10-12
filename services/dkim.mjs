@@ -157,3 +157,18 @@ export async function verifyDkim(raw, fromAddress, { resolveTxt = (name) => dohT
 }
 
 export const _test = { canonicalBody, canonicalHeader, splitMessage, encoder };
+
+/**
+ * The relay's whole sender check for raw inbound mail: an aligned signature
+ * from the From domain that covers MUST_SIGN, with the agent in a signed To or
+ * Cc. Otherwise any mail the owner sent elsewhere could be re-sent to the
+ * agent and pass, so Bcc to the agent is not supported.
+ * Returns { pass: true } or { pass: false, reason }.
+ */
+export async function authenticateSender(raw, { from, to = [], cc = [] }, agent, options = {}) {
+  const dkim = await verifyDkim(raw, from, options);
+  if (!dkim.pass) return { pass: false, reason: 'sender authentication failed' };
+  const signedTo = dkim.signedHeaders.includes('to') && to.includes(agent);
+  const signedCc = dkim.signedHeaders.includes('cc') && cc.includes(agent);
+  return signedTo || signedCc ? { pass: true } : { pass: false, reason: 'agent not in signed To or Cc' };
+}

@@ -4,31 +4,12 @@ import test from 'node:test';
 import { bindings } from './bindings-fixture.mjs';
 import { encryptedBucket, openText, protectedEnv, sealText } from './storage-crypto.mjs';
 import { _test, verifyDkim } from './dkim.mjs';
+import { keyRecord, signed } from './dkim-fixture.mjs';
 import { completeOneModelClarification, handleEmail } from './relay-worker.mjs';
 import { sendWithCloudflare } from './cloudflare-mail.mjs';
 import { sendNextOutbox } from './outbox.mjs';
 
 const KEY = randomBytes(32).toString('base64');
-
-// Signs a message the way a sending server would, with relaxed/relaxed rsa-sha256.
-function signed(raw, { domain = 'gmail.com', selector = 's1', privateKey, names = ['from', 'to', 'subject', 'message-id', 'content-type'], length }) {
-  const { head, body } = _test.splitMessage(raw);
-  const bh = createHash('sha256').update(_test.canonicalBody(body, 'relaxed', length)).digest('base64');
-  const headerLines = head.split('\r\n').filter(Boolean);
-  const pick = (name) => headerLines.findLast((line) => line.toLowerCase().startsWith(`${name}:`));
-  const relaxed = (line) => { const at = line.indexOf(':'); return `${line.slice(0, at).trim().toLowerCase()}:${line.slice(at + 1).replace(/\s+/g, ' ').trim()}`; };
-  const sigValue = ` v=1; a=rsa-sha256; c=relaxed/relaxed; d=${domain}; s=${selector}; h=${names.join(':')};${length == null ? '' : ` l=${length};`} bh=${bh}; b=`;
-  // A listed header the message lacks signs as absent (how Gmail oversigns Cc).
-  const data = names.filter(pick).map((name) => `${relaxed(pick(name))}\r\n`).join('') + relaxed(`DKIM-Signature:${sigValue}`);
-  const b = createSign('RSA-SHA256').update(data, 'latin1').sign(privateKey, 'base64');
-  return `DKIM-Signature:${sigValue}${b}\r\n${raw}`;
-}
-
-function keyRecord() {
-  const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
-  const p = publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
-  return { privateKey, resolveTxt: async () => [`v=DKIM1; k=rsa; p=${p}`] };
-}
 
 const MESSAGE = (from, to, body = 'Please fix the footer.') => [
   `From: Owner <${from}>`, `To: ${to}`, 'Subject: Footer', `Message-ID: <m-${randomBytes(4).toString('hex')}@gmail.com>`,

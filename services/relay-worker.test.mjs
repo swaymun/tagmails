@@ -4,6 +4,7 @@ import test from 'node:test';
 import { completeOneModelClarification, handleInbound, parentThread } from './relay-worker.mjs';
 import { bindings } from './bindings-fixture.mjs';
 import { sendNextOutbox } from './outbox.mjs';
+import { keyRecord, signed } from './dkim-fixture.mjs';
 
 function mail(providerEmailId, from, overrides = {}) {
   return {
@@ -237,11 +238,12 @@ test('a signed Resend delivery selects the matching account address', async () =
   const messageId = '<second-turn@gmail.com>';
   const data = { email_id: id, message_id: messageId, from: 'second@gmail.com',
     to: ['u-second@tagmails.test'], cc: [], bcc: [] };
-  const rawMime = [
+  const keys = keyRecord();
+  const rawMime = signed([
     'From: second@gmail.com', 'To: u-second@tagmails.test',
     'Subject: Check this', `Message-ID: ${messageId}`,
     'Content-Type: text/plain; charset=utf-8', '', 'Review this.',
-  ].join('\r\n');
+  ].join('\r\n'), { privateKey: keys.privateKey });
   const webhook = (recipients) => {
     const payload = JSON.stringify({ type: 'email.received', data: { ...data, to: recipients } });
     const eventId = 'msg_account_routing_test';
@@ -254,7 +256,7 @@ test('a signed Resend delivery selects the matching account address', async () =
   const provider = {
     getReceivedEmail: async () => ({ ...data, id, authentication: { dmarc: 'pass' },
       raw: { download_url: 'https://inbound.resend.com/raw/account-2' } }),
-    fetchRaw: async () => new Response(rawMime),
+    fetchRaw: async () => new Response(rawMime), resolveTxt: keys.resolveTxt,
   };
   // Received mail over Resend is off unless the relay opts in; Cloudflare Email Routing checks senders more strictly.
   delete env.RESEND_INBOUND_ENABLED;

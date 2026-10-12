@@ -1,6 +1,7 @@
 import { addressParser } from 'postal-mime';
 import { Resend } from 'resend';
 import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.mjs';
+import { authenticateSender } from './dkim.mjs';
 
 const MESSAGE_ID = /^<[^<>\s]+@[^<>\s]+>$/;
 const EMAIL_ID = /^[0-9a-f-]{36}$/i;
@@ -44,7 +45,7 @@ async function boundedRaw(response) {
   return Buffer.concat(chunks);
 }
 
-export async function inspectResendInbound({ rawPayload, headers, webhookSecret, apiKey, agentAddress, resolveAgentAddress, getReceivedEmail, fetchRaw = fetch }) {
+export async function inspectResendInbound({ rawPayload, headers, webhookSecret, apiKey, agentAddress, resolveAgentAddress, getReceivedEmail, fetchRaw = fetch, resolveTxt }) {
   if (!webhookSecret || !apiKey || typeof getReceivedEmail !== 'function') throw new Error('Resend inbound verification is not configured');
   const verifier = new Resend(apiKey);
   const event = verifier.webhooks.verify({
@@ -121,6 +122,10 @@ export async function inspectResendInbound({ rawPayload, headers, webhookSecret,
   if (parsed.messageId !== metadata.message_id || parsed.from !== mailbox(metadata.from)) {
     throw new Error('Raw email does not match the verified Resend metadata');
   }
+  // Resend's verdict does not check DKIM alignment or that the sender addressed
+  // the agent, so a self-hosted relay applies the same check as Cloudflare mail.
+  const sender = await authenticateSender(rawMime, parsed, agent, resolveTxt ? { resolveTxt } : {});
+  if (!sender.pass) return { ignored: true, reason: sender.reason };
   return {
     agentAddress: agent,
     providerEmailId: metadata.email_id,

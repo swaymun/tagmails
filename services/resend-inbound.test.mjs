@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import test from 'node:test';
 import { inspectResendInbound } from './resend-inbound.mjs';
+import { keyRecord, signed as dkimSigned } from './dkim-fixture.mjs';
+
+const keys = keyRecord();
 
 const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const messageId = '<owner-message@example.test>';
@@ -17,14 +20,15 @@ function signed(payload) {
   return { rawPayload, headers: { 'svix-id': eventId, 'svix-timestamp': timestamp, 'svix-signature': `v1,${signature}` } };
 }
 
-function fixture({ hiddenAgent = false } = {}) {
+function fixture({ hiddenAgent = false, signingDomain = 'gmail.com' } = {}) {
   const recipient = hiddenAgent ? 'teammate@gmail.com' : agent;
-  const raw = [
+  const raw = dkimSigned([
     'From: Owner <owner@gmail.com>', `To: ${recipient}`,
     'Cc: teammate@gmail.com', 'Bcc: hidden@gmail.com',
     'Subject: Shared review', `Message-ID: ${messageId}`,
     'Content-Type: text/plain; charset=utf-8', '', 'Please review the launch copy.',
-  ].join('\r\n');
+  ].join('\r\n'), { privateKey: keys.privateKey, domain: signingDomain,
+    names: ['from', 'to', 'cc', 'subject', 'message-id', 'content-type'] });
   const metadata = {
     email_id: id, message_id: messageId, from: 'Owner <owner@gmail.com>',
     to: [recipient], cc: ['teammate@gmail.com'], bcc: hiddenAgent ? [agent] : [],
@@ -44,7 +48,7 @@ function options(item) {
     rawPayload: item.rawPayload, headers: item.headers, webhookSecret: secret,
     apiKey: 're_synthetic_test_key', agentAddress: agent,
     getReceivedEmail: async () => item.email,
-    fetchRaw: async () => new Response(item.raw, { status: 200 }),
+    fetchRaw: async () => new Response(item.raw, { status: 200 }), resolveTxt: keys.resolveTxt,
   };
 }
 
@@ -131,11 +135,9 @@ test('a signed delivery event identifies one recipient without treating it as a 
     rawPayload: event.rawPayload + ' ' }));
 });
 
-test('verified delivery accepts an agent who was Bcc on its own provider copy', async () => {
+test('an agent only in Bcc is ignored: owner mail sent to someone else could be re-sent to it', async () => {
   const item = fixture({ hiddenAgent: true });
-  const message = await inspectResendInbound(options(item));
-  assert.equal(message.messageId, messageId);
-  assert.deepEqual(message.bcc, []);
+  assert.deepEqual(await inspectResendInbound(options(item)), { ignored: true, reason: 'agent not in signed To or Cc' });
 });
 
 test('a p=none sender needs aligned DKIM when Resend reports gray DMARC', async () => {
@@ -143,6 +145,10 @@ test('a p=none sender needs aligned DKIM when Resend reports gray DMARC', async 
   const gray = { ...item.email, authentication: { dmarc: 'gray', spf: 'pass', dkim: 'pass' } };
   assert.equal((await inspectResendInbound({ ...options(item), getReceivedEmail: async () => gray })).from,
     'owner@gmail.com');
+  // Resend says "dkim: pass" for any valid signature; one from the attacker's own domain is not the owner's.
+  const unaligned = fixture({ signingDomain: 'evil.example' });
+  assert.deepEqual(await inspectResendInbound({ ...options(unaligned), getReceivedEmail: async () => ({ ...unaligned.email,
+    authentication: { dmarc: 'gray', spf: 'pass', dkim: 'pass' } }) }), { ignored: true, reason: 'sender authentication failed' });
   await assert.rejects(inspectResendInbound({ ...options(item), getReceivedEmail: async () => ({
     ...gray, authentication: { dmarc: 'gray', spf: 'pass', dkim: 'gray' },
   }) }), /DMARC or aligned DKIM/);

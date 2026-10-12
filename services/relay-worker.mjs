@@ -167,7 +167,7 @@ async function recordReaction(env, account, message) {
   return Response.json({ accepted: true, reaction: true, duplicate: false });
 }
 
-export async function handleInbound(request, env, { inspect = inspectResendInbound, getReceivedEmail = (id) => receivedEmail(env, id), fetchRaw = fetch, fetchModel = fetch } = {}) {
+export async function handleInbound(request, env, { inspect = inspectResendInbound, getReceivedEmail = (id) => receivedEmail(env, id), fetchRaw = fetch, fetchModel = fetch, resolveTxt } = {}) {
   if (request.method !== 'POST' || new URL(request.url).pathname !== '/webhooks/resend') return new Response('Not found', { status: 404 });
   if (!env.DB || !env.MAIL || !env.RESEND_WEBHOOK_SECRET || !env.RESEND_API_KEY) {
     throw new Error('Resend relay bindings and secrets are incomplete');
@@ -183,7 +183,7 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
     rawPayload, headers: request.headers, webhookSecret: env.RESEND_WEBHOOK_SECRET,
     apiKey: env.RESEND_API_KEY,
     resolveAgentAddress: (candidates) => resolveAgentAddress(env.DB, candidates),
-    getReceivedEmail, fetchRaw,
+    getReceivedEmail, fetchRaw, resolveTxt,
   });
   if (message.ignored) return Response.json({ accepted: false });
   // Mail arrives through Cloudflare Email Routing, which checks the sender's

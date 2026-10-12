@@ -2,7 +2,7 @@
 // handler) and Email Sending (the EMAIL binding). No third-party dashboard
 // keeps message bodies; sender identity comes from our own DKIM check.
 import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.mjs';
-import { verifyDkim } from './dkim.mjs';
+import { authenticateSender } from './dkim.mjs';
 
 export const CLOUDFLARE_MAX_INBOUND_BYTES = 25 * 1024 * 1024;
 
@@ -48,15 +48,9 @@ export async function inspectCloudflareInbound(message, { resolveAgentAddress, r
       includeAttachmentData: false,
     });
   } catch (error) { return { ignored: true, reason: error.message }; }
-  // Only a valid signature from the sender's own domain proves who sent it.
-  const dkim = await verifyDkim(raw, parsed.from, resolveTxt ? { resolveTxt } : {});
-  if (!dkim.pass) return { ignored: true, reason: 'sender authentication failed' };
-  // The sender must have addressed the agent in a signed To or Cc. Otherwise
-  // any mail the owner sent elsewhere could be re-sent here and pass DKIM.
-  // Bcc to the agent is therefore not supported on this path.
-  const signedTo = dkim.signedHeaders.includes('to') && (parsed.to ?? []).includes(agent);
-  const signedCc = dkim.signedHeaders.includes('cc') && (parsed.cc ?? []).includes(agent);
-  if (!signedTo && !signedCc) return { ignored: true, reason: 'agent not in signed To or Cc' };
+  // Only a valid signature from the sender's own domain, naming the agent, proves who sent it.
+  const sender = await authenticateSender(raw, parsed, agent, resolveTxt ? { resolveTxt } : {});
+  if (!sender.pass) return { ignored: true, reason: sender.reason };
   return {
     agentAddress: agent,
     providerEmailId: `cf-${(await digest(raw)).slice(0, 32)}`,
