@@ -9,8 +9,9 @@ import { setupSkill } from './setup-skill.mjs';
 // with POST /api/device/link and prints <site>/connect plus a short code. The
 // owner opens the page, types the code and signs in with Google; the relay
 // then adds the computer to that account. The computer polls GET
-// /api/device/link with its token until then. The code is typed, never put in
-// the link, so a stranger can't get an account approved by sending a link.
+// /api/device/link with its token until then. The link carries the code, so
+// one click and a Google sign-in approve it; the page names the computer and
+// shows the code first, so a link someone else sent is easy to spot.
 
 const DEVICE_TOKEN = /^tm_dev_[A-Za-z0-9_-]{43}$/;
 const CODE_LETTERS = 'BCDFGHJKLMNPQRSTVWXZ';
@@ -41,7 +42,8 @@ function configuredOrigin(value) {
 
 // The approval page lives on the Site's domain when there is one
 // (tagmails.com/connect routes to this Worker), else on the relay itself.
-const connectUrl = (request, env) => `${configuredOrigin(env.SITE_ORIGIN) ?? new URL(request.url).origin}/connect`;
+const connectUrl = (request, env, code) =>
+  `${configuredOrigin(env.SITE_ORIGIN) ?? new URL(request.url).origin}/connect?code=${displayCode(code)}`;
 
 async function startLink(request, env) {
   if (await rateLimited(env, 'AUTH_RATE_LIMIT', request, 'auth')) return tooManyRequests();
@@ -57,7 +59,7 @@ async function startLink(request, env) {
       VALUES (?, ?, ?, ?, datetime('now', '+${LINK_MINUTES} minutes'))`)
       .bind(hash(body.token), code, body.name.trim(), body.publicKey ?? null).run();
   } catch { return json({ error: 'This device token is already waiting for approval' }, 409); }
-  return json({ code: displayCode(code), url: connectUrl(request, env), expiresInSeconds: LINK_MINUTES * 60, interval: 3 }, 201);
+  return json({ code: displayCode(code), url: connectUrl(request, env, code), expiresInSeconds: LINK_MINUTES * 60, interval: 3 }, 201);
 }
 
 // Polled by the computer with its own token; it learns nothing else.
@@ -69,7 +71,7 @@ async function linkStatus(request, env) {
   if (!row) return json({ state: 'unknown' }, 404);
   if (row.approved_at) return json({ state: 'approved' });
   if (!row.live) return json({ state: 'expired' }, 410);
-  return json({ state: 'pending', code: displayCode(row.code), url: connectUrl(request, env) });
+  return json({ state: 'pending', code: displayCode(row.code), url: connectUrl(request, env, row.code) });
 }
 
 async function approve(request, env, verifyIdentity, sendEmail) {
@@ -92,7 +94,19 @@ async function approve(request, env, verifyIdentity, sendEmail) {
   return json({ name: link.name, agentEmail: owner.account.agent_email });
 }
 
-function connectPage(env) {
+// The computer a code from the link belongs to, while it waits for approval.
+async function pendingLink(env, value) {
+  const code = normalizeCode(value);
+  if (!CODE.test(code)) return null;
+  return env.DB.prepare(`SELECT code, name FROM device_links
+    WHERE code = ? AND approved_at IS NULL AND expires_at > CURRENT_TIMESTAMP`).bind(code).first();
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+}
+
+function connectPage(env, link, askedFor) {
   const nonce = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString('base64');
   const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -127,11 +141,15 @@ window.addEventListener('load', () => {
   google.accounts.id.renderButton($('googleButton'), { theme: 'outline', size: 'large', text: 'continue_with' });
 });
 </script></head><body><main>
-<h1>Connect a computer to TagMails</h1>
+${link ? `<h1>Connect “${escapeHtml(link.name)}” to TagMails</h1>
 <div id="form">
+<p>Check that <code>tagmails pair</code> on that computer shows <strong>${displayCode(link.code)}</strong>, then continue with the Google account whose emails it should run.</p>
+<input id="code" type="hidden" value="${displayCode(link.code)}">` : `<h1>Connect a computer to TagMails</h1>
+<div id="form">
+${askedFor ? '<p>That link has expired or was already used. Run <code>tagmails pair</code> again for a new one, or enter its code here.</p>' : ''}
 <p>Enter the code that <code>tagmails pair</code> shows on the computer, then continue with the Google account whose emails it should run.</p>
-<label for="code">Code</label><input id="code" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="9" placeholder="BCDF-GHJK">
-<p class="muted">Only enter a code from a computer you are setting up yourself: whoever controls it will run your TagMails emails.</p>
+<label for="code">Code</label><input id="code" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="9" placeholder="BCDF-GHJK">`}
+<p class="muted">Only connect a computer you are setting up yourself: whoever controls it will run your TagMails emails.</p>
 <div id="googleButton"></div></div>
 <p id="status" role="status"></p>
 </main></body></html>`;
@@ -161,7 +179,10 @@ export async function handleDeviceLink(request, env, { verifyIdentity = verifyGo
     return new Response('Not found', { status: 404 });
   }
   if (!googleSignInConfigured(env)) return new Response('Google sign-in is not configured on this relay.', { status: 503 });
-  if (request.method === 'GET') return connectPage(env);
+  if (request.method === 'GET') {
+    const asked = new URL(request.url).searchParams.get('code');
+    return connectPage(env, asked ? await pendingLink(env, asked) : null, Boolean(asked));
+  }
   if (request.method === 'POST') return approve(request, env, verifyIdentity, sendEmail);
   return new Response('Not found', { status: 404 });
 }

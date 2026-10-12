@@ -722,8 +722,8 @@ fn link_relay(base: &str, path: &Path, name: &str, public_key: Option<&str>, wai
     let (Some(code), Some(url)) = (pending["code"].as_str(), pending["url"].as_str()) else {
         return Err("The relay returned an invalid pairing link".into());
     };
-    println!("To connect this computer, open {url} and enter the code {code}");
-    println!("Then continue with the Google account whose emails it should run. The code works for 10 minutes.");
+    println!("To connect this computer, open {url}");
+    println!("Check that the page shows {code}, then continue with the Google account whose emails it should run. The link works for 10 minutes.");
     if !wait {
         println!("After approving, run `tagmails pair` again to finish.");
         return Ok(false);
@@ -1705,7 +1705,7 @@ mod tests {
     fn link_pairing_prints_the_code_then_resumes_and_finishes_after_approval() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
-        let pending = r#"{"state":"pending","code":"BCDF-GHJK","url":"https://tagmails.com/connect"}"#;
+        let pending = r#"{"state":"pending","code":"BCDF-GHJK","url":"https://tagmails.com/connect?code=BCDF-GHJK"}"#;
         // `pair --no-wait`, then `pair`: the rerun finds the token waiting and polls until approved.
         let script: Vec<(&str, &str, u16, String)> = vec![
             ("POST", "/api/device/link", 201, r#"{"code":"BCDF-GHJK"}"#.into()),
@@ -2009,8 +2009,8 @@ const HELP: &str = "TagMails: email your coding agent.
 
 Usage:
   tagmails pair [--no-wait] [--name NAME] [--relay URL]
-                                                   Connect this machine: prints a link and a
-                                                   code to approve after Google sign-in
+                                                   Connect this machine: prints a link to
+                                                   approve with Google
   tagmails pair <code> [--name NAME] [--relay URL]   Or connect with a code from the site
   tagmails start [--access read|write|full] [--workspace PATH | --projects]
                  [--claude-permission manual|accept-edits|auto|bypass]

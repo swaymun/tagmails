@@ -26,22 +26,24 @@ const approve = (env, code, { origin = ORIGIN, credential = 'google-ok', identit
 const deviceStatus = (env, token = TOKEN) => relay.fetch(new Request(`${ORIGIN}/api/device/status`,
   { headers: { Authorization: `Bearer ${token}` } }), env);
 
-test('a computer pairs once its owner types the code after Google sign-in', async () => {
+test('a computer pairs once its owner opens the link, checks the code and signs in with Google', async () => {
   const { env, sqlite } = setup();
   env.SITE_ORIGIN = 'https://tagmails.com';
   const started = await start(env);
   assert.equal(started.status, 201);
   const { code, url } = await started.json();
   assert.match(code, /^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$/);
-  assert.equal(url, 'https://tagmails.com/connect', 'the approval page is on the Site domain');
+  assert.equal(url, `https://tagmails.com/connect?code=${code}`, 'the link carries the code, on the Site domain');
   assert.equal((await start(env)).status, 409, 'one link per device token');
   assert.deepEqual(await (await poll(env)).json(), { state: 'pending', code, url });
   assert.equal((await deviceStatus(env)).status, 401, 'not paired before approval');
 
-  const page = await link(env, '/connect');
-  assert.match(await page.text(), /Enter the code that <code>tagmails pair<\/code> shows/);
+  const page = await link(env, `/connect?code=${code}`);
+  const html = await page.text();
+  assert.match(html, /Connect “Studio Mac” to TagMails/, 'the page names the computer before approval');
+  assert.ok(html.includes(`<strong>${code}</strong>`), 'and shows the code to check against the terminal');
   assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
-  assert.doesNotMatch(url, /[?#]/, 'the code is never part of the link');
+  assert.match(await (await link(env, '/connect?code=BBBB-BBBB')).text(), /That link has expired or was already used/);
 
   assert.equal((await approve(env, code, { origin: 'https://evil.test' })).status, 403);
   assert.equal((await approve(env, code, { credential: 'forged' })).status, 401);
@@ -80,7 +82,7 @@ test('skill.md tells an agent how to pair, adding --relay only for a self-hosted
   env.SITE_ORIGIN = 'https://tagmails.com';
   const hosted = await (await relay.fetch(new Request(`${ORIGIN}/skill.md`), env)).text();
   assert.match(hosted, /^---\nname: tagmails\n/);
-  assert.match(hosted, /run `tagmails pair --no-wait`\. It prints a link \(https:\/\/tagmails\.com\/connect\)/);
+  assert.match(hosted, /run `tagmails pair --no-wait`\. It prints a link \(https:\/\/tagmails\.com\/connect\?code=…\)/);
   env.PUBLIC_ORIGIN = 'https://tagmails-selfhost.example.workers.dev';
   delete env.SITE_ORIGIN;
   const selfHosted = await (await relay.fetch(new Request(`${ORIGIN}/skill.md`), env)).text();
