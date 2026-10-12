@@ -2,7 +2,7 @@ import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { accountFor, sameOrigin, siteCors, siteOriginFor, siteOwnerFor, verifyGoogleCredential } from './account-auth.mjs';
 import { billingLive, reservePendingTestEmails, testBillingEnabled, testWalletSnapshot } from './email-charges.mjs';
 
-const TOP_UP_CENTS = 1000;
+export const TOP_UP_CENTS = 1000;
 const MAX_WEBHOOK_BYTES = 128_000;
 const UUID = /^[0-9a-f-]{36}$/i;
 
@@ -57,6 +57,16 @@ async function createCheckout(request, env, account, stripeFetch, site = false) 
   if (site ? !siteOriginFor(request, env) : !sameOrigin(request)) return json({ error: 'Invalid origin' }, 403, headers);
   const origin = site ? siteOriginFor(request, env) : originFor(request, env);
   if (!origin || !testBillingEnabled(env)) return json({ error: 'Test checkout is not configured' }, 503, headers);
+  const checkout = await startCheckout(env, account, {
+    successUrl: `${origin}/${site ? '?topup=returned#billing' : 'account?topup=returned'}`,
+    cancelUrl: `${origin}/${site ? '?topup=canceled#billing' : 'account?topup=canceled'}`,
+  }, stripeFetch);
+  return checkout.error ? json({ error: checkout.error }, 502, headers) : json(checkout, 200, headers);
+}
+
+// Creates a $10 Stripe Checkout Session for the account and returns its URL.
+// Money moves only when the owner pays on Stripe and the webhook arrives.
+export async function startCheckout(env, account, { successUrl, cancelUrl }, stripeFetch = fetch) {
   const id = randomUUID();
   await env.DB.prepare('INSERT INTO billing_checkouts (id, account_id, amount_cents) VALUES (?, ?, ?)')
     .bind(id, account.id, TOP_UP_CENTS).run();
@@ -64,8 +74,8 @@ async function createCheckout(request, env, account, stripeFetch, site = false) 
     mode: 'payment',
     client_reference_id: id,
     customer_email: account.owner_email,
-    success_url: `${origin}/${site ? '?topup=returned#billing' : 'account?topup=returned'}`,
-    cancel_url: `${origin}/${site ? '?topup=canceled#billing' : 'account?topup=canceled'}`,
+    success_url: successUrl,
+    cancel_url: cancelUrl,
     'payment_method_types[0]': 'card',
     'line_items[0][price_data][currency]': 'usd',
     'line_items[0][price_data][unit_amount]': String(TOP_UP_CENTS),
@@ -81,16 +91,16 @@ async function createCheckout(request, env, account, stripeFetch, site = false) 
     },
     body: form.toString(),
   });
-  if (!response.ok) return json({ error: 'Stripe test checkout could not be created' }, 502, headers);
+  if (!response.ok) return { error: 'Stripe test checkout could not be created' };
   const session = await response.json();
   let url;
   try { url = new URL(session.url); } catch { /* Invalid Stripe response. */ }
   if (!session.id?.startsWith(sessionPrefix(env)) || url?.protocol !== 'https:' || url.hostname !== 'checkout.stripe.com') {
-    return json({ error: 'Stripe returned an invalid checkout' }, 502, headers);
+    return { error: 'Stripe returned an invalid checkout' };
   }
   await env.DB.prepare('UPDATE billing_checkouts SET stripe_session_id = ? WHERE id = ? AND stripe_session_id IS NULL')
     .bind(session.id, id).run();
-  return json({ checkoutUrl: url.href, testMode: !billingLive(env) }, 200, headers);
+  return { checkoutUrl: url.href, testMode: !billingLive(env) };
 }
 
 // Live and test Checkout Sessions never cross: the mode follows the key.

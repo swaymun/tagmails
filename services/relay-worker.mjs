@@ -13,6 +13,8 @@ import { purgeSettledOutboundBodies, reconcileOneUnknownOutbox, reconcileSentEve
 import { handleAccountRequest } from './account-auth.mjs';
 import { accountPage } from './account-page.mjs';
 import { handleTestWalletRequest, reconcileDueRefunds } from './billing-wallet.mjs';
+import { deleteExpiredMcpRows, handleOAuthRequest } from './mcp-oauth.mjs';
+import { handleMcpRequest } from './mcp-server.mjs';
 import { chargeRelayReply, fundPendingTestEmails, reconcileTestEmailCharges, reservePendingTestEmails,
   testBillingEnabled } from './email-charges.mjs';
 import { deleteExpiredRunArtifacts } from './run-artifacts.mjs';
@@ -393,6 +395,14 @@ export default {
         await rateLimited(env, 'PUBLIC_RATE_LIMIT', request, 'public')) return tooManyRequests();
     if (request.method === 'GET' && new URL(request.url).pathname === '/account') return accountPage();
     try {
+      const oauth = await handleOAuthRequest(request, env);
+      if (oauth) return oauth;
+    } catch { return new Response('OAuth request failed', { status: 500 }); }
+    try {
+      const mcp = await handleMcpRequest(request, env);
+      if (mcp) return mcp;
+    } catch { return new Response('MCP request failed', { status: 500 }); }
+    try {
       const billing = await handleTestWalletRequest(request, env);
       if (billing) return billing;
     } catch { return new Response('Test wallet request failed', { status: 500 }); }
@@ -434,6 +444,8 @@ export default {
     catch { console.error('Run result cleanup is delayed'); }
     try { await deleteExpiredRunArtifacts(env); }
     catch { console.error('Run artifact cleanup is delayed'); }
+    try { await deleteExpiredMcpRows(env); }
+    catch { console.error('MCP token cleanup is delayed'); }
     try { await reconcileDueRefunds(env); }
     catch { console.error('Test wallet refund reconciliation is delayed'); }
     try { await reconcileTestEmailCharges(env); await fundPendingTestEmails(env); }

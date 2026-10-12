@@ -17,6 +17,9 @@ const SESSION_COOKIE = '__Host-tm_session';
 const DOMAIN = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const PARTICIPANT_EMAIL = /^[a-z0-9][a-z0-9._%+-]*@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i;
 
+export function googleSignInConfigured(env) {
+  return Boolean(env.GOOGLE_CLIENT_ID) && DOMAIN.test(env.AGENT_DOMAIN ?? '');
+}
 function hash(value) { return createHash('sha256').update(value).digest('hex'); }
 function json(value, status = 200, headers = {}) {
   return Response.json(value, { status, headers: { 'Cache-Control': 'no-store', ...headers } });
@@ -122,30 +125,21 @@ async function siteIdentity(env, credential, verifyIdentity) {
   return verifyIdentity(credential, env.GOOGLE_CLIENT_ID);
 }
 
-async function signIn(request, env, verifyIdentity, exchangeCode) {
-  const fromSite = Boolean(siteOriginFor(request, env));
-  const headers = siteCors(request, env);
-  if (!sameOrigin(request) && !fromSite) return json({ error: 'Invalid origin' }, 403);
-  if (!env.GOOGLE_CLIENT_ID || !DOMAIN.test(env.AGENT_DOMAIN ?? '')) return json({ error: 'Google sign-in is not configured' }, 503, headers);
-  let identity;
-  try {
-    const body = await bodyJson(request);
-    const credential = typeof body.code === 'string' && fromSite
-      ? await exchangeGoogleCode(env, body.code, exchangeCode) : body.credential;
-    identity = await verifyIdentity(credential, env.GOOGLE_CLIENT_ID);
-  } catch { return json({ error: 'Google sign-in failed' }, 401, headers); }
+// A verified Google identity becomes its TagMails account: the first sign-in
+// creates it when the relay allows signup (or the identity is the pilot owner).
+export async function ownerAccount(env, identity) {
   if (env.PUBLIC_SIGNUP_ENABLED !== 'true' &&
       identity.email !== String(env.PILOT_OWNER_EMAIL ?? '').trim().toLowerCase()) {
-    return json({ error: 'This TagMails relay accepts sign-in only from its owner' }, 403, headers);
+    return { error: 'This TagMails relay accepts sign-in only from its owner', status: 403 };
   }
   const existing = await env.DB.prepare('SELECT id, active FROM accounts WHERE google_sub = ?')
     .bind(identity.sub).first();
-  if (existing && !existing.active) return json({ error: 'Account is inactive' }, 403, headers);
+  if (existing && !existing.active) return { error: 'Account is inactive', status: 403 };
   if (existing) {
     try {
       await env.DB.prepare('UPDATE accounts SET owner_email = ? WHERE id = ?')
         .bind(identity.email, existing.id).run();
-    } catch { return json({ error: 'Gmail address is already assigned' }, 409, headers); }
+    } catch { return { error: 'Gmail address is already assigned', status: 409 }; }
   } else {
     const agent = `u-${randomUUID().replaceAll('-', '').slice(0, 20)}@${env.AGENT_DOMAIN}`;
     const accountId = randomUUID();
@@ -158,12 +152,30 @@ async function signIn(request, env, verifyIdentity, exchangeCode) {
       // A concurrent sign-in for the same Google account may have won.
       const raced = await env.DB.prepare('SELECT id FROM accounts WHERE google_sub = ?')
         .bind(identity.sub).first();
-      if (!raced) return json({ error: 'Gmail address is already assigned' }, 409, headers);
+      if (!raced) return { error: 'Gmail address is already assigned', status: 409 };
     }
   }
   const account = await env.DB.prepare('SELECT id, owner_email, agent_email, default_model FROM accounts WHERE google_sub = ? AND active = 1')
     .bind(identity.sub).first();
-  if (!account || account.owner_email !== identity.email) return json({ error: 'Account could not be created' }, 409, headers);
+  if (!account || account.owner_email !== identity.email) return { error: 'Account could not be created', status: 409 };
+  return { account };
+}
+
+async function signIn(request, env, verifyIdentity, exchangeCode) {
+  const fromSite = Boolean(siteOriginFor(request, env));
+  const headers = siteCors(request, env);
+  if (!sameOrigin(request) && !fromSite) return json({ error: 'Invalid origin' }, 403);
+  if (!env.GOOGLE_CLIENT_ID || !DOMAIN.test(env.AGENT_DOMAIN ?? '')) return json({ error: 'Google sign-in is not configured' }, 503, headers);
+  let identity;
+  try {
+    const body = await bodyJson(request);
+    const credential = typeof body.code === 'string' && fromSite
+      ? await exchangeGoogleCode(env, body.code, exchangeCode) : body.credential;
+    identity = await verifyIdentity(credential, env.GOOGLE_CLIENT_ID);
+  } catch { return json({ error: 'Google sign-in failed' }, 401, headers); }
+  const owner = await ownerAccount(env, identity);
+  if (owner.error) return json({ error: owner.error }, owner.status, headers);
+  const { account } = owner;
   if (fromSite) {
     // The site keeps a 30-day session so people stay signed in between visits.
     const sessionToken = `tm_ses_${randomBytes(32).toString('base64url')}`;
@@ -224,14 +236,14 @@ export async function siteOwnerFor(request, env, verifyIdentity = verifyGoogleCr
   return { account };
 }
 
-async function createPairingCode(env, accountId) {
+export async function createPairingCode(env, accountId) {
   const code = `tm_pair_${randomBytes(20).toString('base64url')}`;
   await env.DB.prepare("INSERT INTO pairing_codes (code_hash, account_id, expires_at) VALUES (?, ?, datetime('now', '+10 minutes'))")
     .bind(hash(code), accountId).run();
   return { code, expiresInSeconds: 600 };
 }
 
-async function accountDevices(env, accountId) {
+export async function accountDevices(env, accountId) {
   const rows = await env.DB.prepare(`SELECT id, name, created_at, revoked_at, last_seen_at FROM devices
     WHERE account_id = ? ORDER BY created_at DESC`).bind(accountId).all();
   return { devices: rows.results ?? rows };
@@ -262,7 +274,7 @@ async function accountThreads(env, accountId) {
   return { threads };
 }
 
-async function revokeAccountDevice(env, accountId, deviceId) {
+export async function revokeAccountDevice(env, accountId, deviceId) {
   const [result] = await env.DB.batch([
     env.DB.prepare('UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE id = ? AND account_id = ? AND revoked_at IS NULL')
       .bind(deviceId, accountId),

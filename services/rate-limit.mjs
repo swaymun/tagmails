@@ -1,19 +1,24 @@
 // Per-IP limits for unauthenticated routes, using Workers rate limiting
 // bindings (see wrangler.jsonc). PUBLIC_RATE_LIMIT covers pages and webhooks;
-// AUTH_RATE_LIMIT covers sign-in, pairing and failed credentials. A missing
+// AUTH_RATE_LIMIT covers sign-in, pairing and failed credentials (site, device
+// and MCP alike). A signed-in MCP account is limited by account, not IP. A missing
 // binding, or a limiter error, means no limit: mail intake must not stop.
 
-const PUBLIC_PATHS = [/^\/account$/, /^\/runs\//, /^\/api\/runs\//, /^\/api\/auth\/config$/, /^\/webhooks\/resend$/];
+const PUBLIC_PATHS = [/^\/account$/, /^\/runs\//, /^\/api\/runs\//, /^\/api\/auth\/config$/, /^\/webhooks\/resend$/,
+  /^\/\.well-known\/oauth-/, /^\/oauth\/(?:authorize|register|revoke)$/];
 
 export function publicPath(pathname) {
   return PUBLIC_PATHS.some((pattern) => pattern.test(pathname));
 }
 
 export async function rateLimited(env, binding, request, scope) {
+  return rateLimitedKey(env, binding, `${scope}:${request.headers.get('cf-connecting-ip') || 'unknown'}`);
+}
+
+export async function rateLimitedKey(env, binding, key) {
   const limiter = env[binding];
   if (typeof limiter?.limit !== 'function') return false;
-  const ip = request.headers.get('cf-connecting-ip') || 'unknown';
-  try { return !(await limiter.limit({ key: `${scope}:${ip}` })).success; }
+  try { return !(await limiter.limit({ key })).success; }
   catch { return false; }
 }
 
