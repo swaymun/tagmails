@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
+import { tagmailsConfigDir } from './email-context.mjs';
 
 export const PROFILE = 'tagmails-read';
 export const WRITE_PROFILE = 'tagmails-write';
@@ -101,11 +102,15 @@ function gitDir(workspace) {
   } catch { return null; }
 }
 
+
 function profileOverride(profile, access, workspace) {
   if (access === 'write') {
     const git = workspace ? gitDir(workspace) : null;
     const repository = git && git !== path.join(workspace, '.git') ? `,${JSON.stringify(git)}="write"` : '';
-    return `permissions.${profile}={extends=":read-only",filesystem={":root"="read",":tmpdir"="write",":slash_tmp"="write",":workspace_roots"={"."="write",".git"="write"}${repository}},network={enabled=true}}`;
+    // An email may change TagMails' model defaults (`tagmails set`), which live in
+    // their own folder; permissions and folders in config.json stay read-only.
+    const settings = `,${JSON.stringify(path.join(tagmailsConfigDir(), 'email'))}="write"`;
+    return `permissions.${profile}={extends=":read-only",filesystem={":root"="read",":tmpdir"="write",":slash_tmp"="write",":workspace_roots"={"."="write",".git"="write"}${repository}${settings}},network={enabled=true}}`;
   }
   return `permissions.${profile}={extends=":read-only",filesystem={":root"="deny",":minimal"="read",":tmpdir"="deny",":slash_tmp"="deny",":workspace_roots"={"."="${access}"}},network={enabled=false}}`;
 }

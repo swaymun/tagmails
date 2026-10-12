@@ -71,3 +71,17 @@ test('owner write turns in a repository subfolder may write that repository\'s g
     assert.ok(!atRoot.includes(JSON.stringify(path.join(root, '.git'))));
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
+
+test('owner write turns may change TagMails model defaults, never config.json, and only owner turns get that folder', () => {
+  const settings = JSON.stringify(path.join(os.homedir(), '.config', 'tagmails', 'email'));
+  const env = { ...process.env };
+  delete process.env.TAGMAILS_CONFIG_DIR; delete process.env.XDG_CONFIG_HOME;
+  try {
+    const write = ownerOverrides('write').find((value) => value.startsWith('permissions.'));
+    assert.ok(write.includes(`${settings}="write"`));
+    assert.ok(!write.includes(`${JSON.stringify(path.join(os.homedir(), '.config', 'tagmails'))}="write"`));
+    const read = ownerOverrides(false).find((value) => value.startsWith('permissions.'));
+    assert.ok(!read.includes(settings));
+    assert.ok(!WRITE_CODEX_CONFIG.includes('tagmails"'), 'participant write turns never get the settings folder');
+  } finally { Object.assign(process.env, env); }
+});

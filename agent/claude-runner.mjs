@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { readStore, updateStore } from './session-store.mjs';
 import { stageAgentAttachments } from './agent-attachments.mjs';
 import { formatAgentAnswer } from './answer-result.mjs';
-import { CONNECTED_APPS, ownerToolsFor, TAGMAILS_EMAIL } from './email-context.mjs';
+import { CONNECTED_APPS, ownerToolsFor, TAGMAILS_EMAIL, tagmailsConfigDir } from './email-context.mjs';
 import { keepClaim, steerPrompt } from './claim-renew.mjs';
 import { addRunEvent, claudeRunEvents, finishRunTranscript, runTranscript } from './run-transcript.mjs';
 
@@ -60,6 +60,8 @@ function claudeEnvironment() {
   return {
     ...Object.fromEntries(allowed.filter((key) => process.env[key]).map((key) => [key, process.env[key]])),
     DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1', DISABLE_AUTOUPDATER: '1',
+    // `tagmails set` from an owner run must edit the daemon's own config folder.
+    TAGMAILS_CONFIG_DIR: tagmailsConfigDir(),
   };
 }
 
@@ -136,16 +138,21 @@ const SYSTEM_PROMPTS = {
 // servers: "claude.ai Google Drive" becomes mcp__claude_ai_Google_Drive__*.
 export function mcpAllowRules(listing) {
   const names = [...String(listing).matchAll(/^(.+?): \S+.* - /gm)].map((match) => match[1].trim());
-  const rules = [...new Set(names.map((name) => `mcp__${name.replace(/[^A-Za-z0-9_-]/g, '_')}__*`))];
-  return rules.length ? ['--allowedTools', ...rules] : [];
+  return [...new Set(names.map((name) => `mcp__${name.replace(/[^A-Za-z0-9_-]/g, '_')}__*`))];
 }
 
-function ownerMcpAllowRules() {
+// TagMails recommended permissions: the owner's connectors, plus the two
+// tagmails commands an email may run ("make Sol my default"). `tagmails set`
+// only changes model defaults; permissions need `tagmails start` in a terminal.
+export function ownerAllowRules(listing) {
+  return ['--allowedTools', ...mcpAllowRules(listing), 'Bash(tagmails status)', 'Bash(tagmails set:*)'];
+}
+
+function ownerMcpListing() {
   try {
-    const listing = execFileSync(process.env.TAGMAILS_CLAUDE_BIN || 'claude', ['mcp', 'list'],
+    return execFileSync(process.env.TAGMAILS_CLAUDE_BIN || 'claude', ['mcp', 'list'],
       { encoding: 'utf8', timeout: 30_000, env: claudeEnvironment(), stdio: ['ignore', 'pipe', 'ignore'] });
-    return mcpAllowRules(listing);
-  } catch { return []; }
+  } catch { return ''; }
 }
 
 async function runClaude(claim, workspace, sessionId, staged, write) {
@@ -165,7 +172,7 @@ async function runClaude(claim, workspace, sessionId, staged, write) {
     ...(mode.tools ? ['--tools', mode.tools] : []),
     // Nobody can approve a tool mid-email, so the owner's connectors are
     // pre-approved outside read-only mode, except tools that trash or delete.
-    ...(owner ? [...(mode.write || selectedMode() === 'manual' ? ownerMcpAllowRules() : []),
+    ...(owner ? [...(mode.write || selectedMode() === 'manual' ? ownerAllowRules(ownerMcpListing()) : []),
       '--disallowedTools', 'mcp__*__trash*', 'mcp__*__delete*'] : ['--disallowedTools', 'mcp__*']),
     '--permission-mode', mode.permission,
     '--permission-prompts', 'none', '--model', claim.model.id, '--effort', EFFORTS[claim.model.effort],

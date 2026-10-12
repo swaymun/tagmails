@@ -210,9 +210,11 @@ test('each Claude permission mode maps to its CLI flags, and bypass is owner-onl
   assert.equal(MODES.acceptEdits.tools.includes('Bash'), false);
 });
 
-test('owner connector rules name each MCP server', async () => {
-  const { mcpAllowRules } = await import('./claude-runner.mjs');
+test('owner allow rules name each MCP server and the tagmails CLI', async () => {
+  const { mcpAllowRules, ownerAllowRules } = await import('./claude-runner.mjs');
   assert.deepEqual(mcpAllowRules('Checking MCP server health…\n\nclaude.ai Google Drive: https://drivemcp.googleapis.com/mcp/v1 - ✔ Connected\nblender: uvx blender-mcp - ✗ Failed to connect\n'),
-    ['--allowedTools', 'mcp__claude_ai_Google_Drive__*', 'mcp__blender__*']);
+    ['mcp__claude_ai_Google_Drive__*', 'mcp__blender__*']);
   assert.deepEqual(mcpAllowRules('No MCP servers configured.'), []);
+  // Without connectors the owner can still change TagMails settings by email.
+  assert.deepEqual(ownerAllowRules('No MCP servers configured.'), ['--allowedTools', 'Bash(tagmails status)', 'Bash(tagmails set:*)']);
 });

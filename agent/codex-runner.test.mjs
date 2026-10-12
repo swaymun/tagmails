@@ -367,6 +367,21 @@ test('opt-in Codex write mode uses its restricted profile and prompt', async (t)
   assert.equal(events[1].params.cwd, fs.realpathSync(workspace));
   assert.match(events[1].params.input[0].text, /You may read and change files only in the selected workspace/);
   assert.match(fs.readFileSync(path.join(home, 'config.toml'), 'utf8'), /"\." = "write"/);
+  // Participants' approval requests are declined; only the owner's turns get Codex's auto-reviewer.
+  assert.equal(events[0].params.approvalsReviewer, undefined);
+  assert.equal(events[1].params.approvalsReviewer, undefined);
+});
+
+test('owner write turns route approval requests to the Codex auto-reviewer', async (t) => {
+  const { calls } = setup(t);
+  const task = claim('job-owner-write', 'thread-owner-write', 'Install the dependencies and run the tests.');
+  task.request.fromOwner = true;
+  assert.equal((await runClaim(task, { write: true })).state, 'completed');
+  const events = fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(events[0].params.approvalsReviewer, 'auto_review');
+  assert.equal(events[1].params.approvalsReviewer, 'auto_review');
+  // Told to ask rather than give up, or the reviewer never sees the request.
+  assert.match(events[1].params.input[0].text, /run the command again with escalated permissions \(sandbox_permissions "require_escalated"/);
 });
 
 test('full Codex access requires the verified owner and activates the full profile', async (t) => {
