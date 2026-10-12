@@ -351,7 +351,9 @@ async function prepare(env, row, material = null) {
         ? 'This reply is the agent\'s report. Verify local file changes before relying on them.'
       : null,
   });
-  inbound.subject = material ? material.subject : await openText(env, inbound.subject);
+  // A sealed job's failure notice written without its computer (it stopped
+  // responding) has no subject to reuse; it goes out under a plain one.
+  inbound.subject = material ? material.subject ?? 'Your TagMails task' : await openText(env, inbound.subject);
   if (typeof inbound.subject !== 'string' || /[\r\n]/.test(inbound.subject)) throw new InvalidOutboxSource('Outbox subject is missing or contains a line break');
   return {
     from: testSender ?? agent, ...(testSender ? { replyTo: agent } : {}),
@@ -656,13 +658,16 @@ export async function tendSealedReplies(env) {
       await env.MAIL.delete(`outbound/${row.account_id}/${row.job_id}.json`);
     }
   }
+  // A job nobody can claim (queued, or running on a lapsed lease) whose key is gone.
+  const orphaned = `j.created_at <= datetime('now', '-15 minutes') AND m.seal_key_id IS NOT NULL
+      AND (j.state = 'queued' OR (j.state = 'running' AND (j.lease_until IS NULL OR j.lease_until <= CURRENT_TIMESTAMP)))
+      AND ((j.state = 'queued' AND json_type(j.model_json, '$.error') = 'text') OR NOT EXISTS (SELECT 1 FROM devices d
+        WHERE d.key_id = m.seal_key_id AND d.account_id = m.account_id AND d.revoked_at IS NULL))`;
   const orphans = await env.DB.prepare(`SELECT j.id FROM jobs j JOIN messages m ON m.id = j.message_id
-    WHERE j.state = 'queued' AND j.created_at <= datetime('now', '-15 minutes') AND m.seal_key_id IS NOT NULL
-      AND (json_type(j.model_json, '$.error') = 'text' OR NOT EXISTS (SELECT 1 FROM devices d
-        WHERE d.key_id = m.seal_key_id AND d.account_id = m.account_id AND d.revoked_at IS NULL))
-    LIMIT 10`).bind().all();
+    WHERE ${orphaned} LIMIT 10`).bind().all();
   for (const row of orphans.results ?? orphans) {
-    const failed = await env.DB.prepare("UPDATE jobs SET state = 'failed' WHERE id = ? AND state = 'queued' RETURNING id")
+    const failed = await env.DB.prepare(`UPDATE jobs SET state = 'failed', lease_until = NULL WHERE id = ?
+      AND id IN (SELECT j.id FROM jobs j JOIN messages m ON m.id = j.message_id WHERE ${orphaned}) RETURNING id`)
       .bind(row.id).first();
     if (failed) await releaseTestEmail(env, row.id);
   }

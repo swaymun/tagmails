@@ -1109,15 +1109,27 @@ fn complete_job(client: &Client, base: &str, token: &str, body: &Value) -> Resul
             .error_for_status()?
             .json()?)
     };
-    let mut completion = post()?;
+    // A lost response or a relay error is retried too: the relay recognizes
+    // the same completion and only sends a reply that hasn't gone out.
+    let retryable = |error: &Box<dyn Error>| {
+        error.downcast_ref::<reqwest::Error>().is_some_and(|error| {
+            error.status().map_or(true, |status| status.is_server_error())
+        })
+    };
+    let mut outcome = post();
     for wait in [5, 20, 60] {
-        if completion["reply"] != "delayed" {
-            break;
+        match &outcome {
+            Ok(completion) if completion["reply"] != "delayed" => break,
+            Err(error) if !retryable(error) => break,
+            _ => {}
         }
         thread::sleep(Duration::from_secs(wait));
-        completion = post().unwrap_or(completion);
+        outcome = match (post(), outcome) {
+            (Err(_), Ok(previous)) => Ok(previous),
+            (next, _) => next,
+        };
     }
-    Ok(completion)
+    outcome
 }
 
 fn read_token(path: &Path) -> Result<String, Box<dyn Error>> {

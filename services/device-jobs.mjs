@@ -371,16 +371,17 @@ function validResult(value) {
 // Fails one run that used up its attempts, with a relay reply in the thread.
 // Returns false when there is none. Called from the scheduled handler.
 export async function failOneAbandonedJob(env) {
-  const row = await env.DB.prepare(`SELECT j.id, t.account_id FROM jobs j JOIN threads t ON t.id = j.thread_id
+  const row = await env.DB.prepare(`SELECT j.id, t.account_id, m.seal_key_id FROM jobs j JOIN threads t ON t.id = j.thread_id
+    JOIN messages m ON m.id = j.message_id
     WHERE j.state = 'running' AND j.attempts >= ${MAX_ATTEMPTS}
       AND (j.lease_until IS NULL OR j.lease_until <= CURRENT_TIMESTAMP)
     ORDER BY j.created_at, j.rowid LIMIT 1`).bind().first();
   if (!row) return false;
   const key = `results/${row.account_id}/${row.id}/abandoned.json`;
-  await env.MAIL.put(key, JSON.stringify({ runtime: 'relay', state: 'failed',
+  const result = { runtime: 'relay', state: 'failed',
     summary: `Your computer started this task ${MAX_ATTEMPTS} times and stopped responding each time (it may have slept, restarted or crashed), so TagMails stopped retrying. Reply to try again.`,
-    checks: ['The agent may have made partial changes before it stopped.'] }),
-  { httpMetadata: { contentType: 'application/json' } });
+    checks: ['The agent may have made partial changes before it stopped.'] };
+  await env.MAIL.put(key, JSON.stringify(result), { httpMetadata: { contentType: 'application/json' } });
   const [updated] = await env.DB.batch([
     env.DB.prepare(`UPDATE jobs SET state = 'failed', result_key = ?, lease_until = NULL
       WHERE id = ? AND state = 'running' AND attempts >= ${MAX_ATTEMPTS}
@@ -392,7 +393,13 @@ export async function failOneAbandonedJob(env) {
       WHERE steer_of = ? AND steer_state = 'pending'
         AND EXISTS (SELECT 1 FROM jobs WHERE id = ? AND state = 'failed' AND result_key = ?)`).bind(row.id, row.id, key),
   ]);
-  return (updated.meta?.changes ?? updated.changes) === 1;
+  const failed = (updated.meta?.changes ?? updated.changes) === 1;
+  // Sealed mail's reply can't wait for the scheduled outbox (its subject isn't readable).
+  if (failed && row.seal_key_id) {
+    try { await deliverReply(env, row.id, { result, subject: null }); }
+    catch { console.error('Abandoned sealed run reply is delayed', row.id); }
+  }
+  return failed;
 }
 
 async function leasedJob(env, device, body) {
@@ -464,10 +471,11 @@ async function complete(env, device, body) {
   const sealed = Boolean(current.seal_key_id) && current.seal_key_id === device.key_id;
   if (current.seal_key_id && !sealed) return json({ error: 'This job is sealed to another key' }, 409);
   const files = sealed ? inlineFiles(body.files) : [];
-  if (sealed && (files === null || typeof body.subject !== 'string' || body.subject.length > 998 || /[\r\n]/.test(body.subject) ||
+  if (sealed && (files === null || typeof body.subject !== 'string' || body.subject.length > 10_000 ||
       body.result.artifactIds?.length)) {
     return json({ error: 'Invalid sealed completion' }, 400);
   }
+  if (sealed) body.subject = body.subject.replace(/[\r\n]+/g, ' ');
   if (['completed', 'failed'].includes(current.state)) {
     if (current.lease_id !== body.leaseId || current.result_hash !== resultHash) return json({ error: 'Job already finished' }, 409);
     // A retried completion whose reply never went out (the Worker stopped

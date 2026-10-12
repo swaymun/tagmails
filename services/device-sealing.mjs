@@ -12,8 +12,8 @@ export { isDeviceSealed, keyIdFor, validPublicKey };
 const MAX_ATTACHMENTS = 5;
 
 // The device a new message is sealed to, which must be the one that will run
-// it: the thread's computer while it is still paired (one without a key keeps
-// relay-key sealing so it can still run its thread); for an unpinned thread,
+// it: the thread's computer (one without a key keeps relay-key sealing so it
+// can still run its thread); for an unpinned thread,
 // the key its earlier mail was sealed to; for a new thread, the computer the
 // relay routes it to (`routedDeviceId`, the freshest model catalog); and with
 // no routed computer, the account's newest computer with a key. Returns null
@@ -24,9 +24,11 @@ export async function sealTarget(db, accountId, threadId, routedDeviceId = null)
     return row && { found: true, target: row.public_key ? { deviceId: row.id, publicKey: row.public_key, keyId: row.key_id } : null };
   };
   if (threadId) {
+    // A revoked computer's thread no longer runs (the relay answers that), but
+    // its new mail stays sealed to that computer's key rather than readable.
     const pinned = await device(`SELECT d.id, d.public_key, d.key_id FROM threads t
       JOIN devices d ON d.id = t.device_id
-      WHERE t.id = ? AND t.account_id = ? AND d.revoked_at IS NULL`, threadId, accountId);
+      WHERE t.id = ? AND t.account_id = ?`, threadId, accountId);
     if (pinned) return pinned.target;
     const earlier = await db.prepare(`SELECT m.seal_key_id FROM messages m JOIN threads t ON t.id = m.thread_id
       WHERE m.thread_id = ? AND t.account_id = ? AND t.device_id IS NULL AND m.seal_key_id IS NOT NULL

@@ -331,7 +331,8 @@ async function sealedRelay() {
       'Attachment OKAPI notes', '--b1--', ''].join('\r\n');
     const mime = signed(raw, { domain: 'gmail.com', privateKey: keys.privateKey('gmail.com'), names: headers.map(([name]) => name.toLowerCase()) });
     const response = await (await handleEmail(emailMessage(mime, 'agent@wonder.test'), env, { resolveTxt: keys.resolveTxt, fetchModel: fetch })).json();
-    assert.deepEqual(response, { accepted: true, duplicate: false });
+    assert.equal(response.accepted, true);
+    assert.equal(response.duplicate, false);
     return messageId;
   };
   const claim = async (as) => {
@@ -494,6 +495,15 @@ test('mail sealed to a key no paired computer holds fails instead of waiting for
   relay.sqlite.prepare("UPDATE jobs SET created_at = datetime('now', '-1 hour')").run();
   await tendSealedReplies(relay.env);
   assert.equal(relay.sqlite.prepare('SELECT state FROM jobs').get().state, 'failed');
+  // So does one that was running when its key went away.
+  relay.sqlite.prepare("UPDATE devices SET revoked_at = NULL").run();
+  await relay.email({ body: 'Another ZEBRA task.' });
+  const { claim } = await relay.claim();
+  assert.ok(claim);
+  relay.sqlite.prepare("UPDATE devices SET key_id = 'replaced', public_key = NULL").run();
+  relay.sqlite.prepare("UPDATE jobs SET created_at = datetime('now', '-1 hour'), lease_until = datetime('now', '-1 minute') WHERE id = ?").run(claim.jobId);
+  await tendSealedReplies(relay.env);
+  assert.equal(relay.sqlite.prepare('SELECT state FROM jobs WHERE id = ?').get(claim.jobId).state, 'failed');
 });
 
 test('a held reply its computer can no longer open is dropped so the thread moves on', async () => {
@@ -527,4 +537,35 @@ test('mail is sealed to the computer it is routed to, or kept for an older compu
   assert.deepEqual({ ...message }, { seal_key_id: null, device_id: 'device-old' });
   assert.equal((await relay.claim()).claimed, false, 'the keyed computer does not take the older one\'s thread');
   assert.equal((await relay.claim(oldToken)).claimed, true);
+});
+
+test('a sealed thread stays sealed after its computer is revoked, and edge cases still get a reply', async () => {
+  const relay = await sealedRelay();
+  const first = await relay.email();
+  let { claim } = await relay.claim();
+  let opened = await openClaim(claim, relay.deviceKey);
+  // A very long subject (folded across header lines) still completes.
+  assert.equal((await relay.post('/api/device/complete', completion(opened, { subject: `${'Long '.repeat(220)}\r\nsubject` }))).reply, 'sent');
+  assert.equal(relay.sent.at(-1).subject.length > 1000, true);
+
+  // After revocation a reply to the thread is refused, but its content is still not readable.
+  relay.sqlite.prepare("UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE id = 'device-1'").run();
+  await relay.email({ inReplyTo: first, body: 'Late ZEBRA follow-up.' });
+  assert.ok(relay.sqlite.prepare("SELECT seal_key_id FROM messages WHERE direction = 'inbound' ORDER BY rowid DESC").get().seal_key_id);
+  assert.match(relay.sent.at(-1).text, /revoked/);
+  assert.equal(relay.sent.at(-1).subject, 'Re: Quarterly Falcon plan');
+  assert.deepEqual(relay.leaks(), []);
+});
+
+test('a sealed run abandoned after three lapsed leases still tells the sender', async () => {
+  const relay = await sealedRelay();
+  await relay.email();
+  const { claim } = await relay.claim();
+  relay.sqlite.prepare("UPDATE jobs SET attempts = 3, lease_until = datetime('now', '-1 minute') WHERE id = ?").run(claim.jobId);
+  const { failOneAbandonedJob } = await import('./device-jobs.mjs');
+  assert.equal(await failOneAbandonedJob(relay.env), true);
+  assert.equal(relay.sent.length, 1);
+  assert.match(relay.sent[0].text, /stopped responding/);
+  assert.equal(relay.sent[0].headers['In-Reply-To'], relay.sqlite.prepare("SELECT message_id FROM messages WHERE direction = 'inbound'").get().message_id);
+  assert.deepEqual(relay.leaks(), []);
 });

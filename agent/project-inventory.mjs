@@ -74,6 +74,9 @@ export function humanRequest(text) {
   let t = String(text ?? '')
     .replace(/<(recommended_plugins|environment_context|in-app-browser-context|codex_internal_context|system-reminder|local-command-[a-z]+|command-[a-z]+)[^>]*>[\s\S]*?<\/\1>/g, ' ')
     .replace(/<image[^>]*>\s*<\/image>/g, ' ');
+  // A TagMails turn's prompt is an email; it never becomes routing history
+  // (the relay keeps that history readable, while mail is sealed).
+  if (/^\s*You are working through TagMails:/.test(t)) return null;
   const request = t.match(/##\s*My request:\s*([\s\S]*)/);
   if (request?.[1].trim()) t = request[1];
   t = t.replace(/\s+/g, ' ').trim();
