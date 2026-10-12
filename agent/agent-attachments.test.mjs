@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import http from 'node:http';
@@ -105,17 +106,26 @@ test('attachments staged in a Git workspace stay out of commits and keep their m
   const previous = process.env.TAGMAILS_LAB_URL;
   process.env.TAGMAILS_LAB_URL = `http://127.0.0.1:${server.address().port}`;
   t.after(() => { if (previous === undefined) delete process.env.TAGMAILS_LAB_URL; else process.env.TAGMAILS_LAB_URL = previous; });
-  const workspace = await fs.mkdtemp(`${os.tmpdir()}/tagmails-git-`);
-  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
-  await fs.mkdir(`${workspace}/.git/info`, { recursive: true });
-  await fs.writeFile(`${workspace}/.git/info/exclude`, '*.log');
+  const root = await fs.realpath(await fs.mkdtemp(`${os.tmpdir()}/tagmails-git-`));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { encoding: 'utf8' });
+  git(root, 'init', '-q', 'repo');
+  await fs.writeFile(`${root}/repo/.git/info/exclude`, '*.log');
+  await fs.mkdir(`${root}/repo/app`);
+  await fs.writeFile(`${root}/repo/app/readme.txt`, 'hi');
+  git(`${root}/repo`, 'add', '.');
+  git(`${root}/repo`, 'commit', '-qm', 'init');
+  git(`${root}/repo`, 'worktree', 'add', '-q', `${root}/tree`);
   const attachment = { name: 'demo clip.mp4', mimeType: 'video/mp4', size: bytes.length,
     path: '/api/attachment?messageId=mail-1&attachmentId=file-1' };
-  for (let run = 0; run < 2; run++) {
+  // The repository itself, a subfolder of it, and a linked worktree's subfolder.
+  for (const workspace of [`${root}/repo`, `${root}/repo/app`, `${root}/tree/app`, `${root}/repo`]) {
     const staged = await stageAgentAttachments([attachment], workspace);
     assert.deepEqual(await fs.readFile(`${staged.directory}/attachment-1.mp4`), bytes);
     assert.match(staged.prompt, /video\/mp4, 18 bytes, sent as "demo clip\.mp4"/);
+    assert.match(git(workspace, 'check-ignore', `${staged.directory}/attachment-1.mp4`), /attachment-1\.mp4/, workspace);
+    assert.equal(git(workspace, 'status', '--porcelain'), '', `${workspace}: git add -A would not pick it up`);
     await staged.cleanup();
   }
-  assert.equal(await fs.readFile(`${workspace}/.git/info/exclude`, 'utf8'), '*.log\n/tagmails-attachment-*/\n');
+  assert.equal(await fs.readFile(`${root}/repo/.git/info/exclude`, 'utf8'), '*.log\ntagmails-attachment-*/\n');
 });

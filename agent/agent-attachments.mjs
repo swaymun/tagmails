@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,17 +20,23 @@ const EXTENSIONS = new Map([
   ['image/heic', '.heic'], ['video/mp4', '.mp4'], ['video/quicktime', '.mov'], ['video/webm', '.webm'],
   ['audio/mpeg', '.mp3'], ['audio/mp4', '.m4a'], ['audio/wav', '.wav'], ['application/zip', '.zip'],
 ]);
-const EXCLUDE_RULE = '/tagmails-attachment-*/';
+// Unanchored, so it also matches when the workspace is a subfolder of the repository.
+const EXCLUDE_RULE = 'tagmails-attachment-*/';
 
 // Attachments are staged inside the workspace so sandboxed agents can read
-// them. Keep them out of `git add -A` while the run is in progress.
+// them. Keep them out of `git add -A` while the run is in progress. Git
+// resolves the exclude file, which for a worktree or a subfolder is not
+// <workspace>/.git/info/exclude.
 async function excludeFromGit(directory) {
-  const info = path.join(directory, '.git', 'info');
-  try { if (!(await fs.stat(path.join(directory, '.git'))).isDirectory()) return; } catch { return; }
-  const file = path.join(info, 'exclude');
+  let file;
+  try {
+    file = execFileSync('git', ['-C', directory, 'rev-parse', '--path-format=absolute', '--git-path', 'info/exclude'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 }).trim();
+  } catch { return; }
+  if (!file) return;
   const current = await fs.readFile(file, 'utf8').catch(() => '');
   if (current.split('\n').includes(EXCLUDE_RULE)) return;
-  await fs.mkdir(info, { recursive: true });
+  await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.appendFile(file, `${current && !current.endsWith('\n') ? '\n' : ''}${EXCLUDE_RULE}\n`);
 }
 
