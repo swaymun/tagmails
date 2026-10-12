@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import test from 'node:test';
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { bindings } from './bindings-fixture.mjs';
-import { handleAccountRequest, verifyGoogleCredential } from './account-auth.mjs';
+import { handleAccountRequest, PAIRING_CODES_PER_HOUR, verifyGoogleCredential } from './account-auth.mjs';
 import { handleDeviceRequest } from './device-jobs.mjs';
 import { handleInbound } from './relay-worker.mjs';
 
@@ -359,6 +359,24 @@ test('the owner can page through one email thread without exposing private resul
   sqlite.prepare('INSERT INTO accounts (id, google_sub, owner_email, agent_email) VALUES (?, ?, ?, ?)')
     .run('account-2', 'other-sub', 'other@gmail.com', 'other-agent@wonder.test');
   assert.equal((await route('', async () => ({ sub: 'other-sub', email: 'other@gmail.com' }))).status, 404);
+});
+
+test('pairing codes stop working at sign-out and are limited per hour', async () => {
+  const { env } = bindings();
+  env.GOOGLE_CLIENT_ID = clientId;
+  env.SITE_ORIGIN = 'https://tagmails.chatgpt.site';
+  const options = { verifyIdentity: async () => ({ sub: 'google-sub-1', email: 'owner@gmail.com' }) };
+  const site = (path, method = 'GET') => new Request(`https://relay.test${path}`, { method,
+    headers: { Origin: env.SITE_ORIGIN, Authorization: 'Bearer owner-token' } });
+  const pair = (code) => handleAccountRequest(new Request('https://relay.test/api/device/pair', { method: 'POST',
+    body: JSON.stringify({ code, token: `tm_dev_${randomBytes(32).toString('base64url')}`, name: 'Mac' }) }), env, options);
+  const { code } = await (await handleAccountRequest(site('/api/site/pairing-code', 'POST'), env, options)).json();
+  assert.equal((await handleAccountRequest(site('/api/site/logout', 'POST'), env, options)).status, 200);
+  assert.equal((await pair(code)).status, 409, 'the next person at this browser cannot use the old setup prompt');
+  for (let index = 1; index < PAIRING_CODES_PER_HOUR; index += 1) {
+    assert.equal((await handleAccountRequest(site('/api/site/pairing-code', 'POST'), env, options)).status, 200);
+  }
+  assert.equal((await handleAccountRequest(site('/api/site/pairing-code', 'POST'), env, options)).status, 429);
 });
 
 test('the private Site can show the owner account and manage only its paired devices', async () => {

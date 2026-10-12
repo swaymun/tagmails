@@ -139,7 +139,9 @@ async function pair(env, ctx, args) {
       : { model: saved.model, effort: effort ?? saved.effort, speed: speed ?? saved.speed };
   }
   const harness = agent ?? harnessOf(settings.model);
-  const { code, expiresInSeconds } = await createPairingCode(env, ctx.account.id);
+  const pairing = await createPairingCode(env, ctx.account.id);
+  if (!pairing) throw new ToolError('Too many pairing codes this hour. Try again later.');
+  const { code, expiresInSeconds } = pairing;
   const relay = ctx.relayOrigin === HOSTED_RELAY ? '' : ` --relay ${ctx.relayOrigin}`;
   const pairCommand = `tagmails pair ${code}${relay}`;
   const startCommand = `tagmails start ${startFlags(settings)}`;

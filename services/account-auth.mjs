@@ -236,12 +236,23 @@ export async function siteOwnerFor(request, env, verifyIdentity = verifyGoogleCr
   return { account };
 }
 
+// Codes an account may create per hour. Each is a row, and a signed-in
+// session (or MCP token) could otherwise create them without limit.
+export const PAIRING_CODES_PER_HOUR = 20;
+
+// A fresh 10-minute code, or null once the account hit its hourly limit.
 export async function createPairingCode(env, accountId) {
+  await env.DB.prepare("DELETE FROM pairing_codes WHERE account_id = ? AND created_at < datetime('now', '-1 day')").bind(accountId).run();
+  const recent = await env.DB.prepare("SELECT COUNT(*) AS n FROM pairing_codes WHERE account_id = ? AND created_at > datetime('now', '-1 hour')")
+    .bind(accountId).first();
+  if (recent.n >= PAIRING_CODES_PER_HOUR) return null;
   const code = `tm_pair_${randomBytes(20).toString('base64url')}`;
   await env.DB.prepare("INSERT INTO pairing_codes (code_hash, account_id, expires_at) VALUES (?, ?, datetime('now', '+10 minutes'))")
     .bind(hash(code), accountId).run();
   return { code, expiresInSeconds: 600 };
 }
+
+const PAIRING_LIMITED = { error: 'Too many pairing codes this hour. Try again later.' };
 
 export async function accountDevices(env, accountId) {
   const rows = await env.DB.prepare(`SELECT id, name, created_at, revoked_at, last_seen_at FROM devices
@@ -404,10 +415,14 @@ async function siteAccountRequest(request, env, pathname, verifyIdentity) {
       await env.DB.prepare('UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP WHERE token_hash = ? AND account_id = ?')
         .bind(hash(token), account.id).run();
     }
+    // A setup prompt still on screen must not pair a computer after its owner signed out.
+    await env.DB.prepare(`UPDATE pairing_codes SET expires_at = CURRENT_TIMESTAMP
+      WHERE account_id = ? AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP`).bind(account.id).run();
     return json({ signedOut: true }, 200, headers);
   }
   if (pathname === '/api/site/pairing-code' && request.method === 'POST') {
-    return json(await createPairingCode(env, account.id), 200, headers);
+    const pairing = await createPairingCode(env, account.id);
+    return pairing ? json(pairing, 200, headers) : json(PAIRING_LIMITED, 429, headers);
   }
   const revoke = pathname.match(/^\/api\/site\/devices\/([0-9a-f-]{36})\/revoke$/i);
   if (revoke && request.method === 'POST') {
@@ -644,7 +659,8 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
     return changeParticipant(request, env, account, participantAction[1], participantAction[2]);
   }
   if (pathname === '/api/account/pairing-code') {
-    return json(await createPairingCode(env, account.id));
+    const pairing = await createPairingCode(env, account.id);
+    return pairing ? json(pairing) : json(PAIRING_LIMITED, 429);
   }
   const revoke = pathname.match(/^\/api\/account\/devices\/([0-9a-f-]{36})\/revoke$/i);
   if (revoke) {
