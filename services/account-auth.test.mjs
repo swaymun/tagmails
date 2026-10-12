@@ -170,6 +170,8 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.match(welcome[0].text, /Reply to this email to try it/);
   assert.match(welcome[0].text, /tagmails doctor/);
   assert.match(welcome[0].html, /Turn on reactions/);
+  // It asks for a balance up front, since unfunded emails wait.
+  assert.match(welcome[0].text, /Add a balance first/);
   // The computer's sealing key comes with the pairing (0.2.24+).
   assert.deepEqual({ ...sqlite.prepare('SELECT name, public_key, key_id FROM devices WHERE id = ?').get(deviceId) },
     { name: 'Saimun Mac', public_key: deviceKey.publicKey, key_id: await keyIdFor(deviceKey.publicKey) });

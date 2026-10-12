@@ -9,6 +9,7 @@ export function welcomeEmail({ env, ownerEmail, deviceName, siteOrigin }) {
   const answer = [
     `**${deviceName} is set up.** Email this address from ${ownerEmail} and your agent on that computer does the work; the answer comes back in the same thread. Reply to this email to try it.`,
     '',
+    ...(siteOrigin ? [`**Add a balance first:** emails wait until your balance covers them. Each reply costs ${price}, so $10 lasts a long time. [Top up your balance](${siteOrigin}/#billing)`, ''] : []),
     '**Things to try**',
     '- Ask about a project by name: "In tagmails, why does the footer wrap?" TagMails picks the folder.',
     '- Choose a model or effort in plain words: "use Opus, high effort".',
@@ -22,7 +23,7 @@ export function welcomeEmail({ env, ownerEmail, deviceName, siteOrigin }) {
     '',
     `**On the computer:** \`tagmails status\`, \`tagmails doctor\` (checks the setup and prints fixes), \`tagmails logs\`. Permissions and folders change only with \`tagmails start\` there.`,
     '',
-    `Each reply costs ${price}${siteOrigin ? `; your balance is at ${siteOrigin}` : ''}. This email is free.`,
+    siteOrigin ? 'This email is free.' : `Each reply costs ${price}. This email is free.`,
   ].join('\n');
   const { html, text } = renderResult({ state: 'completed', answer, brandUrl: siteOrigin });
   return { subject: `TagMails is set up on ${deviceName}`, html, text };
