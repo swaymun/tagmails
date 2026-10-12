@@ -304,12 +304,18 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
   const refused = !target && env.SEALED_STORAGE_REQUIRED === 'true';
   const stopped = threadUnavailable || refused;
   const objectKey = `inbound/${account.id}/${message.providerEmailId}.${target ? 'sealed' : refused ? 'unstored' : 'eml'}`;
-  if (target) await storeSealedRequest(env, target, objectKey, message, agent);
+  const jobId = randomUUID();
+  if (target) await storeSealedRequest(env, target, objectKey, message, agent, { jobId, threadId: newThreadId });
   else if (!refused) await env.MAIL.put(objectKey, message.rawMime, { httpMetadata: { contentType: 'message/rfc822' } });
   const statements = [];
   const subject = message.subject.slice(0, 300);
   if (!threadId) statements.push(env.DB.prepare('INSERT INTO threads (id, account_id, subject, device_id) VALUES (?, ?, ?, ?)')
-    .bind(newThreadId, account.id, target ? await sealedSubject(target, subject) : refused ? '' : await sealText(env, subject), catalog.deviceId));
+    .bind(newThreadId, account.id, target ? await sealedSubject(target, subject) : refused ? '' : await sealText(env, subject),
+      target?.deviceId ?? catalog.deviceId));
+  // Sealed mail can only run on its key's computer, so an unpinned thread is
+  // pinned to it now; no other computer can then take the thread.
+  else if (target) statements.push(env.DB.prepare('UPDATE threads SET device_id = ? WHERE id = ? AND account_id = ? AND device_id IS NULL')
+    .bind(target.deviceId, threadId, account.id));
   statements.push(env.DB.prepare(`INSERT INTO messages
     (id, account_id, thread_id, provider_email_id, message_id, direction, sender_email, object_key, agent_email, seal_key_id, headers_json)
     VALUES (?, ?, ?, ?, ?, 'inbound', ?, ?, ?, ?, ?)`).bind(id, account.id, newThreadId, message.providerEmailId, message.messageId,
@@ -320,7 +326,6 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
     statements.push(env.DB.prepare(`INSERT INTO participants (thread_id, email) VALUES (?, ?)
       ON CONFLICT(thread_id, email) DO UPDATE SET revoked_at = NULL`).bind(newThreadId, guest));
   }
-  const jobId = randomUUID();
   const previousJob = threadId && !stopped ? await env.DB.prepare(`SELECT j.model_json FROM jobs j
     JOIN messages m ON m.id = j.message_id
     WHERE j.thread_id = ? AND json_extract(j.model_json, '$.id') IS NOT NULL

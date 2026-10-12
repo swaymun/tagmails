@@ -106,7 +106,7 @@ async function attachmentBytes(attachment, relay) {
     chunks.push(chunk);
   }
   // Mail the relay keeps sealed to this computer opens only here.
-  return relay && attachment.sealed ? openAttachment(Buffer.concat(chunks), await readDeviceKey())
+  return relay && attachment.sealed ? openAttachment(Buffer.concat(chunks), await readDeviceKey(), attachment.sha256)
     : Buffer.concat(chunks);
 }
 

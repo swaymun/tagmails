@@ -82,6 +82,12 @@ pub fn device_key_file() -> PathBuf {
     config_dir().join("device-key")
 }
 
+/// Jobs and follow-ups this machine already ran; a sealed claim for one of
+/// them is refused (agent/device-key.mjs).
+pub fn done_jobs_file() -> PathBuf {
+    data_dir().join("done-jobs")
+}
+
 pub fn projects_file() -> PathBuf {
     data_dir().join("projects.json")
 }

@@ -8,6 +8,7 @@
 //   device-key.mjs generate <file>   replace the key (re-pairing); print {"publicKey"}
 //   device-key.mjs open-claim        sealed claim JSON on stdin -> opened claim on stdout
 //   device-key.mjs send-pending      open replies the relay held for this computer and post them back
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -52,6 +53,25 @@ export async function ensureDeviceKey(file) {
   }
 }
 
+// Jobs and follow-ups this computer already ran, one id per line (written by
+// the daemon after each completion and here after each delivered follow-up).
+// A relay that re-offers one (to replay old mail through a new transcript) is refused.
+const DONE_LIMIT = 5000;
+const doneFile = () => process.env.TAGMAILS_DONE_JOBS_FILE;
+
+export async function alreadyDone(id, file = doneFile()) {
+  if (!file) return false;
+  const text = await fs.readFile(file, 'utf8').catch(() => '');
+  return text.split('\n').includes(id);
+}
+
+export async function rememberDone(id, file = doneFile()) {
+  if (!file || !/^[0-9a-f-]{36}$/i.test(id)) return;
+  const lines = (await fs.readFile(file, 'utf8').catch(() => '')).split('\n').filter(Boolean);
+  if (lines.includes(id)) return;
+  await fs.writeFile(file, `${[...lines, id].slice(-DONE_LIMIT).join('\n')}\n`, { mode: 0o600 });
+}
+
 const opened = async (key, value, label) => openForDevice(key, fromBase64url(value), label);
 const openedJson = async (key, value, label) => JSON.parse(new TextDecoder().decode(await opened(key, value, label)));
 
@@ -60,15 +80,22 @@ const openedJson = async (key, value, label) => JSON.parse(new TextDecoder().dec
 export async function openClaim(claim, key) {
   if (claim?.sealed !== true) return claim;
   const sealed = claim.request ?? {};
+  if (await alreadyDone(claim.jobId)) throw new Error('This computer already ran this job');
   const request = await openedJson(key, sealed.sealed, 'request');
+  // The sealed request must be this job's own, not another stored message.
   if (request.v !== 1 || typeof request.body !== 'string' || typeof request.subject !== 'string' ||
-      request.from !== sealed.from || !Array.isArray(request.attachments)) throw new Error('Sealed request is invalid');
+      request.from !== sealed.from || !Array.isArray(request.attachments) || request.jobId !== claim.jobId ||
+      request.threadId !== claim.threadId || (sealed.messageId && request.messageId !== sealed.messageId)) {
+    throw new Error('Sealed request does not belong to this job');
+  }
   const earlier = [];
   for (const item of Array.isArray(sealed.earlier) ? sealed.earlier : []) {
     if (typeof item?.text === 'string') { earlier.push({ from: item.from, text: item.text }); continue; }
     try {
       const opened = await openedJson(key, item.sealed, 'request');
-      if (opened.from === item.from && opened.text) earlier.push({ from: item.from, text: opened.text });
+      if (opened.from === item.from && opened.threadId === claim.threadId && opened.jobId !== claim.jobId && opened.text) {
+        earlier.push({ from: item.from, text: opened.text });
+      }
     } catch { /* Skip one that no longer opens. */ }
   }
   const body = earlier.length ? `${earlier.map((item) =>
@@ -77,19 +104,27 @@ export async function openClaim(claim, key) {
   return { ...claim, request: { ...plain, subject: request.subject, body,
     attachments: request.attachments.slice(0, 5).map((attachment, index) => ({
       name: attachment.name, mimeType: attachment.mimeType, size: attachment.size, previewable: attachment.previewable,
-      sealed: true, path: `/api/device/attachment?jobId=${claim.jobId}&leaseId=${claim.leaseId}&index=${index}` })) } };
+      sha256: attachment.sha256, sealed: true, path: `/api/device/attachment?jobId=${claim.jobId}&leaseId=${claim.leaseId}&index=${index}` })) } };
 }
 
-// A follow-up the relay holds sealed arrives as { id, from, sealed }.
-export async function openSteer(steer, key) {
+// A follow-up the relay holds sealed arrives as { id, from, sealed }; it must
+// be that follow-up's own request, in the running job's thread, not yet delivered.
+export async function openSteer(steer, key, claim) {
   if (typeof steer?.sealed !== 'string') return steer;
+  if (await alreadyDone(steer.id)) throw new Error('Follow-up was already delivered');
   const request = await openedJson(key, steer.sealed, 'request');
-  if (request.from !== steer.from) throw new Error('Sealed follow-up sender does not match');
+  if (request.from !== steer.from || request.jobId !== steer.id || request.threadId !== claim?.threadId) {
+    throw new Error('Sealed follow-up does not belong to this run');
+  }
   return { id: steer.id, from: steer.from, text: request.text };
 }
 
-export async function openAttachment(bytes, key) {
-  return Buffer.from(await openForDevice(key, bytes, 'attachment'));
+// `sha256` comes from the job's own sealed request, so another message's
+// attachment can't be swapped in.
+export async function openAttachment(bytes, key, sha256) {
+  const plain = Buffer.from(await openForDevice(key, bytes, 'attachment'));
+  if (createHash('sha256').update(plain).digest('hex') !== sha256) throw new Error('Attachment does not belong to this job');
+  return plain;
 }
 
 async function relay(pathname, init = {}) {

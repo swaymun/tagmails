@@ -31,6 +31,13 @@ account, `STORAGE_KEY` and the D1/R2 data, can't read these:
 - Earlier requests the relay answered itself, and follow-ups sent during a
   run, as they are passed to the computer.
 
+Each sealed request names its job, thread and Message-ID, and the SHA-256 of
+each attachment. The computer opens a claim only if the request is that
+job's own, and never reopens a job or follow-up it already ran
+(`done-jobs` in its data folder). Otherwise someone with write access to R2
+could put old sealed mail into a new job and read it back in the run's
+transcript.
+
 **Read in memory, never stored.**
 
 - Each incoming email, to check DKIM, the sender and the recipients, choose a
@@ -56,8 +63,8 @@ account, `STORAGE_KEY` and the D1/R2 data, can't read these:
   Routing needs these while the computer is offline.
 - Replies the relay writes itself: the "which project?" and model questions,
   and "this thread's computer was revoked".
-- Outbound reply metadata: from, to, cc, attachment names and types, and a
-  salted SHA-256 of the subject (to match provider events).
+- Outbound reply metadata: from, to, cc, and a salted SHA-256 of the subject
+  (to match provider events).
 
 The website and run pages show status and metadata only for sealed runs. The
 content stays on the computer, in the Codex or Claude session.

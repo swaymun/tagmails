@@ -135,7 +135,8 @@ async function claim(env, device, busy = []) {
     if (!sealed) throw new Error('Claimed job has no sealed request');
     const model = row.model_json ? JSON.parse(row.model_json) : chooseModel('', account.default_model);
     envelope = { ...common, sealed: true, model,
-      request: { from: message.sender_email, fromOwner: message.sender_email === account.owner_email, sealed,
+      request: { from: message.sender_email, fromOwner: message.sender_email === account.owner_email,
+        messageId: message.message_id, sealed,
         earlier: await unrunEarlierRequests(env, device, row, message.agent_email ?? account.agent_email, true) } };
   } else {
     const object = await env.MAIL.get(message.object_key);

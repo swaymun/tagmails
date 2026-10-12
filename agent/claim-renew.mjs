@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import { openSteer, readDeviceKey } from './device-key.mjs';
+import { openSteer, readDeviceKey, rememberDone } from './device-key.mjs';
 
 export async function renewClaim(claim) {
   let url = `${(process.env.TAGMAILS_LAB_URL || 'http://127.0.0.1:4177').replace(/\/+$/, '')}/api/renew`;
@@ -25,7 +25,7 @@ export async function renewClaim(claim) {
   const key = steers.some((steer) => typeof steer?.sealed === 'string') ? await readDeviceKey() : null;
   const opened = [];
   for (const steer of steers) {
-    try { opened.push(key ? await openSteer(steer, key) : steer); } catch { /* Re-offered on the next renewal. */ }
+    try { opened.push(key ? await openSteer(steer, key, claim) : steer); } catch { /* Re-offered on the next renewal. */ }
   }
   return { steers: opened };
 }
@@ -101,7 +101,11 @@ export function keepClaim(claim, onLost, { every = Number(process.env.TAGMAILS_C
         // owner-only access); it is handed back to run as its own job.
         const sameSender = typeof steer.from === 'string' && steer.from === claim.request?.from;
         if (!handled.has(steer.id)) {
-          handled.set(steer.id, sameSender ? onSteer(steer).then(Boolean, () => false) : Promise.resolve(false));
+          // A delivered follow-up is remembered so it is never opened again.
+          handled.set(steer.id, sameSender ? onSteer(steer).then(async (delivered) => {
+            if (delivered) await rememberDone(steer.id).catch(() => {});
+            return Boolean(delivered);
+          }, () => false) : Promise.resolve(false));
         }
         await ack(claim, steer.id, await handled.get(steer.id)).catch(() => {});
       }

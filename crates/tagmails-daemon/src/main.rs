@@ -151,7 +151,8 @@ fn agent_result(
         command
             .env("TAGMAILS_RELAY_URL", base)
             .env("TAGMAILS_DEVICE_TOKEN_FILE", token_file)
-            .env("TAGMAILS_DEVICE_KEY_FILE", paths::device_key_file());
+            .env("TAGMAILS_DEVICE_KEY_FILE", paths::device_key_file())
+            .env("TAGMAILS_DONE_JOBS_FILE", paths::done_jobs_file());
     }
     let mut child = command
         .env("TAGMAILS_RUNTIME", runtime)
@@ -228,7 +229,8 @@ fn device_key(args: &[&str], input: Option<&[u8]>, relay: Option<&str>) -> Resul
     command
         .arg(paths::adapters_dir()?.join("device-key.mjs"))
         .args(args)
-        .env("TAGMAILS_DEVICE_KEY_FILE", paths::device_key_file());
+        .env("TAGMAILS_DEVICE_KEY_FILE", paths::device_key_file())
+        .env("TAGMAILS_DONE_JOBS_FILE", paths::done_jobs_file());
     if let Some(base) = relay {
         let token_file = env::var("TAGMAILS_DEVICE_TOKEN_FILE").map(PathBuf::from).unwrap_or_else(|_| paths::token_file());
         command.env("TAGMAILS_RELAY_URL", base).env("TAGMAILS_DEVICE_TOKEN_FILE", token_file);
@@ -1087,11 +1089,30 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
     if completion["completed"] != true {
         return Err("Relay did not acknowledge the completion".into());
     }
+    if sealed {
+        remember_done(&job_id);
+    }
     println!(
         "{job_id}: {} result stored in the relay",
         result["state"].as_str().unwrap_or("unknown")
     );
     Ok(())
+}
+
+/// Records a finished sealed job so the relay can't hand it out again to
+/// replay its mail through a new run (agent/device-key.mjs refuses it).
+fn remember_done(job_id: &str) {
+    let file = paths::done_jobs_file();
+    let mut lines: Vec<String> = fs::read_to_string(&file).unwrap_or_default().lines().map(str::to_owned).collect();
+    if lines.iter().any(|line| line == job_id) {
+        return;
+    }
+    lines.push(job_id.to_owned());
+    let keep = lines.len().saturating_sub(5000);
+    let text = format!("{}\n", lines[keep..].join("\n"));
+    if let Err(error) = file.parent().map_or(Ok(()), |dir| create_private_dir(dir)).and_then(|()| write_private_file(&file, text.as_bytes())) {
+        eprintln!("Could not record finished job {job_id}: {error}");
+    }
 }
 
 /// Posts a completion. For sealed mail the relay sends the reply from this
@@ -1185,9 +1206,16 @@ fn run_relay(settings: &Settings, once: bool, reload: bool) -> Result<(), Box<dy
         // earlier routing session.
         clear_published_projects(&client, settings);
     }
-    if let Err(error) = register_device_key(&client, settings) {
-        eprintln!("Sealing key unavailable; this machine's mail keeps relay-key storage: {error}");
-    }
+    // Until the relay has this machine's key it gets no new work, so keep
+    // retrying (every two minutes) instead of giving up after one failure.
+    let mut key_registered = match register_device_key(&client, settings) {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!("Sealing key not registered yet (retrying): {error}");
+            false
+        }
+    };
+    let mut next_key_attempt = Instant::now() + Duration::from_secs(120);
     let mut settings = settings.clone();
     let mut seen_config = read_config()?;
     let mut config_error: Option<String> = None;
@@ -1247,6 +1275,16 @@ fn run_relay(settings: &Settings, once: bool, reload: bool) -> Result<(), Box<dy
                 }
                 println!("Settings reloaded (Codex {}, Claude {}).", settings.access, settings.claude_permission);
                 seen_config = config;
+            }
+        }
+        if !key_registered && Instant::now() >= next_key_attempt {
+            next_key_attempt = Instant::now() + Duration::from_secs(120);
+            match register_device_key(&client, &settings) {
+                Ok(()) => {
+                    key_registered = true;
+                    println!("Sealing key registered.");
+                }
+                Err(error) => eprintln!("Sealing key not registered yet (retrying): {error}"),
             }
         }
         if Instant::now() >= next_model_probe {

@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
@@ -85,12 +86,14 @@ test('relay attachments use the device token and reject redirects and mismatched
   try { assert.deepEqual(await fs.readFile(`${staged.directory}/attachment-1.txt`), bytes); }
   finally { await staged.cleanup(); }
   assert.equal(downloads, 1);
-  const sealedAttachment = { ...attachment, sealed: true, path: '/api/device/attachment?jobId=job&leaseId=lease&index=1' };
+  const sealedAttachment = { ...attachment, sealed: true, sha256: createHash('sha256').update(bytes).digest('hex'),
+    path: '/api/device/attachment?jobId=job&leaseId=lease&index=1' };
   const opened = await stageAgentAttachments([sealedAttachment], scratch);
   try { assert.deepEqual(await fs.readFile(`${opened.directory}/attachment-1.txt`), bytes); }
   finally { await opened.cleanup(); }
-  // A claim that says sealed never takes unsealed bytes.
+  // A claim that says sealed never takes unsealed bytes, nor another message's attachment.
   await assert.rejects(stageAgentAttachments([{ ...attachment, sealed: true }], scratch));
+  await assert.rejects(stageAgentAttachments([{ ...sealedAttachment, sha256: 'f'.repeat(64) }], scratch), /does not belong/);
   await assert.rejects(stageAgentAttachments([{ ...attachment, size: 1 }], scratch), /does not match/);
   await assert.rejects(stageAgentAttachments([{ ...attachment,
     path: '/api/device/attachment?jobId=redirect' }], scratch), /download failed/);

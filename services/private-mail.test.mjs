@@ -366,7 +366,9 @@ async function sealedRelay() {
     }
     return found;
   };
-  return { env, rawEnv, sqlite, objects, sent, deviceKey, token, device, post, email, claim, leaks };
+  // Where a held reply's sealed copy is (each attempt writes its own object).
+  const heldKey = (jobId) => JSON.parse(sqlite.prepare('SELECT payload_json FROM outbox WHERE job_id = ?').get(jobId).payload_json).heldKey;
+  return { env, rawEnv, sqlite, objects, sent, deviceKey, token, device, post, email, claim, leaks, heldKey };
 }
 
 const SESSION = '0199a3b4-5c6d-7e8f-9a0b-1c2d3e4f5a6b';
@@ -402,7 +404,8 @@ test('a full round trip for a computer with a sealing key leaves no readable mai
   assert.match(opened.request.body, /Secret body ZEBRA/);
   assert.equal(opened.request.fromOwner, true);
   const attachment = await relay.device(opened.request.attachments[0].path);
-  assert.equal((await openAttachment(Buffer.from(await attachment.arrayBuffer()), relay.deviceKey)).toString().trim(), 'Attachment OKAPI notes');
+  assert.equal((await openAttachment(Buffer.from(await attachment.arrayBuffer()), relay.deviceKey,
+    opened.request.attachments[0].sha256)).toString().trim(), 'Attachment OKAPI notes');
 
   // Completion carries the subject and files; the reply goes out from memory.
   const done = await relay.post('/api/device/complete', completion(opened));
@@ -442,7 +445,8 @@ test('a reply that must wait is held sealed to the computer, which alone can rel
   ({ claim } = await relay.claim());
   const opened = await openClaim(claim, relay.deviceKey);
   assert.equal((await relay.post('/api/device/complete', completion(opened))).reply, 'held');
-  const held = relay.objects.get(`outbound/account-1/${opened.jobId}.json`);
+  const heldKey = relay.heldKey(opened.jobId);
+  const held = relay.objects.get(heldKey);
   assert.ok(isDeviceSealed(held));
   assert.deepEqual(relay.leaks(), []);
   assert.equal((await relay.claim()).pendingSends, undefined, 'not its turn yet');
@@ -466,7 +470,7 @@ test('a reply that must wait is held sealed to the computer, which alone can rel
   assert.equal(relay.sent[1].subject, 'Re: Quarterly Falcon plan');
   assert.match(relay.sent[1].text, /Answer GIRAFFE/);
   await purgeSettledOutboundBodies(relay.env);
-  assert.equal(relay.objects.has(`outbound/account-1/${opened.jobId}.json`), false);
+  assert.equal(relay.objects.has(heldKey), false);
   assert.deepEqual(relay.leaks(), []);
 });
 
@@ -493,7 +497,10 @@ test('sealed mail gets the relay\'s own question at intake, and the computer see
   assert.equal(renewed.steers.length, 1);
   assert.equal(renewed.steers[0].text, undefined);
   const { openSteer } = await import('../agent/device-key.mjs');
-  assert.equal((await openSteer(renewed.steers[0], relay.deviceKey)).text, 'Also mention ZEBRA twice.');
+  assert.equal((await openSteer(renewed.steers[0], relay.deviceKey, opened)).text, 'Also mention ZEBRA twice.');
+  // It must be that follow-up's own request, in this run's thread.
+  await assert.rejects(openSteer({ ...renewed.steers[0], id: randomUUID() }, relay.deviceKey, opened), /does not belong/);
+  await assert.rejects(openSteer(renewed.steers[0], relay.deviceKey, { ...opened, threadId: randomUUID() }), /does not belong/);
   assert.deepEqual(relay.leaks(), []);
 });
 
@@ -531,6 +538,7 @@ test('a held reply its computer can no longer open is dropped so the thread move
   ({ claim } = await relay.claim());
   const opened = await openClaim(claim, relay.deviceKey);
   assert.equal((await relay.post('/api/device/complete', completion(opened))).reply, 'held');
+  const heldKey = relay.heldKey(opened.jobId);
   await tendSealedReplies(relay.env);
   assert.equal(relay.sqlite.prepare('SELECT state FROM outbox WHERE job_id = ?').get(opened.jobId).state, 'queued');
   // The computer refuses held replies older than a week; the relay gives up on them too.
@@ -540,10 +548,10 @@ test('a held reply its computer can no longer open is dropped so the thread move
   relay.env.MAIL.delete = async () => { throw new Error('R2 unavailable'); };
   await tendSealedReplies(relay.env);
   assert.equal(relay.sqlite.prepare('SELECT state FROM outbox WHERE job_id = ?').get(opened.jobId).state, 'blocked');
-  assert.equal(relay.objects.has(`outbound/account-1/${opened.jobId}.json`), true);
+  assert.equal(relay.objects.has(heldKey), true);
   relay.env.MAIL.delete = remove;
   await tendSealedReplies(relay.env);
-  assert.equal(relay.objects.has(`outbound/account-1/${opened.jobId}.json`), false);
+  assert.equal(relay.objects.has(heldKey), false);
   assert.equal(relay.sqlite.prepare('SELECT payload_json FROM outbox WHERE job_id = ?').get(opened.jobId).payload_json, null);
 });
 
@@ -611,4 +619,62 @@ test('with sealed storage required, mail for an account without a keyed computer
   assert.match(relay.sent[0].text, /not kept or run/);
   assert.equal(relay.sqlite.prepare('SELECT state FROM jobs').get().state, 'failed');
   assert.deepEqual(relay.leaks(), []);
+});
+
+test('the computer opens only a job\'s own sealed request, and never a job it already ran', async (t) => {
+  const relay = await sealedRelay();
+  const first = await relay.email();
+  const { claim: a } = await relay.claim();
+  const openedA = await openClaim(a, relay.deviceKey);
+  await relay.post('/api/device/complete', completion(openedA));
+  await relay.email({ inReplyTo: first, body: 'Second ZEBRA request.' });
+  const { claim: b } = await relay.claim();
+  // The relay swaps B's stored request for A's: the computer refuses it.
+  await assert.rejects(openClaim({ ...b, request: { ...b.request, sealed: a.request.sealed } }, relay.deviceKey), /does not belong/);
+  await assert.rejects(openClaim({ ...b, request: { ...b.request, messageId: '<other@gmail.com>' } }, relay.deviceKey), /does not belong/);
+  // Re-queuing a job the computer already completed doesn't reopen it.
+  const { default: fs } = await import('node:fs/promises');
+  const os = await import('node:os');
+  const file = `${await fs.mkdtemp(`${os.tmpdir()}/tagmails-done-`)}/done-jobs`;
+  t.after(() => fs.rm(file, { force: true }));
+  const { rememberDone } = await import('../agent/device-key.mjs');
+  await rememberDone(a.jobId, file);
+  const previous = process.env.TAGMAILS_DONE_JOBS_FILE;
+  process.env.TAGMAILS_DONE_JOBS_FILE = file;
+  t.after(() => { if (previous === undefined) delete process.env.TAGMAILS_DONE_JOBS_FILE; else process.env.TAGMAILS_DONE_JOBS_FILE = previous; });
+  await assert.rejects(openClaim(a, relay.deviceKey), /already ran/);
+  assert.equal((await openClaim(b, relay.deviceKey)).request.body, 'Second ZEBRA request.');
+});
+
+test('a sealed follow-up pins an unpinned thread to its computer', async () => {
+  const relay = await sealedRelay();
+  const first = await relay.email();
+  relay.sqlite.prepare('UPDATE threads SET device_id = NULL').run();
+  await relay.email({ inReplyTo: first, body: 'Follow-up ZEBRA.' });
+  assert.equal(relay.sqlite.prepare('SELECT device_id FROM threads').get().device_id, 'device-1');
+});
+
+test('racing attempts to hold the same reply leave one sealed copy that matches its hash', async () => {
+  const relay = await sealedRelay();
+  const first = await relay.email();
+  let { claim } = await relay.claim();
+  await relay.post('/api/device/complete', completion(await openClaim(claim, relay.deviceKey)));
+  relay.sqlite.prepare("UPDATE outbox SET state = 'uncertain'").run();
+  await relay.email({ inReplyTo: first });
+  ({ claim } = await relay.claim());
+  const opened = await openClaim(claim, relay.deviceKey);
+  // The completion holds the reply; undo that hold so two in-memory deliveries race on the row.
+  const body = completion(opened);
+  assert.equal((await relay.post('/api/device/complete', body)).reply, 'held');
+  relay.sqlite.prepare('UPDATE outbox SET payload_json = NULL WHERE job_id = ?').run(opened.jobId);
+  for (const key of [...relay.objects.keys()].filter((key) => key.endsWith('.held'))) relay.objects.delete(key);
+  const { deliverReply } = await import('./outbox.mjs');
+  const material = { result: body.result, subject: body.subject, files: body.files };
+  const states = (await Promise.all([deliverReply(relay.env, opened.jobId, material), deliverReply(relay.env, opened.jobId, material)]))
+    .map((outcome) => outcome.state).sort();
+  assert.deepEqual(states, ['contended', 'held']);
+  const held = [...relay.objects.keys()].filter((key) => key.endsWith('.held'));
+  assert.deepEqual(held, [relay.heldKey(opened.jobId)], 'the losing copy is removed');
+  relay.sqlite.prepare("UPDATE outbox SET state = 'sent' WHERE state = 'uncertain'").run();
+  assert.equal(await sendPendingReplies(relay.deviceKey, { request: (pathname, init = {}) => relay.device(pathname, init) }), 1);
 });

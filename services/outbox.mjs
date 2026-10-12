@@ -450,7 +450,7 @@ export async function purgeSettledOutboundBodies(env) {
       tags: payload.tags,
     };
     try {
-      await env.MAIL.delete(`outbound/${row.account_id}/${row.job_id}.json`);
+      await env.MAIL.delete(payload.heldKey ?? `outbound/${row.account_id}/${row.job_id}.json`);
       const updated = await env.DB.prepare(`UPDATE outbox SET payload_json = ?
         WHERE job_id = ? AND state IN ('accepted', 'sent') AND payload_json = ?`)
         .bind(JSON.stringify(compact), row.job_id, row.payload_json).run();
@@ -487,11 +487,18 @@ const IN_ORDER = `NOT EXISTS (SELECT 1 FROM jobs earlier
 // The stored copy of a reply that will never be sent (relay-key copy or a
 // held reply sealed to the computer). Returns whether it is gone.
 async function deleteOutboundCopy(env, jobId) {
-  const row = await env.DB.prepare(`SELECT t.account_id FROM jobs j JOIN threads t ON t.id = j.thread_id WHERE j.id = ?`)
-    .bind(jobId).first();
+  const row = await env.DB.prepare(`SELECT t.account_id, o.payload_json FROM jobs j JOIN threads t ON t.id = j.thread_id
+    LEFT JOIN outbox o ON o.job_id = j.id WHERE j.id = ?`).bind(jobId).first();
   if (!row) return true;
-  try { await env.MAIL.delete(`outbound/${row.account_id}/${jobId}.json`); return true; }
+  try { await env.MAIL.delete(heldKeyOf(row.payload_json) ?? `outbound/${row.account_id}/${jobId}.json`); return true; }
   catch { console.error('Outbound copy deletion is delayed', jobId); return false; }
+}
+
+// Where a held reply's sealed copy is: each attempt writes its own object
+// and only the one whose key reaches D1 counts, so racing attempts never
+// overwrite the copy the stored hash describes.
+function heldKeyOf(payloadJson) {
+  try { return JSON.parse(payloadJson ?? 'null')?.heldKey ?? null; } catch { return null; }
 }
 
 // Errors a retry can't fix: a failed authenticated decryption, a renderer or
@@ -519,14 +526,15 @@ async function rendered(env, row, material) {
 // until the send settles; a reply for sealed mail keeps nothing but routing
 // metadata and a salted subject hash (a held reply's sealed copy is removed
 // once the send settles).
-async function sendPrepared(env, row, payload, { sendEmail, getSentEmail }, { sealed = false, held = false } = {}) {
+async function sendPrepared(env, row, payload, { sendEmail, getSentEmail }, { sealed = false, heldKey = null } = {}) {
   if (payload.from !== (testSenderFor(env, row.agent_email) ?? row.agent_email.toLowerCase())) {
     throw new Error('Outbox sender does not match its account');
   }
   const { html: _html, text: _text, attachments, ...metadata } = payload;
   const files = attachments ? { attachments: attachments.map(({ filename, contentType }) => ({ filename, contentType })) } : {};
+  // Sealed replies keep no file names either; a held one keeps where its sealed copy is, for cleanup.
   const savedPayload = sealed
-    ? { ...metadata, subject: undefined, subjectHash: subjectHash(row.job_id, payload.subject), ...(held ? { bodyStored: true } : {}), ...files }
+    ? { ...metadata, subject: undefined, subjectHash: subjectHash(row.job_id, payload.subject), ...(heldKey ? { bodyStored: true, heldKey } : {}) }
     : { ...metadata, subject: await sealText(env, payload.subject), bodyStored: true, ...files };
   const claimed = await env.DB.prepare(`UPDATE outbox SET state = 'sending', payload_json = ?, updated_at = CURRENT_TIMESTAMP
     WHERE job_id = ? AND state = 'queued' RETURNING job_id`).bind(JSON.stringify(savedPayload), row.job_id).first();
@@ -547,8 +555,8 @@ async function sendPrepared(env, row, payload, { sendEmail, getSentEmail }, { se
     await env.DB.prepare("UPDATE outbox SET state = 'blocked', payload_json = NULL, updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'sending'")
       .bind(row.job_id).run();
     await releaseTestEmail(env, row.job_id);
-    if (!sealed || held) {
-      try { await env.MAIL.delete(objectKey); }
+    if (!sealed || heldKey) {
+      try { await env.MAIL.delete(heldKey ?? objectKey); }
       catch (error) { console.error('Blocked outbox payload deletion is delayed', error); }
     }
     return { state: 'blocked', jobId: row.job_id };
@@ -640,14 +648,17 @@ export async function deliverReply(env, jobId, material, options = {}) {
     console.error('Sealed reply has no computer to hold it', jobId);
     return blockRow(env, jobId);
   }
-  await env.MAIL.put(`outbound/${row.account_id}/${jobId}.json`, await sealHeldReply(device.publicKey, jobId, payload),
+  const heldKey = `outbound/${row.account_id}/${jobId}.${randomUUID()}.held`;
+  await env.MAIL.put(heldKey, await sealHeldReply(device.publicKey, jobId, payload),
     { httpMetadata: { contentType: 'application/octet-stream' } });
   const { html: _html, text: _text, attachments: _attachments, ...metadata } = payload;
   const saved = { ...metadata, subject: undefined, subjectHash: subjectHash(jobId, payload.subject), bodyStored: true,
-    heldFor: device.keyId, payloadHash: payloadHash(payload) };
+    heldFor: device.keyId, heldKey, payloadHash: payloadHash(payload) };
   const updated = await env.DB.prepare(`UPDATE outbox SET payload_json = ?, updated_at = CURRENT_TIMESTAMP
     WHERE job_id = ? AND state = 'queued' AND payload_json IS NULL RETURNING job_id`).bind(JSON.stringify(saved), jobId).first();
-  return updated ? { state: 'held', jobId } : { state: 'contended' };
+  if (updated) return { state: 'held', jobId };
+  await env.MAIL.delete(heldKey).catch(() => console.error('Losing held copy deletion is delayed', jobId));
+  return { state: 'contended' };
 }
 
 const HELD_FOR = `json_extract(o.payload_json, '$.heldFor')`;
@@ -660,7 +671,7 @@ export async function heldReplies(env, device, limit = 3, withBlobs = true) {
   const replies = [];
   for (const row of rows.results ?? rows) {
     if (!withBlobs) { replies.push({ jobId: row.job_id }); continue; }
-    const object = await env.MAIL.get(`outbound/${row.account_id}/${row.job_id}.json`);
+    const object = await env.MAIL.get(heldKeyOf(row.payload_json) ?? `outbound/${row.account_id}/${row.job_id}.json`);
     if (object) replies.push({ jobId: row.job_id, sealed: base64url(new Uint8Array(await object.arrayBuffer())) });
   }
   return replies;
@@ -677,7 +688,7 @@ export async function sendHeldReply(env, device, jobId, payload, options = {}) {
   if (payloadHash(payload) !== held.payloadHash) return { state: 'mismatch' };
   const waiting = await env.DB.prepare(`SELECT 1 AS waiting FROM jobs j WHERE j.id = ? AND NOT ${IN_ORDER}`).bind(jobId).first();
   if (waiting) return { state: 'waiting' };
-  return sendPrepared(env, row, payload, senders(env, options), { sealed: true, held: true });
+  return sendPrepared(env, row, payload, senders(env, options), { sealed: true, heldKey: held.heldKey ?? `outbound/${row.account_id}/${jobId}.json` });
 }
 
 // Upkeep for sealed mail, which the relay can't read to recover:
@@ -714,7 +725,9 @@ export async function tendSealedReplies(env) {
   const orphaned = `j.created_at <= datetime('now', '-15 minutes') AND m.seal_key_id IS NOT NULL
       AND (j.state = 'queued' OR (j.state = 'running' AND (j.lease_until IS NULL OR j.lease_until <= CURRENT_TIMESTAMP)))
       AND ((j.state = 'queued' AND json_type(j.model_json, '$.error') = 'text') OR NOT EXISTS (SELECT 1 FROM devices d
-        WHERE d.key_id = m.seal_key_id AND d.account_id = m.account_id AND d.revoked_at IS NULL))`;
+        JOIN threads t ON t.id = j.thread_id
+        WHERE d.key_id = m.seal_key_id AND d.account_id = m.account_id AND d.revoked_at IS NULL
+          AND (t.device_id IS NULL OR t.device_id = d.id)))`;
   const orphans = await env.DB.prepare(`SELECT j.id FROM jobs j JOIN messages m ON m.id = j.message_id
     WHERE ${orphaned} LIMIT 10`).bind().all();
   for (const row of orphans.results ?? orphans) {
