@@ -99,11 +99,12 @@ function withParams(target, params) {
   return url.href;
 }
 
-// No scope means every scope. Unknown scopes are ignored; if nothing known is
-// left, the client gets every scope, which the consent page lists.
+// No scope means every scope, which the consent page lists. A request naming
+// a scope TagMails doesn't have is refused rather than widened (null).
 function grantedScope(requested) {
-  const known = String(requested ?? '').split(' ').filter((scope) => MCP_SCOPES.includes(scope));
-  return (known.length ? MCP_SCOPES.filter((scope) => known.includes(scope)) : MCP_SCOPES).join(' ');
+  const asked = String(requested ?? '').split(' ').filter(Boolean);
+  if (asked.some((scope) => !MCP_SCOPES.includes(scope))) return null;
+  return (asked.length ? MCP_SCOPES.filter((scope) => asked.includes(scope)) : MCP_SCOPES).join(' ');
 }
 
 function resourceMatches(request, resource) {
@@ -157,8 +158,9 @@ async function register(request, env) {
     token_endpoint_auth_method: 'none' }, 201, OPEN_CORS);
 }
 
-// Validates an authorization request. `fatal` errors are shown on the page
-// (the redirect can't be trusted); the rest go back to the client.
+// Validates an authorization request. Every error is shown on the page: any
+// site can register a client with its own redirect URI, so redirecting errors
+// would turn tagmails' authorize URL into an open redirect.
 async function authorizationRequest(request, env, params) {
   const clientId = params.get('client_id');
   const client = CLIENT_ID.test(clientId ?? '')
@@ -170,16 +172,16 @@ async function authorizationRequest(request, env, params) {
     return { fatal: 'The return address does not match this app’s registration.' };
   }
   const state = params.get('state');
-  const fail = (error, description) => ({ redirect: withParams(redirectUri, {
-    error, error_description: description, state, iss: originOf(request) }) });
-  if (params.get('response_type') !== 'code') return fail('unsupported_response_type', 'Only the code flow is supported.');
+  const fail = (description) => ({ fatal: description });
+  if (params.get('response_type') !== 'code') return fail('Only the code flow is supported.');
   const challenge = params.get('code_challenge');
   if (params.get('code_challenge_method') !== 'S256' || !/^[A-Za-z0-9_-]{43}$/.test(challenge ?? '')) {
-    return fail('invalid_request', 'PKCE with S256 is required.');
+    return fail('PKCE with S256 is required.');
   }
-  if (!resourceMatches(request, params.get('resource'))) return fail('invalid_target', 'Unknown resource.');
-  return { client: { id: client.id, name: client.name }, redirectUri, challenge, state,
-    scope: grantedScope(params.get('scope')) };
+  if (!resourceMatches(request, params.get('resource'))) return fail('Unknown resource.');
+  const scope = grantedScope(params.get('scope'));
+  if (!scope) return fail('This app asked for a permission TagMails doesn’t have.');
+  return { client: { id: client.id, name: client.name }, redirectUri, challenge, state, scope };
 }
 
 const pageHeaders = (nonce) => ({
@@ -217,11 +219,11 @@ function consentPage(env, auth) {
   const scopes = auth.scope.split(' ');
   const abilities = [
     scopes.includes('tagmails.read') && 'See your agent address, paired computers, balance and runs.',
-    scopes.includes('tagmails.manage') && 'Create pairing codes and $10 top-up links, and disconnect computers.',
+    scopes.includes('tagmails.manage') && 'Create pairing codes and $10 top-up links, and disconnect computers. A computer connected with a pairing code receives your TagMails email and sends the replies until you disconnect it on tagmails.com, even after you remove this app.',
   ].filter(Boolean);
   const body = `<h1>Connect ${escapeHtml(auth.client.name || 'this app')} to TagMails</h1>
 <p>After you sign in, it can:</p><ul>${abilities.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
-<p class="muted">It can’t send email or pay for anything. You’ll go back to <code>${escapeHtml(returnTo)}</code>. Continue only if you just added TagMails there.</p>
+<p class="muted">${scopes.includes('tagmails.manage') ? 'It can’t pay for anything itself.' : 'It can’t send email or pay for anything.'} You’ll go back to <code>${escapeHtml(returnTo)}</code>. Continue only if you just added TagMails there.</p>
 <div id="googleButton"></div><p id="status" role="status"></p>`;
   const script = `<script src="https://accounts.google.com/gsi/client" defer nonce="${nonce}"></script>
 <script nonce="${nonce}" defer>
@@ -254,7 +256,6 @@ async function approve(request, env, verifyIdentity) {
   if (typeof body?.query !== 'string' || body.query.length > 8000) return json({ error: 'Invalid request' }, 400);
   const auth = await authorizationRequest(request, env, new URLSearchParams(body.query));
   if (auth.fatal) return json({ error: auth.fatal }, 400);
-  if (auth.redirect) return json({ redirect: auth.redirect });
   let identity;
   try { identity = await verifyIdentity(body.credential, env.GOOGLE_CLIENT_ID); }
   catch { return json({ error: 'Google sign-in failed. Try again.' }, 401); }
@@ -343,10 +344,11 @@ async function refreshTokens(env, params) {
         WHERE g.revoked_at IS NULL AND a.active = 1)
     RETURNING grant_id`).bind(hash(token)).first();
   if (!row) {
-    // Refresh tokens rotate. One reused well after its rotation was probably
-    // stolen, so the whole grant ends; a near-simultaneous retry does not.
+    // Refresh tokens rotate, so a spent one presented again means two parties
+    // hold it: the grant ends (RFC 9700 4.14.2). A client that only retried
+    // signs in again; a thief who refreshed first keeps nothing.
     const reused = await env.DB.prepare(`SELECT grant_id FROM mcp_tokens WHERE token_hash = ? AND kind = 'refresh'
-      AND used_at < datetime('now', '-60 seconds')`).bind(hash(token)).first();
+      AND used_at IS NOT NULL`).bind(hash(token)).first();
     if (reused) await revokeGrant(env, reused.grant_id);
     return null;
   }
@@ -441,7 +443,6 @@ export async function handleOAuthRequest(request, env, { verifyIdentity = verify
     if (request.method !== 'GET') return new Response('Not found', { status: 404 });
     const auth = await authorizationRequest(request, env, new URL(request.url).searchParams);
     if (auth.fatal) return errorPage(auth.fatal);
-    if (auth.redirect) return Response.redirect(auth.redirect, 302);
     return consentPage(env, auth);
   }
   if (request.method !== 'POST') return new Response('Not found', { status: 404 });

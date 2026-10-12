@@ -199,9 +199,15 @@ test('registration and authorization accept only safe, registered return address
   assert.equal(elsewhere.headers.get('location'), null);
   const otherPort = await approve(env, authorizeQuery(client.client_id, challenge, { redirect_uri: 'http://localhost:50000/callback' }));
   assert.match((await otherPort.json()).redirect, /^http:\/\/localhost:50000\/callback\?code=/, 'loopback may use any port');
-  const noPkce = await relay.fetch(new Request(`${ORIGIN}/oauth/authorize${authorizeQuery(client.client_id, 'short')}`), env);
-  assert.equal(noPkce.status, 302);
-  assert.equal(new URL(noPkce.headers.get('location')).searchParams.get('error'), 'invalid_request');
+  // Errors stay on TagMails' page: anyone can register a client, so redirecting them would be an open redirect.
+  for (const [query, message] of [[authorizeQuery(client.client_id, 'short'), /PKCE/],
+    [authorizeQuery(client.client_id, challenge, { response_type: 'token' }), /code flow/],
+    [authorizeQuery(client.client_id, challenge, { scope: 'tagmails.reed' }), /permission TagMails doesn/]]) {
+    const refused = await relay.fetch(new Request(`${ORIGIN}/oauth/authorize${query}`), env);
+    assert.equal(refused.status, 400, query);
+    assert.equal(refused.headers.get('location'), null);
+    assert.match(await refused.text(), message);
+  }
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM mcp_auth_codes').get().n, 1);
 });
 
@@ -228,13 +234,12 @@ test('refresh tokens rotate, a stale reuse ends the grant, and revocation ends i
   const fresh = await connect(env);
   const one = await (await refresh(fresh.tokens.refresh_token, fresh.client.client_id)).json();
   assert.match(one.access_token, /^tm_mcp_/);
-  assert.equal((await refresh(fresh.tokens.refresh_token, fresh.client.client_id)).status, 400, 'a quick retry is refused');
-  assert.equal((await mcp(env, one.access_token, 'tools/list')).response.status, 200, '…without ending the grant');
   const two = await (await refresh(one.refresh_token, fresh.client.client_id)).json();
   assert.match(two.refresh_token, /^tm_mcr_/, 'the rotated token refreshes again');
-  sqlite.prepare("UPDATE mcp_tokens SET used_at = datetime('now', '-5 minutes') WHERE used_at IS NOT NULL").run();
-  assert.equal((await refresh(fresh.tokens.refresh_token, fresh.client.client_id)).status, 400);
-  assert.equal((await mcp(env, one.access_token, 'tools/list')).response.status, 401, 'a stale reuse revokes the grant');
+  // A spent token presented again, even seconds later, means two holders: whoever refreshed first may be a thief.
+  assert.equal((await refresh(one.refresh_token, fresh.client.client_id)).status, 400);
+  assert.equal((await mcp(env, two.access_token, 'tools/list')).response.status, 401, 'reuse revokes the grant');
+  assert.equal((await refresh(two.refresh_token, fresh.client.client_id)).status, 400, 'the latest refresh token is dead too');
 
   const revoked = await connect(env);
   assert.equal((await oauth(env, '/oauth/revoke', form({ token: revoked.tokens.refresh_token }))).status, 200);
