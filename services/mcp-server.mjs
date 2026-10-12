@@ -5,6 +5,7 @@ import { billingLive, emailPriceMillicents, testBillingEnabled, testWalletSnapsh
 import { selectedModelStatus } from './model-route.mjs';
 import { selectedRunArtifacts } from './run-artifacts.mjs';
 import { openText } from './storage-crypto.mjs';
+import { isDeviceSealed } from '../agent/device-seal.mjs';
 import { MCP_SCOPES, mcpGrantFor, OPEN_CORS, resourceMetadataUrl } from './mcp-oauth.mjs';
 import { rateLimited, rateLimitedKey, tooManyRequests } from './rate-limit.mjs';
 
@@ -173,7 +174,10 @@ async function storedResult(env, key) {
   try {
     const object = await env.MAIL.get(key);
     if (!object) return { status: 'expired', value: null };
-    const value = JSON.parse(new TextDecoder().decode(await object.arrayBuffer()));
+    const bytes = new Uint8Array(await object.arrayBuffer());
+    // Sealed to the owner's computer (services/device-sealing.mjs): only status metadata is readable.
+    if (isDeviceSealed(bytes)) return { status: 'sealed', value: null };
+    const value = JSON.parse(new TextDecoder().decode(bytes));
     return value && typeof value === 'object' && !Array.isArray(value)
       ? { status: 'available', value } : { status: 'unreadable', value: null };
   } catch { return { status: 'unreadable', value: null }; }
@@ -181,10 +185,14 @@ async function storedResult(env, key) {
 
 const text = (value, max) => typeof value === 'string' ? value.slice(0, max) : null;
 
+function resultMeta(value) {
+  try { return JSON.parse(value ?? 'null'); } catch { return null; }
+}
+
 async function run(env, ctx, args) {
   if (!UUID.test(String(args.runId ?? ''))) throw new ToolError('runId must be a run id from runs or status.');
   const row = await env.DB.prepare(`SELECT j.id, j.thread_id, j.state, j.attempts, j.created_at, j.result_key, j.model_json,
-    j.workspace_json, t.subject, m.sender_email, o.state AS delivery_state, o.provider_email_id
+    j.workspace_json, j.result_meta_json, t.subject, m.sender_email, o.state AS delivery_state, o.provider_email_id
     FROM jobs j JOIN threads t ON t.id = j.thread_id JOIN messages m ON m.id = j.message_id
     LEFT JOIN outbox o ON o.job_id = j.id
     WHERE j.id = ? AND t.account_id = ? LIMIT 1`).bind(args.runId, ctx.account.id).first();
@@ -206,7 +214,8 @@ async function run(env, ctx, args) {
     model: selectedModelStatus(row.model_json),
     delivery: { state: row.delivery_state ?? null, recipients: (recipients.results ?? recipients)
       .map((item) => ({ email: item.recipient_email, status: item.status })) },
-    result: { status: stored.status, outcome: text(result?.state, 40), summary: text(result?.summary, 4000),
+    result: { status: stored.status, outcome: text(result?.state ?? resultMeta(row.result_meta_json)?.state, 40),
+      summary: text(result?.summary, 4000),
       answer, answerTruncated: typeof result?.answer === 'string' && result.answer.length > 20_000,
       details: text(result?.details, 4000),
       checks: Array.isArray(result?.checks) ? result.checks.filter((check) => typeof check === 'string').slice(0, 20) : [] },

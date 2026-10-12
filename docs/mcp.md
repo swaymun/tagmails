@@ -18,7 +18,7 @@ The client opens a TagMails page that asks you to sign in with Google: the same 
 | --- | --- |
 | `status` | Agent address, paired computers and last check-in, balance and price, 5 recent runs, connected apps |
 | `pair` | One-time pairing code (10 minutes) plus the exact install, `tagmails pair` and `tagmails start` commands and the site's setup prompt. Run them on the computer that should do the work. Adds `--relay` for a self-hosted relay. |
-| `runs`, `run` | Recent runs; one run's receipt. The agent's summary and answer appear only while the relay can read the stored result (`result.status` is `available`, `none`, `expired` or `unreadable`). |
+| `runs`, `run` | Recent runs; one run's receipt. The agent's summary and answer appear only while the relay can read the stored result (`result.status` is `available`, `none`, `expired`, `unreadable`, or `sealed` when it is sealed to the owner's computer; then only `outcome` is shown). |
 | `billing` | Balance and a Stripe Checkout link for a $10 top-up. The tool never charges anything. |
 | `revoke_device` | Disconnect a paired computer; its queued and running jobs fail. |
 | `disconnect` | Revoke this app's access (or another connected app's, by id from `status`). |

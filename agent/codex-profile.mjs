@@ -103,9 +103,13 @@ function gitDir(workspace) {
 }
 
 
-export function deviceTokenFiles(env = process.env) {
-  const files = [path.join(tagmailsConfigDir(env), 'device-token')];
-  if (env.TAGMAILS_DEVICE_TOKEN_FILE && path.isAbsolute(env.TAGMAILS_DEVICE_TOKEN_FILE)) files.push(env.TAGMAILS_DEVICE_TOKEN_FILE);
+// This computer's TagMails credentials: the device token and the private
+// sealing key that opens the mail the relay stores for it.
+export function deviceSecretFiles(env = process.env) {
+  const files = [path.join(tagmailsConfigDir(env), 'device-token'), path.join(tagmailsConfigDir(env), 'device-key')];
+  for (const name of ['TAGMAILS_DEVICE_TOKEN_FILE', 'TAGMAILS_DEVICE_KEY_FILE']) {
+    if (env[name] && path.isAbsolute(env[name])) files.push(env[name]);
+  }
   return [...new Set(files)];
 }
 
@@ -117,9 +121,9 @@ function profileOverride(profile, access, workspace) {
     // their own folder; permissions and folders in config.json stay read-only.
     const settings = `,${JSON.stringify(path.join(tagmailsConfigDir(), 'email'))}="write"`;
     // The run reads the whole Mac and has network, but never this computer's
-    // TagMails credential: with it a prompt-injected run could claim the
-    // owner's future mail from anywhere.
-    const token = deviceTokenFiles().map((file) => `,${JSON.stringify(file)}="deny"`).join('');
+    // TagMails credentials: with the token a prompt-injected run could claim
+    // the owner's future mail from anywhere, with the key read what's stored.
+    const token = deviceSecretFiles().map((file) => `,${JSON.stringify(file)}="deny"`).join('');
     return `permissions.${profile}={extends=":read-only",filesystem={":root"="read",":tmpdir"="write",":slash_tmp"="write",":workspace_roots"={"."="write",".git"="write"}${repository}${settings}${token}},network={enabled=true}}`;
   }
   return `permissions.${profile}={extends=":read-only",filesystem={":root"="deny",":minimal"="read",":tmpdir"="deny",":slash_tmp"="deny",":workspace_roots"={"."="${access}"}},network={enabled=false}}`;

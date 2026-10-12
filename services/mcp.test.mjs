@@ -288,11 +288,15 @@ test('runs and run cover only this account and tolerate a missing or unreadable 
   addRun(sqlite, { run: run(2), resultKey: 'results/gone.json' });
   addRun(sqlite, { run: run(3), resultKey: 'results/sealed.json' });
   addRun(sqlite, { account: 'account-2', run: run(4), thread: '22222222-2222-4222-8222-222222222222', subject: 'Private' });
+  addRun(sqlite, { run: run(5), resultKey: 'results/device.json' });
+  sqlite.prepare('UPDATE jobs SET result_meta_json = ? WHERE id = ?').run(JSON.stringify({ state: 'completed', runtime: 'codex-app-server-write' }), run(5));
   await env.MAIL.put('results/one.json', JSON.stringify({ state: 'completed', summary: 'Build fixed.', answer: 'Done.', checks: ['npm test'] }));
   await env.MAIL.put('results/sealed.json', 'tmenc:not-json-for-the-relay');
+  const { generateDeviceKey, sealForDevice } = await import('../agent/device-seal.mjs');
+  await env.MAIL.put('results/device.json', await sealForDevice((await generateDeviceKey()).publicKey, JSON.stringify({ answer: 'secret' }), 'result'));
   const { tokens } = await connect(env);
   const listed = (await tool(env, tokens.access_token, 'runs', { limit: 10 })).data.runs;
-  assert.deepEqual(listed.map((item) => item.id).sort(), [run(1), run(2), run(3)]);
+  assert.deepEqual(listed.map((item) => item.id).sort(), [run(1), run(2), run(3), run(5)]);
   assert.equal(listed[0].project, 'wonder');
   const one = (await tool(env, tokens.access_token, 'run', { runId: run(1) })).data;
   assert.deepEqual([one.result.status, one.result.summary, one.result.answer], ['available', 'Build fixed.', 'Done.']);
@@ -303,6 +307,9 @@ test('runs and run cover only this account and tolerate a missing or unreadable 
   assert.equal((await tool(env, tokens.access_token, 'run', { runId: run(2) })).data.result.status, 'expired');
   const sealed = (await tool(env, tokens.access_token, 'run', { runId: run(3) })).data;
   assert.deepEqual([sealed.result.status, sealed.result.summary, sealed.subject], ['unreadable', null, 'Fix the build']);
+  // Sealed to the owner's computer: status and outcome only.
+  const device = (await tool(env, tokens.access_token, 'run', { runId: run(5) })).data;
+  assert.deepEqual([device.result.status, device.result.outcome, device.result.answer], ['sealed', 'completed', null]);
   const foreign = await tool(env, tokens.access_token, 'run', { runId: run(4) });
   assert.equal(foreign.isError, true, "another account's run is not found");
   assert.equal((await tool(env, tokens.access_token, 'runs', { limit: 500 })).isError, true);

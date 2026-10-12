@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { deviceTokenFiles, ownerOverrides, prepareCodexProfile, sameConfig, WRITE_CODEX_CONFIG } from './codex-profile.mjs';
+import { deviceSecretFiles, ownerOverrides, prepareCodexProfile, sameConfig, WRITE_CODEX_CONFIG } from './codex-profile.mjs';
 
 test('the runtime config accepts project trust that Codex records, and nothing else', () => {
   const trusted = `${WRITE_CODEX_CONFIG}\n[projects."/Users/me/code/travel-guides"]\ntrust_level = "trusted"\n`;
@@ -86,7 +86,7 @@ test('owner write turns may change TagMails model defaults, never config.json, a
   } finally { Object.assign(process.env, env); }
 });
 
-test('owner write turns read the whole Mac except the TagMails device token', async (t) => {
+test('owner write turns read the whole Mac except the TagMails device token and sealing key', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tagmails-token-deny-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const env = { ...process.env };
@@ -97,11 +97,12 @@ test('owner write turns read the whole Mac except the TagMails device token', as
   await fs.mkdir(workspace);
   await fs.mkdir(path.join(root, 'config'));
   await fs.mkdir(path.join(root, 'elsewhere'));
-  for (const file of deviceTokenFiles()) await fs.writeFile(file, 'tm_dev_secret\n');
+  for (const file of deviceSecretFiles()) await fs.writeFile(file, 'tm_dev_secret\n');
   await fs.writeFile(path.join(root, 'config', 'config.json'), 'readable\n');
   const write = ownerOverrides('write', workspace).find((value) => value.startsWith('permissions.'));
-  assert.deepEqual(deviceTokenFiles(), [path.join(root, 'config', 'device-token'), path.join(root, 'elsewhere', 'device-token')]);
-  for (const file of deviceTokenFiles()) assert.ok(write.includes(`${JSON.stringify(file)}="deny"`), file);
+  assert.deepEqual(deviceSecretFiles(), [path.join(root, 'config', 'device-token'), path.join(root, 'config', 'device-key'),
+    path.join(root, 'elsewhere', 'device-token')]);
+  for (const file of deviceSecretFiles()) assert.ok(write.includes(`${JSON.stringify(file)}="deny"`), file);
   // The real sandbox, when Codex is installed: the token is unreadable, the rest of the Mac is not.
   const codex = process.env.TAGMAILS_CODEX_BIN || 'codex';
   const home = path.join(root, 'codex-home');
@@ -111,5 +112,5 @@ test('owner write turns read the whole Mac except the TagMails device token', as
   const probe = run(path.join(root, 'config', 'config.json'));
   if (probe.error?.code === 'ENOENT') return t.skip('codex is not installed');
   assert.equal(probe.stdout, 'readable\n', probe.stderr);
-  for (const file of deviceTokenFiles()) assert.doesNotMatch(run(file).stdout, /tm_dev_secret/, file);
+  for (const file of deviceSecretFiles()) assert.doesNotMatch(run(file).stdout, /tm_dev_secret/, file);
 });
