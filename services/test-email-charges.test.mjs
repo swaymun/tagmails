@@ -7,7 +7,7 @@ import { handleDeviceRequest } from './device-jobs.mjs';
 import { handleAccountRequest } from './account-auth.mjs';
 import { recordDeliveryOutcome, sendNextOutbox } from './outbox.mjs';
 import { handleTestWalletRequest } from './billing-wallet.mjs';
-import { FREE_RELAY_REPLIES_PER_DAY, reconcileTestEmailCharges, reservePendingTestEmails, testWalletSnapshot } from './email-charges.mjs';
+import { FREE_RELAY_REPLIES_PER_DAY, fundPendingTestEmails, reconcileTestEmailCharges, reservePendingTestEmails, testWalletSnapshot } from './email-charges.mjs';
 
 function pilot() {
   const fixture = bindings();
@@ -79,6 +79,19 @@ test('pilot credits reserve oldest queued email once, isolate accounts, and gate
   const claimed = await claim(env, token);
   assert.equal(claimed.claimed, true);
   assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM test_email_charges WHERE account_id = ?').get('account-1').n, 1);
+});
+
+test('scheduled funding reaches a paying account behind ten accounts that cannot pay', async () => {
+  const { env, sqlite } = pilot();
+  for (let index = 0; index < 10; index += 1) {
+    sqlite.prepare('INSERT INTO accounts (id, google_sub, owner_email, agent_email) VALUES (?, ?, ?, ?)')
+      .run(`a${index}`, `google-a${index}`, `broke${index}@gmail.com`, `broke${index}@tagmails.test`);
+    await deliver(env, `broke-${index}`, `broke${index}@gmail.com`, { agentAddress: `broke${index}@tagmails.test` });
+  }
+  await deliver(env, 'paying', 'owner@gmail.com');
+  credit(sqlite, 'account-1', 5, 'late');
+  await fundPendingTestEmails(env);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) n FROM test_email_charges WHERE account_id = 'account-1'").get().n, 1);
 });
 
 test('one credit funds the first turn when same-second job IDs sort in reverse order', async () => {
