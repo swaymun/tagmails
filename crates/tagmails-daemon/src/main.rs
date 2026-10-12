@@ -23,16 +23,16 @@ mod service;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_RELAY: &str = "https://relay.tagmails.com";
 
-/// What a relay watcher needs. `workspace: None` means project routing: the
-/// relay picks one of this machine's published projects (or a chat folder)
-/// for each new email thread.
+/// What a relay watcher needs. `workspace: None` means project routing: this
+/// machine picks one of its project folders (or a chat folder) for each new
+/// email thread.
 #[derive(Clone)]
 struct Settings {
     relay: String,
     token: String,
     access: String,
     workspace: Option<PathBuf>,
-    /// "full" shares recent session requests to help routing; "files" does not.
+    /// "full" lets the local router read recent session requests; "files" does not.
     routing_context: String,
     /// Claude Code permission mode: manual, acceptEdits, auto or bypassPermissions.
     claude_permission: String,
@@ -329,9 +329,11 @@ fn publish_model_catalog(
     Ok(())
 }
 
-/// Publish this machine's recent Codex and Claude project folders so the relay
-/// can route a new email to the right one. The local copy is the allow-list a
-/// claim must match before an agent runs in that folder.
+/// Publish this machine's recent Codex and Claude project folders. The relay
+/// gets only each folder's id, name and path, enough to settle a written "work in
+/// /path" and to list names in "which project?". The full local copy (README
+/// excerpts, top-level entries, recent session requests) is what the local router
+/// reads and the allow-list a claim must match before an agent runs in a folder.
 fn publish_project_inventory(
     client: &Client,
     base: &str,
@@ -345,11 +347,19 @@ fn publish_project_inventory(
     let file = paths::projects_file();
     create_private_dir(file.parent().ok_or("Projects file has no folder")?)?;
     write_private_file(&file, &serde_json::to_vec_pretty(&inventory)?)?;
-    let response = relay_post(client, base, "/api/device/projects", token, inventory)?;
+    let response = relay_post(client, base, "/api/device/projects", token, relay_projects(&inventory))?;
     if response["saved"] != true {
         return Err("Relay did not save the project list".into());
     }
     Ok(count)
+}
+
+/// The part of the project inventory the relay keeps (agent/project-routing.mjs relayProjectCatalog).
+fn relay_projects(inventory: &Value) -> Value {
+    let projects: Vec<Value> = inventory["projects"].as_array().map_or_else(Vec::new, |projects| {
+        projects.iter().map(|project| json!({"id": project["id"], "name": project["name"], "path": project["path"]})).collect()
+    });
+    json!({ "projects": projects })
 }
 
 fn create_private_dir(path: &Path) -> Result<(), Box<dyn Error>> {
@@ -1025,7 +1035,12 @@ fn claim_next(client: &Client, settings: &Settings, busy: &[String]) -> Result<O
         Ok(opened) => route_claim(client, settings, opened, busy),
         Err(error) => {
             eprintln!("Sealed email could not be opened: {error}");
-            let result = json!({"runtime":"tagmails-router","state":"failed","summary":"This computer could not open the sealed email. If it was paired again, ask the sender to resend it."});
+            let summary = if error.to_string().contains("older than 30 days") {
+                "This email waited more than 30 days for this computer, so it was not run. Send it again to run it now."
+            } else {
+                "This computer could not open the sealed email. If it was paired again, ask the sender to resend it."
+            };
+            let result = json!({"runtime":"tagmails-router","state":"failed","summary":summary});
             relay_post(client, &settings.relay, "/api/device/complete", token, json!({
                 "jobId": claim["jobId"], "leaseId": claim["leaseId"], "result": result, "subject": "", "files": [],
             }))?;
@@ -1195,6 +1210,11 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
             // participant run never reports them, even if they changed meanwhile.
             let owner = claim["request"]["fromOwner"] == true;
             let instructions = owner.then(owner_instructions).flatten();
+            // The earlier requests this turn carries reach the agent now, so they are
+            // recorded before it starts: even if the completion is lost, none rides along again.
+            for earlier in claim["earlierJobIds"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                remember_done(earlier, false);
+            }
             let mut result = relay_result(&claim, base, access, claude_permission, workspace)?;
             if let Some(note) = owner.then(|| instructions_change_note(&instructions, &owner_instructions())).flatten() {
                 // Its own field, so the reply always shows it (checks can be folded away).
@@ -1337,7 +1357,7 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
         return Err("Relay did not acknowledge the completion".into());
     }
     if sealed {
-        remember_done(&job_id);
+        remember_done(&job_id, routing_reply.is_some());
     }
     println!(
         "{job_id}: {} result stored in the relay",
@@ -1346,20 +1366,83 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
     Ok(())
 }
 
-/// Records a finished sealed job so the relay can't hand it out again to
-/// replay its mail through a new run (agent/device-key.mjs refuses it).
-fn remember_done(job_id: &str) {
-    let file = paths::done_jobs_file();
-    let mut lines: Vec<String> = fs::read_to_string(&file).unwrap_or_default().lines().map(str::to_owned).collect();
-    if lines.iter().any(|line| line == job_id) {
-        return;
-    }
-    lines.push(job_id.to_owned());
-    let keep = lines.len().saturating_sub(5000);
-    let text = format!("{}\n", lines[keep..].join("\n"));
-    if let Err(error) = file.parent().map_or(Ok(()), |dir| create_private_dir(dir)).and_then(|()| write_private_file(&file, text.as_bytes())) {
+/// How long a finished job stays on the done list: longer than this computer
+/// accepts a sealed request (agent/device-key.mjs SEALED_MAX_AGE_MS, 30 days, plus
+/// a day of clock skew), so a re-queued job is refused as already run or as too old.
+const DONE_KEEP_MS: u128 = 31 * 24 * 60 * 60 * 1000;
+/// 2026-11-15T00:00:00Z (device-key.mjs LEGACY_UNTIL): requests sealed without a
+/// seal time open until then, so nothing leaves the list before it.
+const DONE_LEGACY_UNTIL_MS: u128 = 1_794_700_800_000;
+/// One append-only file per week (device-key.mjs DONE_BUCKET_MS).
+const DONE_BUCKET_MS: u128 = 7 * 24 * 60 * 60 * 1000;
+
+fn now_ms() -> u128 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |time| time.as_millis())
+}
+
+/// Records a finished sealed job so the relay can't hand it out again to replay
+/// its mail through a new run (agent/device-key.mjs refuses it). `answered` marks
+/// a job this computer answered without running an agent ("which project?"),
+/// whose request may still ride along as earlier context; a run records the
+/// earlier requests it carries before the agent starts, so none rides along twice.
+fn remember_done(job_id: &str, answered: bool) {
+    if let Err(error) = append_done(&paths::done_jobs_file(), job_id, now_ms(), answered) {
         eprintln!("Could not record finished job {job_id}: {error}");
     }
+}
+
+/// The done list's files: `<file>` (bare ids from before 0.2.30) and `<file>.<week>`.
+fn done_files(file: &Path) -> Vec<(PathBuf, Option<u128>)> {
+    let (Some(dir), Some(base)) = (file.parent(), file.file_name().and_then(|name| name.to_str())) else { return Vec::new() };
+    let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
+    entries.flatten().filter_map(|entry| {
+        let name = entry.file_name().into_string().ok()?;
+        if name == base {
+            return Some((entry.path(), None));
+        }
+        let week = name.strip_prefix(base)?.strip_prefix('.')?;
+        (!week.is_empty() && week.bytes().all(|byte| byte.is_ascii_digit())).then(|| Some((entry.path(), Some(week.parse().ok()?))))?
+    }).collect()
+}
+
+fn append_done(file: &Path, job_id: &str, now: u128, answered: bool) -> Result<(), Box<dyn Error>> {
+    let known = done_files(file).iter().any(|(path, _)| fs::read_to_string(path).unwrap_or_default().lines().any(|line| {
+        let mut parts = line.split(' ');
+        parts.next() == Some(job_id) && (answered || parts.nth(1) != Some("answered"))
+    }));
+    if known {
+        return Ok(());
+    }
+    if let Some(dir) = file.parent() {
+        create_private_dir(dir)?;
+    }
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let bucket = file.with_file_name(format!("{}.{}", file.file_name().and_then(|name| name.to_str()).unwrap_or("done-jobs"), now / DONE_BUCKET_MS));
+    options.open(bucket)?.write_all(format!("{job_id} {now}{}\n", if answered { " answered" } else { "" }).as_bytes())?;
+    Ok(())
+}
+
+/// Deletes each week of the done list once all of it is older than DONE_KEEP_MS,
+/// and the pre-0.2.30 file once it was last written that long ago; nothing before
+/// DONE_LEGACY_UNTIL_MS. Files are only ever appended to or deleted whole, so an
+/// entry another process appends at the same time can't be lost.
+fn prune_done(file: &Path, now: u128) -> Result<(), Box<dyn Error>> {
+    if now < DONE_LEGACY_UNTIL_MS {
+        return Ok(());
+    }
+    for (path, week) in done_files(file) {
+        let last_written = match week {
+            Some(week) => (week + 1) * DONE_BUCKET_MS,
+            None => fs::metadata(&path)?.modified()?.duration_since(std::time::UNIX_EPOCH)?.as_millis(),
+        };
+        if now.saturating_sub(last_written) > DONE_KEEP_MS {
+            fs::remove_file(&path)?;
+        }
+    }
+    Ok(())
 }
 
 /// Posts a completion. For sealed mail the relay sends the reply from this
@@ -1470,6 +1553,7 @@ fn run_relay(settings: &Settings, once: bool, reload: bool) -> Result<(), Box<dy
     let mut seen_defaults = (effective_defaults(&seen_config), reactions_choice());
     let mut next_model_probe = Instant::now();
     let mut next_project_probe = Instant::now();
+    let mut next_done_prune = Instant::now();
     let push = (!once).then(|| push::Push::start(&settings.relay, &settings.token));
     // Jobs run in parallel across threads and folders (the relay keeps each
     // thread in order and skips folders named busy). A pinned workspace runs one at a time.
@@ -1571,6 +1655,12 @@ fn run_relay(settings: &Settings, once: bool, reload: bool) -> Result<(), Box<dy
         while let Ok(finished) = done_receiver.try_recv() {
             running.remove(&finished);
         }
+        if Instant::now() >= next_done_prune {
+            next_done_prune = Instant::now() + Duration::from_secs(3600);
+            if let Err(error) = prune_done(&paths::done_jobs_file(), now_ms()) {
+                eprintln!("Could not prune the finished-jobs list: {error}");
+            }
+        }
         let mut claimed = false;
         if running.len() < max_jobs(&settings) {
             let busy: Vec<String> = running.values().flatten().cloned().collect();
@@ -1612,6 +1702,54 @@ fn run_relay(settings: &Settings, once: bool, reload: bool) -> Result<(), Box<dy
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_relay_gets_only_project_names_and_paths() {
+        let inventory = serde_json::json!({"projects": [{"id": "p_0123456789", "name": "pupcal", "path": "/Users/me/code/pupcal",
+            "description": "Calendar app", "topLevel": ["src"], "recentRequests": ["Draft the offer letter"], "lastActiveDaysAgo": 2}]});
+        assert_eq!(super::relay_projects(&inventory),
+            serde_json::json!({"projects": [{"id": "p_0123456789", "name": "pupcal", "path": "/Users/me/code/pupcal"}]}));
+    }
+
+    // A re-queued job stays refused however many jobs ran since: weeks of the list
+    // are deleted only once older than the 30 days (plus a day) a sealed request can
+    // be opened, never before the legacy cutoff, and nothing is ever rewritten.
+    #[test]
+    fn finished_jobs_are_kept_by_age_not_count() {
+        use super::{append_done, done_files, prune_done, DONE_BUCKET_MS, DONE_KEEP_MS, DONE_LEGACY_UNTIL_MS};
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("tagmails-done-test-{nonce}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("done-jobs");
+        let legacy = "00000000-0000-4000-8000-000000000000";
+        std::fs::write(&file, format!("{legacy}\n")).unwrap();
+        let start = DONE_LEGACY_UNTIL_MS - 1000;
+        let first = "11111111-1111-4111-8111-111111111111";
+        append_done(&file, first, start, true).unwrap();
+        let many: String = (0..6000u32).map(|index| format!("{index:08x}-3333-4333-8333-333333333333 {start}\n")).collect();
+        let bucket = root.join(format!("done-jobs.{}", start / DONE_BUCKET_MS));
+        std::fs::OpenOptions::new().append(true).open(&bucket).unwrap().write_all(many.as_bytes()).unwrap();
+        let all = || done_files(&file).iter().map(|(path, _)| std::fs::read_to_string(path).unwrap()).collect::<String>();
+        // An answered job is recorded once more when an agent later runs its request, then never again.
+        append_done(&file, first, start + 5, false).unwrap();
+        append_done(&file, first, start + 6, false).unwrap();
+        append_done(&file, first, start + 7, true).unwrap();
+        assert_eq!(all().matches(first).count(), 2);
+        assert!(all().lines().count() > 6000);
+        // Before the cutoff, and within the keep period after a week ends, nothing goes.
+        prune_done(&file, start).unwrap();
+        assert!(all().contains(legacy));
+        let week_end = (start / DONE_BUCKET_MS + 1) * DONE_BUCKET_MS;
+        prune_done(&file, week_end + DONE_KEEP_MS).unwrap();
+        assert!(all().contains(first));
+        // After it, the week goes whole: a job that old can no longer be opened.
+        let later = "44444444-4444-4444-8444-444444444444";
+        append_done(&file, later, week_end + DONE_KEEP_MS, false).unwrap();
+        prune_done(&file, week_end + DONE_KEEP_MS + 1).unwrap();
+        assert!(!all().contains(first));
+        assert!(all().contains(later));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     #[test]
     fn chat_folders_use_a_short_subject_name() {
         assert_eq!(chat_slug("Re: Travel guide scripts!"), "re-travel-guide-scripts");
@@ -2170,9 +2308,10 @@ terminal. --instructions are standing instructions every one of your emails foll
 
 `tagmails pair` with no code prints a link to approve it (https://tagmails.com/connect for the hosted service). By default Tagmails picks one of
 your recent Codex or Claude project folders for each new email (--projects). Use
---workspace to pin every email to one folder instead. To pick the folder, Tagmails
-shares each project's name, README excerpt, top-level files and, with the default
---routing-context full, the first line of your last few sessions there.";
+--workspace to pin every email to one folder instead. The folder is picked on this
+computer from each project's name, README excerpt, top-level files and, with the
+default --routing-context full, the first line of your last few sessions there; the
+relay gets only each project's name and path.";
 
 fn option(args: &[String], name: &str) -> Result<Option<String>, Box<dyn Error>> {
     match args.iter().position(|arg| arg == name) {

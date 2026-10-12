@@ -20,4 +20,4 @@ A new project folder becomes routable once a Codex project or Claude Code sessio
 | the first line (160 characters) of your last 3 sessions there | Codex and Claude Code session history; emails, keys and your home path are redacted | `--routing-context full` (the default) |
 | days since last active | session timestamps | always |
 
-The list is also sent to the relay, encrypted with the relay's own key (see [email-privacy.md](email-privacy.md#what-the-operator-can-read)). `tagmails start --routing-context files` keeps session history on the computer; `--workspace PATH` lists nothing.
+The list stays on the computer, which reads it to choose. The relay gets only each project's name and path, encrypted with the relay's own key, to settle an explicit path and name projects in "which project?" (see [email-privacy.md](email-privacy.md#what-the-operator-can-read)). `tagmails start --routing-context files` leaves session history out of the choice; `--workspace PATH` lists nothing.

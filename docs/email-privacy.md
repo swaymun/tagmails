@@ -15,7 +15,7 @@ The operator, or anyone holding the Cloudflare account, the Worker's `STORAGE_KE
 - A reply that has to wait for an earlier one in its thread. It is held sealed to the computer, which opens it and hands it back when its turn comes, only for the job it names and only within 7 days.
 - Earlier requests the relay answered itself, and follow-ups sent during a run, as they are passed to the computer.
 
-Each sealed request names its job, thread and Message-ID, and the SHA-256 of each attachment. The computer opens a claim only if the request is that job's own, and refuses jobs it has recently run (it remembers the last 5,000), so someone with write access to storage can't easily replay old sealed mail into a new job to read it back.
+Each sealed request names its job, thread and Message-ID, the SHA-256 of each attachment, and when it was sealed. The computer opens a claim only if the request is that job's own, refuses requests sealed more than 30 days ago, and remembers every job and follow-up it ran for 31 days, so someone with write access to storage can't replay old sealed mail into a new job, or re-queue an old one, to read it back. Requests sealed before seal times existed open only until November 15, 2026. A request the computer only answered ("which project?") rides along with the sender's reply; one an agent already ran never does.
 
 When no paired computer has a key (none paired yet, or all revoked), an email is read in memory, answered with "no computer is connected, send it again", and not stored.
 
@@ -33,7 +33,7 @@ Choosing the model, the project folder and whether a mid-run follow-up joins the
 - Timestamps, job states, attempts, delivery status and billing records.
 - The selected model and effort, and the chosen project folder (name and path).
 - The run's outcome, runtime and Codex/Claude session id, for status pages and "Open in Codex/Claude" links.
-- Your computer's model list and project list. The project list holds each folder's name, path, branch, aliases, a README excerpt and its top-level entries, and with the default `--routing-context full`, the first line of your last three sessions there (emails, keys and your home path are redacted). It is encrypted with the relay's own `STORAGE_KEY`, which the operator holds. `tagmails start --routing-context files` keeps session history on your computer; `--workspace PATH` publishes no list at all.
+- Your computer's model list and project list. The project list holds only each folder's name and path, enough to settle a written "work in /path" and to name projects when asking which one. From Tagmails 0.2.30, README excerpts, top-level entries and session history stay on your computer, where the folder is chosen; an older computer still sends them, and the relay drops them without storing them. It is encrypted with the relay's own `STORAGE_KEY`, which the operator holds. `--workspace PATH` publishes no list at all.
 - Replies the relay writes itself ("which project?", model questions, "this thread's computer was revoked"), also under `STORAGE_KEY`.
 - Outbound reply metadata: from, to, cc, and a salted SHA-256 of the subject.
 

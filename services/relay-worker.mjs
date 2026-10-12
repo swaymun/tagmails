@@ -3,7 +3,7 @@ import { Resend } from 'resend';
 import { inspectCloudflareInbound } from './cloudflare-mail.mjs';
 import { openText, protectedEnv, sealText } from './storage-crypto.mjs';
 import { currentText, prepareModelRoute } from '../agent/routing-model.mjs';
-import { accountProjectCatalog } from './project-route.mjs';
+import { accountProjectCatalog, clearLegacyProjectCatalogs } from './project-route.mjs';
 import { prepareProjectRoute } from '../agent/project-routing.mjs';
 import { inspectResendInbound } from './resend-inbound.mjs';
 import { knownAgentAddresses } from './agent-addresses.mjs';
@@ -483,6 +483,8 @@ export default {
         if (!await failOneAbandonedJob(env)) break;
       }
     } catch { console.error('Abandoned run cleanup is delayed'); }
+    try { await clearLegacyProjectCatalogs(env); }
+    catch { console.error('Project list cleanup is delayed'); }
     try { await deleteExpiredInboundMime(env); }
     catch { console.error('Inbound MIME cleanup is delayed'); }
     try { await deleteExpiredRunResults(env); }

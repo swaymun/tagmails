@@ -4,7 +4,7 @@ import { chooseModel } from '../apps/mock-inbox/model.mjs';
 import { ATTACHABLE_BYTES, testBillingEnabled } from './email-charges.mjs';
 import { ARTIFACT_ID, EMAIL_SAFE_FILE, selectedRunArtifacts, uploadRunArtifact } from './run-artifacts.mjs';
 import { catalogFromDevice, deviceDefaults, deviceLimits } from './model-catalog.mjs';
-import { cleanProjectCatalog } from './project-route.mjs';
+import { relayProjectCatalog } from './project-route.mjs';
 import { sealText } from './storage-crypto.mjs';
 import { attachmentKey, registerDeviceKey, resultMeta, sealedObject, sealedObjectText, storeSealedResult } from './device-sealing.mjs';
 import { deliverReply, heldReplies, sendHeldReply } from './outbox.mjs';
@@ -664,9 +664,10 @@ export async function handleDeviceRequest(request, env) {
   }
   if (url.pathname === '/api/device/projects') {
     let projects;
-    try { projects = cleanProjectCatalog(body?.projects); }
+    // Older daemons still send local routing context (recent requests, README excerpts); it is dropped here, not stored.
+    try { projects = relayProjectCatalog(body?.projects); }
     catch { return json({ error: 'Invalid project list' }, 400); }
-    await env.DB.prepare(`UPDATE devices SET project_catalog_json = ?, project_catalog_at = CURRENT_TIMESTAMP
+    await env.DB.prepare(`UPDATE devices SET project_list_json = ?, project_list_at = CURRENT_TIMESTAMP
       WHERE id = ? AND account_id = ? AND revoked_at IS NULL`)
       .bind(projects.length ? await sealText(env, JSON.stringify(projects)) : null, device.id, device.account_id).run();
     return json({ saved: true, count: projects.length });

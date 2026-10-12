@@ -69,14 +69,16 @@ export function attachmentKey(objectKey, index) { return `${objectKey}.a${index}
 // attachment. The raw MIME itself is not kept. The request names its job,
 // thread and Message-ID and each attachment's SHA-256, so the computer can
 // refuse a stored blob the relay hands it for a different job (which would
-// otherwise let the relay replay old mail through a new run's transcript).
+// otherwise let the relay replay old mail through a new run's transcript), and
+// when it was sealed, so a re-queued old job is refused once it is older than
+// the computer remembers the jobs it ran (agent/device-key.mjs checkSealedAge).
 export async function storeSealedRequest(env, target, objectKey, message, agentAddress, { jobId, threadId }) {
   const parsed = await parseInbound(message.rawMime, agentAddress, {
     verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: true,
   });
   if (parsed.messageId !== message.messageId || parsed.from !== message.from) throw new Error('Inbound mail changed while sealing');
   const attachments = parsed.attachments.slice(0, MAX_ATTACHMENTS);
-  const request = { v: 1, jobId, threadId, from: parsed.from, subject: parsed.subject, body: parsed.body,
+  const request = { v: 1, jobId, threadId, sealedAt: Date.now(), from: parsed.from, subject: parsed.subject, body: parsed.body,
     text: currentText(parsed.body).trim(), messageId: parsed.messageId,
     attachments: attachments.map(({ name, mimeType, size, previewable, data }) => ({ name, mimeType, size, previewable,
       sha256: createHash('sha256').update(Buffer.from(data, 'base64')).digest('hex') })) };

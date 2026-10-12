@@ -194,17 +194,23 @@ test('routing uses the explicit path without asking the classifier', async () =>
   assert.match((await routeProject('Work in /tmp/elsewhere and fix it.', projects, { ask: fail })).ask, /Which project/);
 });
 
-test('a machine project list is sealed at rest, since recent requests quote the owner', async () => {
+test('the relay stores only project ids, names and paths, even from a daemon that sends more', async () => {
   const { env, sqlite } = bindings();
   env.STORAGE_KEY = randomBytes(32).toString('base64');
   const token = device(sqlite);
-  const projects = [{ ...PROJECTS[0], recentRequests: ['Draft the private offer letter for Dana'] }];
+  // What an older daemon still publishes: local routing context with the owner's own prompts.
+  const projects = [{ ...PROJECTS[0], repository: 'tagmails', topLevel: ['services'], lastActiveDaysAgo: 1,
+    recentRequests: ['Draft the private offer letter for Dana'] }];
   assert.deepEqual((await call(env, token, 'projects', { projects })).body, { saved: true, count: 1 });
-  const stored = sqlite.prepare('SELECT project_catalog_json FROM devices').get().project_catalog_json;
+  const stored = sqlite.prepare('SELECT project_list_json FROM devices').get().project_list_json;
   assert.match(stored, /^enc:v1:/);
-  assert.doesNotMatch(stored, /Dana|offer letter/);
-  assert.deepEqual((await accountProjectCatalog(env, 'account-1'))[0].recentRequests, ['Draft the private offer letter for Dana']);
-  // A list saved before sealing still reads until the machine republishes.
-  sqlite.prepare('UPDATE devices SET project_catalog_json = ?').run(JSON.stringify(projects));
-  assert.equal((await accountProjectCatalog(env, 'account-1'))[0].path, PROJECTS[0].path);
+  const { openText, sealText } = await import('./storage-crypto.mjs');
+  assert.deepEqual(JSON.parse(await openText(env, stored)), [{ id: PROJECTS[0].id, name: PROJECTS[0].name, path: PROJECTS[0].path }]);
+  // A full list an older Worker stores in the old columns (while this one deploys, or after a
+  // rollback) is never read, and the scheduled cleanup drops it.
+  const { clearLegacyProjectCatalogs } = await import('./project-route.mjs');
+  sqlite.prepare("UPDATE devices SET project_catalog_json = ?, project_catalog_at = CURRENT_TIMESTAMP").run(await sealText(env, JSON.stringify(projects)));
+  assert.deepEqual(await accountProjectCatalog(env, 'account-1'), [{ id: PROJECTS[0].id, name: PROJECTS[0].name, path: PROJECTS[0].path }]);
+  await clearLegacyProjectCatalogs(env);
+  assert.equal(sqlite.prepare('SELECT project_catalog_json FROM devices').get().project_catalog_json, null);
 });

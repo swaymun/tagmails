@@ -11,8 +11,8 @@ import { purgeSettledOutboundBodies, sendNextOutbox, tendSealedReplies } from '.
 import { handleDeviceRequest } from './device-jobs.mjs';
 import { readStoredResult } from './device-sealing.mjs';
 import { decryptBytes } from './storage-crypto.mjs';
-import { base64url, generateDeviceKey, isDeviceSealed, openForDevice } from '../agent/device-seal.mjs';
-import { openAttachment, openClaim, sendPendingReplies } from '../agent/device-key.mjs';
+import { base64url, generateDeviceKey, isDeviceSealed, openForDevice, sealForDevice } from '../agent/device-seal.mjs';
+import { LEGACY_UNTIL, SEALED_MAX_AGE_MS, doneBucket, openAttachment, openClaim, rememberDone, sendPendingReplies } from '../agent/device-key.mjs';
 
 const KEY = randomBytes(32).toString('base64');
 
@@ -649,6 +649,51 @@ test('the computer opens only a job\'s own sealed request, and never a job it al
   t.after(() => { if (previous === undefined) delete process.env.TAGMAILS_DONE_JOBS_FILE; else process.env.TAGMAILS_DONE_JOBS_FILE = previous; });
   await assert.rejects(openClaim(a, relay.deviceKey), /already ran/);
   assert.equal((await openClaim(b, relay.deviceKey)).request.body, 'Second ZEBRA request.');
+});
+
+// Someone with write access to storage and the job table re-queues an old job, or
+// hands a new job an old job's blob, to run old mail again and read the answer.
+// The guard must not lapse after the computer has run some number of other jobs.
+test('old sealed mail stays refused after more than 5,000 later jobs, and once too old to open', async (t) => {
+  const relay = await sealedRelay();
+  const first = await relay.email();
+  const { claim: a } = await relay.claim();
+  await relay.post('/api/device/complete', completion(await openClaim(a, relay.deviceKey)));
+  await relay.email({ inReplyTo: first, body: 'Second ZEBRA request.' });
+  const { claim: b } = await relay.claim();
+  const { default: fs } = await import('node:fs/promises');
+  const os = await import('node:os');
+  const dir = await fs.mkdtemp(`${os.tmpdir()}/tagmails-done-`);
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const file = `${dir}/done-jobs`;
+  await rememberDone(a.jobId, file);
+  const later = Array.from({ length: 6000 }, () => `${randomUUID()} ${Date.now()}\n`).join('');
+  await fs.appendFile(doneBucket(file), later);
+  await rememberDone(randomUUID(), file);
+  const previous = process.env.TAGMAILS_DONE_JOBS_FILE;
+  process.env.TAGMAILS_DONE_JOBS_FILE = file;
+  t.after(() => { if (previous === undefined) delete process.env.TAGMAILS_DONE_JOBS_FILE; else process.env.TAGMAILS_DONE_JOBS_FILE = previous; });
+  await assert.rejects(openClaim(a, relay.deviceKey), /already ran/);
+  await assert.rejects(openClaim({ ...b, request: { ...b.request, sealed: a.request.sealed } }, relay.deviceKey), /does not belong/);
+  assert.equal((await openClaim(b, relay.deviceKey)).request.body, 'Second ZEBRA request.');
+  // Nor does a request an agent already ran ride along as earlier context; one this
+  // computer only answered ("which project?") does, and is recorded once run.
+  const carrying = { ...b, request: { ...b.request, earlier: [{ from: b.request.from, sealed: a.request.sealed }] } };
+  assert.equal((await openClaim(carrying, relay.deviceKey)).request.body, 'Second ZEBRA request.');
+  process.env.TAGMAILS_DONE_JOBS_FILE = `${dir}/answered`;
+  await rememberDone(a.jobId, `${dir}/answered`, Date.now(), { answered: true });
+  const withEarlier = await openClaim(carrying, relay.deviceKey);
+  assert.match(withEarlier.request.body, /Earlier in this thread[\s\S]*The current message:\nSecond ZEBRA request\./);
+  assert.deepEqual(withEarlier.earlierJobIds, [a.jobId]);
+  // With the list gone (or pruned), a request older than the list keeps is refused by its seal time.
+  process.env.TAGMAILS_DONE_JOBS_FILE = `${dir}/empty`;
+  await assert.rejects(openClaim(b, relay.deviceKey, { now: Date.now() + SEALED_MAX_AGE_MS + 60_000 }), /older than 30 days/);
+  // A request sealed before seal times existed (relay 0.2.29) opens only until the legacy cutoff.
+  const legacy = { ...b, request: { ...b.request, sealed: base64url(await sealForDevice(relay.deviceKey.publicKey, JSON.stringify({
+    v: 1, jobId: b.jobId, threadId: b.threadId, from: b.request.from, subject: 'Footer', body: 'Legacy ZEBRA.', text: 'Legacy ZEBRA.',
+    messageId: b.request.messageId, attachments: [] }), 'request')) } };
+  assert.equal((await openClaim(legacy, relay.deviceKey, { now: LEGACY_UNTIL - 1 })).request.body, 'Legacy ZEBRA.');
+  await assert.rejects(openClaim(legacy, relay.deviceKey, { now: LEGACY_UNTIL }), /no seal time/);
 });
 
 test('a sealed follow-up pins an unpinned thread to its computer', async () => {

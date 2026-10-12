@@ -53,23 +53,59 @@ export async function ensureDeviceKey(file) {
   }
 }
 
-// Jobs and follow-ups this computer already ran, one id per line (written by
-// the daemon after each completion and here after each delivered follow-up).
-// A relay that re-offers one (to replay old mail through a new transcript) is refused.
-const DONE_LIMIT = 5000;
+// A sealed request names when the relay sealed it (`sealedAt`, inside the
+// ciphertext, so storage access can't change it). This computer runs none older
+// than SEALED_MAX_AGE_MS, and remembers every job and follow-up it ran for longer
+// than that, so a relay that re-queues an old job (to replay its mail through a
+// new run and read the answer) is refused however many jobs ran since: the job
+// is either still on the list or too old to open. Requests sealed by relays
+// before sealedAt existed are accepted only until LEGACY_UNTIL, and nothing is
+// dropped from the list before then.
+export const SEALED_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+export const DONE_KEEP_MS = SEALED_MAX_AGE_MS + 24 * 60 * 60 * 1000;
+export const LEGACY_UNTIL = Date.parse('2026-11-15T00:00:00Z');
+// A relay clock up to a day ahead of this computer's still opens; DONE_KEEP_MS covers that day.
+const FUTURE_SKEW_MS = 24 * 60 * 60 * 1000;
+// The list is one append-only file per week (`<file>.<week>`), so nothing is ever
+// rewritten: the daemon deletes a whole week once all of it is older than
+// DONE_KEEP_MS (crates/tagmails-daemon prune_done), and an append from another
+// process can't be lost. `<file>` itself holds bare ids from versions before 0.2.30.
+export const DONE_BUCKET_MS = 7 * 24 * 60 * 60 * 1000;
 const doneFile = () => process.env.TAGMAILS_DONE_JOBS_FILE;
+export const doneBucket = (file, now = Date.now()) => `${file}.${Math.floor(now / DONE_BUCKET_MS)}`;
 
-export async function alreadyDone(id, file = doneFile()) {
-  if (!file) return false;
-  const text = await fs.readFile(file, 'utf8').catch(() => '');
-  return text.split('\n').includes(id);
+// Lines are "<id> <ms>" for a job or follow-up an agent ran (or may have), and
+// "<id> <ms> answered" for a job this computer answered without running an agent
+// ("which project?"), whose request may still ride along as earlier context.
+async function doneEntries(file) {
+  const dir = path.dirname(file), base = path.basename(file);
+  const names = (await fs.readdir(dir).catch(() => []))
+    .filter((name) => name === base || (name.startsWith(`${base}.`) && /^\d+$/.test(name.slice(base.length + 1))));
+  const texts = await Promise.all(names.map((name) => fs.readFile(path.join(dir, name), 'utf8').catch(() => '')));
+  return texts.join('\n').split('\n').filter(Boolean).map((line) => line.split(' '));
 }
 
-export async function rememberDone(id, file = doneFile()) {
-  if (!file || !/^[0-9a-f-]{36}$/i.test(id)) return;
-  const lines = (await fs.readFile(file, 'utf8').catch(() => '')).split('\n').filter(Boolean);
-  if (lines.includes(id)) return;
-  await fs.writeFile(file, `${[...lines, id].slice(-DONE_LIMIT).join('\n')}\n`, { mode: 0o600 });
+export async function alreadyDone(id, file = doneFile()) {
+  return Boolean(file) && (await doneEntries(file)).some(([entry]) => entry === id);
+}
+
+export async function alreadyRan(id, file = doneFile()) {
+  return Boolean(file) && (await doneEntries(file)).some(([entry, , flag]) => entry === id && flag !== 'answered');
+}
+
+export async function rememberDone(id, file = doneFile(), now = Date.now(), { answered = false } = {}) {
+  if (!file || !/^[0-9a-f-]{36}$/i.test(id) || await (answered ? alreadyDone : alreadyRan)(id, file)) return;
+  await fs.appendFile(doneBucket(file, now), `${id} ${now}${answered ? ' answered' : ''}\n`, { mode: 0o600 });
+}
+
+// Throws unless a sealed request is young enough to run; `now` is this computer's clock.
+export function checkSealedAge(request, now = Date.now()) {
+  if (request.sealedAt === undefined) {
+    if (now < LEGACY_UNTIL) return;
+    throw new Error('Sealed request has no seal time; ask the sender to resend it');
+  }
+  if (!Number.isSafeInteger(request.sealedAt) || request.sealedAt > now + FUTURE_SKEW_MS) throw new Error('Sealed request has an invalid seal time');
+  if (now - request.sealedAt > SEALED_MAX_AGE_MS) throw new Error('Sealed request is older than 30 days; ask the sender to resend it');
 }
 
 const opened = async (key, value, label) => openForDevice(key, fromBase64url(value), label);
@@ -77,7 +113,7 @@ const openedJson = async (key, value, label) => JSON.parse(new TextDecoder().dec
 
 // Turns a claim whose request is sealed into the plain claim the adapters
 // expect: subject, body (with any earlier unrun requests) and attachment links.
-export async function openClaim(claim, key) {
+export async function openClaim(claim, key, { now = Date.now() } = {}) {
   if (claim?.sealed !== true) return claim;
   const sealed = claim.request ?? {};
   if (await alreadyDone(claim.jobId)) throw new Error('This computer already ran this job');
@@ -88,20 +124,26 @@ export async function openClaim(claim, key) {
       request.threadId !== claim.threadId || (sealed.messageId && request.messageId !== sealed.messageId)) {
     throw new Error('Sealed request does not belong to this job');
   }
+  checkSealedAge(request, now);
   const earlier = [];
   for (const item of Array.isArray(sealed.earlier) ? sealed.earlier : []) {
     if (typeof item?.text === 'string') { earlier.push({ from: item.from, text: item.text }); continue; }
     try {
       const opened = await openedJson(key, item.sealed, 'request');
-      if (opened.from === item.from && opened.threadId === claim.threadId && opened.jobId !== claim.jobId && opened.text) {
-        earlier.push({ from: item.from, text: opened.text });
+      checkSealedAge(opened, now);
+      // A request an agent already ran never rides along again: that would replay it.
+      if (opened.from === item.from && opened.threadId === claim.threadId && opened.jobId !== claim.jobId && opened.text &&
+          !await alreadyRan(opened.jobId)) {
+        earlier.push({ from: item.from, text: opened.text, jobId: opened.jobId });
       }
     } catch { /* Skip one that no longer opens. */ }
   }
   const body = earlier.length ? `${earlier.map((item) =>
     `Earlier in this thread, ${item.from} wrote (the relay replied without running an agent):\n${item.text}`).join('\n\n')}\n\nThe current message:\n${request.body}` : request.body;
   const { sealed: _sealed, earlier: _earlier, ...plain } = sealed;
-  return { ...claim, request: { ...plain, subject: request.subject, body,
+  // The daemon records these as run once the agent has had them (not when only routing answered).
+  const earlierJobIds = earlier.map((item) => item.jobId).filter(Boolean);
+  return { ...claim, ...(earlierJobIds.length ? { earlierJobIds } : {}), request: { ...plain, subject: request.subject, body,
     attachments: request.attachments.slice(0, 5).map((attachment, index) => ({
       name: attachment.name, mimeType: attachment.mimeType, size: attachment.size, previewable: attachment.previewable,
       sha256: attachment.sha256, sealed: true, path: `/api/device/attachment?jobId=${claim.jobId}&leaseId=${claim.leaseId}&index=${index}` })) } };
@@ -109,13 +151,14 @@ export async function openClaim(claim, key) {
 
 // A follow-up the relay holds sealed arrives as { id, from, sealed }; it must
 // be that follow-up's own request, in the running job's thread, not yet delivered.
-export async function openSteer(steer, key, claim) {
+export async function openSteer(steer, key, claim, { now = Date.now() } = {}) {
   if (typeof steer?.sealed !== 'string') return steer;
   if (await alreadyDone(steer.id)) throw new Error('Follow-up was already delivered');
   const request = await openedJson(key, steer.sealed, 'request');
   if (request.from !== steer.from || request.jobId !== steer.id || request.threadId !== claim?.threadId) {
     throw new Error('Sealed follow-up does not belong to this run');
   }
+  checkSealedAge(request, now);
   return { id: steer.id, from: steer.from, text: request.text };
 }
 

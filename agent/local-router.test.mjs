@@ -42,6 +42,18 @@ test('an owner email is routed to the model it asks for and the folder it means'
     .filter((entry) => entry.description).every((entry) => entry.description.length <= 160));
 }));
 
+// The relay no longer receives recent session requests (relayProjectCatalog); the
+// folder question asked on this computer still reads them from the local inventory.
+test('local folder routing reads the recent requests kept on this computer', quiet(async () => {
+  const seen = [];
+  const local = [{ ...projects[0], recentRequests: ['Tighten the footer spacing'], topLevel: ['services'] }, projects[1]];
+  await routeClaim({ claim: owner('Continue the footer work.'), catalog, projects: local,
+    classifyWith: answering({ folder: 'p_a100000001' }, seen) });
+  const criteria = seen.find((request) => request.questions.folder).questions.folder.criteria;
+  assert.deepEqual(criteria.p_a100000001.recentRequests, ['Tighten the footer spacing']);
+  assert.deepEqual(criteria.p_a100000001.topLevel, ['services']);
+}));
+
 test('an unavailable model is answered, not substituted', quiet(async () => {
   const out = await routeClaim({ claim: owner('Use Gemini for this.'), catalog, projects,
     classifyWith: answering({ route: 'unsupported', folder: 'ad_hoc' }) });
