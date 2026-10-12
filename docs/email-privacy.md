@@ -79,8 +79,8 @@ Provider references: [SES Lambda receive event](https://docs.aws.amazon.com/ses/
   limit is **25 MiB for the entire MIME message**. The current relay permits a
   38 MB raw message with up to 25 MB of decoded attachments, so those limits
   must be lowered together before migration. Cloudflare outbound mail to
-  arbitrary recipients is limited to **5 MiB total**; larger agent files need
-  expiring download links. The 25 MiB outbound exception applies only to
+  arbitrary recipients is limited to **5 MiB total**, so replies attach at
+  most 3.5 MB of files and TagMails hosts nothing larger. The 25 MiB outbound exception applies only to
   verified destination addresses and is not a customer promise.
 - Sending to arbitrary recipients requires Workers Paid. The current included
   allowance is 3,000 sends per month, then $0.35 per 1,000. This is a provider

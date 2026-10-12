@@ -239,21 +239,12 @@ fn publish_model_catalog(
         "models": codex.ok().map(|value| value["models"].clone()).unwrap_or(json!([])),
         "claudeModels": claude.ok().map(|value| value["models"].clone()).unwrap_or(json!([])),
     });
-    // Defaults set with `tagmails start --model/--effort/--speed`. A default
-    // saved on the website overrides them.
-    let config = load_config();
-    let defaults = &config["defaults"];
+    // Defaults set with `tagmails start` or `tagmails set` (--model/--effort/--speed).
+    // A default saved on the website overrides them.
+    let defaults = effective_defaults(&load_config());
     if defaults.is_object() {
-        catalog["defaults"] = defaults.clone();
+        catalog["defaults"] = defaults;
     }
-    // The most this machine allows (write and auto unless raised locally with
-    // --max-access / --max-claude-permission); a website choice is capped here.
-    catalog["limits"] = json!({
-        "access": max_access(&config),
-        "claudePermission": max_claude_permission(&config),
-        "defaultAccess": config["access"].as_str().unwrap_or("read"),
-        "defaultClaudePermission": config["claudePermission"].as_str().unwrap_or("acceptEdits"),
-    });
     let response = relay_post(client, base, "/api/device/models", token, catalog)?;
     if response["saved"] != true {
         return Err("Relay did not save the model catalog".into());
@@ -291,14 +282,26 @@ fn create_private_dir(path: &Path) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Writes through a fresh temporary file, then renames it into place. The
+/// temporary name is unpredictable and created exclusively, so a symlink an
+/// agent planted in a writable folder (config/email) is never followed.
 fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
-    let temporary = path.with_extension("tmp");
+    let parent = path.parent().ok_or("Settings file has no folder")?;
+    if fs::symlink_metadata(parent)?.file_type().is_symlink() {
+        return Err(format!("{} is a symlink; refusing to write settings through it", parent.display()).into());
+    }
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos();
+    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("settings");
+    let temporary = parent.join(format!(".{name}.{}.{nonce:x}.tmp", std::process::id()));
     let mut options = OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     options.mode(0o600);
-    options.open(&temporary)?.write_all(bytes)?;
-    fs::rename(temporary, path)?;
+    let written = options.open(&temporary).and_then(|mut file| file.write_all(bytes));
+    if let Err(error) = written.and_then(|()| fs::rename(&temporary, path)) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
     Ok(())
 }
 
@@ -666,11 +669,10 @@ fn upload_id(lease_id: &str, index: usize) -> String {
     format!("{}{last:02x}", &lease_id[..34])
 }
 
-/// Largest file the relay stores (and so can attach or link); bigger files go to Drive.
-const RELAY_FILE_BYTES: u64 = 95_000_000;
-const DRIVE_FILE_BYTES: u64 = 2_000_000_000;
+/// Most file bytes one reply can carry: the relay sends files in the email itself.
+const EMAIL_FILE_BYTES: u64 = 3_500_000;
 
-/// A file inside the workspace and its size.
+/// A non-empty file inside the workspace and its size.
 fn workspace_file(workspace: &Path, name: &str) -> Result<(PathBuf, u64), Box<dyn Error>> {
     let root = workspace.canonicalize()?;
     let source = root.join(name).canonicalize()?;
@@ -678,56 +680,22 @@ fn workspace_file(workspace: &Path, name: &str) -> Result<(PathBuf, u64), Box<dy
         return Err("Requested file is outside the selected workspace or is not a file".into());
     }
     let size = fs::metadata(&source)?.len();
-    if size == 0 || size > DRIVE_FILE_BYTES {
-        return Err("Requested file is empty or exceeds 2 GB".into());
+    if size == 0 {
+        return Err("Requested file is empty".into());
     }
     Ok((source, size))
 }
 
 fn read_capped(path: &Path, size: u64) -> Result<Vec<u8>, Box<dyn Error>> {
-    if size > RELAY_FILE_BYTES {
-        return Err("File exceeds 95 MB".into());
+    if size > EMAIL_FILE_BYTES {
+        return Err("File exceeds 3.5 MB".into());
     }
     let mut bytes = Vec::new();
-    fs::File::open(path)?.take(RELAY_FILE_BYTES + 1).read_to_end(&mut bytes)?;
+    fs::File::open(path)?.take(EMAIL_FILE_BYTES + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 != size {
         return Err("File changed while it was being sent".into());
     }
     Ok(bytes)
-}
-
-/// Streams the file to the owner's Drive through the relay-opened resumable
-/// session, then has the relay confirm and record it. Returns the Drive file ID.
-fn upload_to_drive(
-    client: &Client,
-    base: &str,
-    token: &str,
-    job_id: &str,
-    lease_id: &str,
-    path: &Path,
-    size: u64,
-    mime_type: &str,
-    upload_url: &str,
-) -> Result<String, Box<dyn Error>> {
-    if !upload_url.starts_with("https://www.googleapis.com/upload/drive/") {
-        return Err("Relay returned an unexpected Drive upload URL".into());
-    }
-    let body = reqwest::blocking::Body::sized(fs::File::open(path)?, size);
-    let file: Value = client
-        .put(upload_url)
-        .timeout(Duration::from_secs(120 + size / 250_000))
-        .header("Content-Type", mime_type)
-        .body(body)
-        .send()?
-        .error_for_status()?
-        .json()?;
-    let id = file["id"].as_str().ok_or("Drive returned no file ID")?.to_owned();
-    let recorded = relay_post(client, base, "/api/device/drive-complete", token,
-        json!({"jobId": job_id, "leaseId": lease_id, "fileId": id, "size": size}))?;
-    if recorded["id"] != id.as_str() {
-        return Err("Relay did not record the Drive file".into());
-    }
-    Ok(id)
 }
 
 fn workspace_file_type(name: &str) -> &'static str {
@@ -802,53 +770,10 @@ fn upload_file(
     Ok(())
 }
 
-/// The website's choice when it is within this machine's maximum, otherwise
-/// the machine's own default (from `tagmails start --access ...`), never
-/// above the maximum.
-fn chosen<'a>(choice: Option<&'a str>, default: &'a str, max: &'a str, order: &[&'a str]) -> &'a str {
-    let rank = |value: &str| order.iter().position(|item| *item == value);
-    let top = rank(max).unwrap_or(order.len() - 1);
-    match choice {
-        Some(choice) if rank(choice).is_some_and(|wanted| wanted <= top) => choice,
-        _ if rank(default).is_some_and(|value| value <= top) => default,
-        _ => order[top],
-    }
-}
-
-/// The website can never raise a machine to full access or bypass on its own;
-/// only `tagmails start --max-access full` (or `--access full`) on the machine can.
-const DEFAULT_MAX_ACCESS: &str = "write";
-const DEFAULT_MAX_CLAUDE_PERMISSION: &str = "auto";
-
-fn max_access(config: &Value) -> &str {
-    config["maxAccess"].as_str().filter(|value| ACCESS_ORDER.contains(value)).unwrap_or(DEFAULT_MAX_ACCESS)
-}
-
-fn max_claude_permission(config: &Value) -> &str {
-    config["maxClaudePermission"].as_str().filter(|value| CLAUDE_ORDER.contains(value)).unwrap_or(DEFAULT_MAX_CLAUDE_PERMISSION)
-}
-
-/// A local default above the ceiling raises the ceiling: choosing it on the
-/// machine is the explicit local opt-in. An explicit --max-* flag wins.
-fn raise_ceilings_for_local_defaults(config: &mut Value, explicit_max_access: bool, explicit_max_claude: bool) {
-    let rank = |order: &[&str], value: &str| order.iter().position(|item| *item == value);
-    if !explicit_max_access {
-        let access = config["access"].as_str().unwrap_or("read").to_owned();
-        if rank(&ACCESS_ORDER, &access) > rank(&ACCESS_ORDER, max_access(config)) {
-            config["maxAccess"] = json!(access);
-        }
-    }
-    if !explicit_max_claude {
-        if let Some(permission) = config["claudePermission"].as_str().map(str::to_owned) {
-            if rank(&CLAUDE_ORDER, &permission) > rank(&CLAUDE_ORDER, max_claude_permission(config)) {
-                config["maxClaudePermission"] = json!(permission);
-            }
-        }
-    }
-}
-
-const ACCESS_ORDER: [&str; 3] = ["read", "write", "full"];
-const CLAUDE_ORDER: [&str; 5] = ["readonly", "manual", "acceptEdits", "auto", "bypassPermissions"];
+/// TagMails' recommended permissions, used until `tagmails start --access ...`
+/// or `--claude-permission ...` chooses others. Only the machine sets these.
+const DEFAULT_ACCESS: &str = "write";
+const DEFAULT_CLAUDE_PERMISSION: &str = "auto";
 
 fn relay_iteration(client: &Client, settings: &Settings) -> Result<bool, Box<dyn Error>> {
     match claim_next(client, settings, &[])? {
@@ -885,17 +810,8 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
         .to_owned();
     claim["claimId"] = json!(lease_id);
     claim["claimed"] = json!(true);
-    let config = load_config();
-    let access = chosen(claim["permissions"]["codexAccess"].as_str(), settings.access.as_str(),
-        max_access(&config), &ACCESS_ORDER).to_owned();
-    let access = access.as_str();
-    let claude_permission = chosen(
-        claim["permissions"]["claudePermission"].as_str(),
-        settings.claude_permission.as_str(),
-        max_claude_permission(&config),
-        &CLAUDE_ORDER,
-    )
-    .to_owned();
+    let access = settings.access.as_str();
+    let claude_permission = settings.claude_permission.as_str();
     let file_request = requested_workspace_file(&claim);
     let workspace = job_workspace(settings, &claim);
     let mut result = match (&file_request, &workspace) {
@@ -921,7 +837,7 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
             ) {
                 eprintln!("Status reaction could not be queued: {error}");
             }
-            relay_result(&claim, base, access, &claude_permission, workspace)?
+            relay_result(&claim, base, access, claude_permission, workspace)?
         }
     };
     if result["state"] == "completed" && wants_answer_file(&claim) {
@@ -951,7 +867,6 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
                 }
             }
             let mut ids = Vec::new();
-            let mut drive_ids = Vec::new();
             let mut unsent: Vec<Value> = Vec::new();
             let mut skipped = Vec::new();
             for (name, required) in names {
@@ -962,20 +877,19 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
                 } else {
                     Err("not a simple relative path".into())
                 };
-                // The relay decides: small mail-safe files go through it into the
-                // email; the owner's larger files go straight to their Drive.
+                // The relay decides whether a mail-safe file fits in the email; a
+                // file over the whole reply's budget never does. An older relay
+                // without the route endpoint just takes the upload.
                 let route = file.as_ref().ok().map(|(_, size)| {
+                    if *size > EMAIL_FILE_BYTES {
+                        return json!({"route": "none", "reason": "too-large"});
+                    }
                     relay_post(client, base, "/api/device/file-route", token,
                         json!({"jobId": job_id, "leaseId": lease_id, "name": filename, "mimeType": mime_type, "size": size}))
                         .unwrap_or_else(|_| json!({"route": "relay"}))
                 });
                 let sent: Result<(), Box<dyn Error>> = match (file, route) {
                     (Err(error), _) => Err(error),
-                    (Ok((path, size)), Some(route)) if route["route"] == "drive" => {
-                        upload_to_drive(client, base, token, &job_id, &lease_id, &path, size, mime_type,
-                            route["uploadUrl"].as_str().unwrap_or(""))
-                            .map(|id| drive_ids.push(id))
-                    }
                     (Ok(_), Some(route)) if route["route"] == "none" => {
                         let reason = route["reason"].as_str().unwrap_or("failed").to_owned();
                         unsent.push(json!({"name": filename, "reason": reason}));
@@ -993,10 +907,9 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
                     Err(error) if required => {
                         eprintln!("Requested file could not be exported: {error}");
                         result["state"] = json!("failed");
-                        result["summary"] = json!("The requested file was missing, empty, outside the selected workspace, or too large to send. Files over 3.5 MB need Google Drive connected in TagMails settings.");
+                        result["summary"] = json!("The requested file was missing, empty, outside the selected workspace, or too large to send by email (3.5 MB of files per reply).");
                         result["checks"] = json!(["No file was uploaded. Local edits from this turn may remain."]);
                         ids.clear();
-                        drive_ids.clear();
                         unsent.clear();
                         break;
                     }
@@ -1005,9 +918,6 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
                         skipped.push(name);
                     }
                 }
-            }
-            if !drive_ids.is_empty() {
-                result["driveFileIds"] = json!(drive_ids);
             }
             if !unsent.is_empty() {
                 result["unsentFiles"] = json!(unsent);
@@ -1053,7 +963,17 @@ fn read_token(path: &Path) -> Result<String, Box<dyn Error>> {
     Ok(token.to_owned())
 }
 
-fn run_relay(settings: &Settings, once: bool) -> Result<(), Box<dyn Error>> {
+/// Tell the relay this machine takes no project choices (a pinned workspace).
+fn clear_published_projects(client: &Client, settings: &Settings) {
+    if let Err(error) = relay_post(client, &settings.relay, "/api/device/projects", &settings.token, json!({"projects":[]})) {
+        eprintln!("Could not clear the published project list: {error}");
+    }
+}
+
+/// `reload` re-reads config.json and email/defaults.json before each claim, so
+/// `tagmails start` flags and `tagmails set` apply without a restart. The
+/// legacy environment interface passes false.
+fn run_relay(settings: &Settings, once: bool, reload: bool) -> Result<(), Box<dyn Error>> {
     validate_relay_base(&settings.relay)?;
     if !["read", "write", "full"].contains(&settings.access.as_str()) {
         return Err("Access must be read, write, or full".into());
@@ -1078,39 +998,57 @@ fn run_relay(settings: &Settings, once: bool) -> Result<(), Box<dyn Error>> {
             ),
         }
     }
-    let probe_folder = match &settings.workspace {
-        Some(workspace) => workspace.clone(),
-        None => {
-            create_private_dir(&paths::scratch_dir())?;
-            paths::scratch_dir()
-        }
-    };
+    // Scratch is also the model probe folder after a switch to project routing.
+    create_private_dir(&paths::scratch_dir())?;
     if settings.workspace.is_some() {
         // A pinned machine must not keep receiving project choices from an
         // earlier routing session.
-        if let Err(error) = relay_post(
-            &client,
-            &settings.relay,
-            "/api/device/projects",
-            &settings.token,
-            json!({"projects":[]}),
-        ) {
-            eprintln!("Could not clear the published project list: {error}");
-        }
+        clear_published_projects(&client, settings);
     }
+    let mut settings = settings.clone();
+    let mut seen_config = load_config();
+    let mut seen_defaults = effective_defaults(&seen_config);
     let mut next_model_probe = Instant::now();
     let mut next_project_probe = Instant::now();
     let push = (!once).then(|| push::Push::start(&settings.relay, &settings.token));
     // Jobs run in parallel across threads and folders (the relay keeps each
     // thread in order and skips folders named busy). A pinned workspace runs one at a time.
-    let max_jobs = if settings.workspace.is_some() { 1 } else {
+    let max_jobs = |settings: &Settings| if settings.workspace.is_some() { 1 } else {
         env::var("TAGMAILS_MAX_JOBS").ok().and_then(|value| value.parse().ok()).filter(|n| (1..=8).contains(n)).unwrap_or(3)
     };
     let mut running: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
     let (done_sender, done_receiver) = std::sync::mpsc::channel::<String>();
     loop {
+        if reload && !once {
+            let config = load_config();
+            let defaults = effective_defaults(&config);
+            if defaults != seen_defaults {
+                next_model_probe = Instant::now();
+                seen_defaults = defaults;
+            }
+            if config != seen_config {
+                let pinned = settings.workspace.clone();
+                apply_machine_settings(&mut settings, &config);
+                if settings.workspace.as_ref().is_some_and(|workspace| !workspace.is_dir()) {
+                    eprintln!("Ignoring the saved workspace: it is not a folder");
+                    settings.workspace = pinned.clone();
+                }
+                if settings.workspace != pinned || config["routingContext"] != seen_config["routingContext"] {
+                    match &settings.workspace {
+                        Some(_) => clear_published_projects(&client, &settings),
+                        None => next_project_probe = Instant::now(),
+                    }
+                }
+                println!("Settings reloaded (Codex {}, Claude {}).", settings.access, settings.claude_permission);
+                seen_config = config;
+            }
+        }
         if Instant::now() >= next_model_probe {
             next_model_probe = Instant::now() + Duration::from_secs(120);
+            let probe_folder = match &settings.workspace {
+                Some(workspace) => workspace.clone(),
+                None => paths::scratch_dir(),
+            };
             match publish_model_catalog(&client, &settings.relay, &settings.token, &probe_folder) {
                 Ok(()) => next_model_probe = Instant::now() + Duration::from_secs(3600),
                 Err(error) => eprintln!("Model catalog refresh unavailable: {error}"),
@@ -1134,7 +1072,7 @@ fn run_relay(settings: &Settings, once: bool) -> Result<(), Box<dyn Error>> {
             }
         }
         if once {
-            if !relay_iteration(&client, settings)? {
+            if !relay_iteration(&client, &settings)? {
                 println!("No queued relay mail.");
             }
             return Ok(());
@@ -1143,9 +1081,9 @@ fn run_relay(settings: &Settings, once: bool) -> Result<(), Box<dyn Error>> {
             running.remove(&finished);
         }
         let mut claimed = false;
-        if running.len() < max_jobs {
+        if running.len() < max_jobs(&settings) {
             let busy: Vec<String> = running.values().flatten().cloned().collect();
-            match claim_next(&client, settings, &busy) {
+            match claim_next(&client, &settings, &busy) {
                 Ok(Some(claim)) => {
                     claimed = true;
                     let job_id = claim["jobId"].as_str().unwrap_or("").to_owned();
@@ -1167,7 +1105,7 @@ fn run_relay(settings: &Settings, once: bool) -> Result<(), Box<dyn Error>> {
             }
         }
         if !claimed {
-            match (&push, running.len() >= max_jobs) {
+            match (&push, running.len() >= max_jobs(&settings)) {
                 // At capacity, only a finished job frees a slot.
                 (_, true) => {
                     if let Ok(finished) = done_receiver.recv_timeout(push::POLL_EVERY) {
@@ -1191,39 +1129,83 @@ mod tests {
     }
 
     #[test]
-    fn website_permissions_never_exceed_the_machine_limit() {
-        // By default every level is allowed; the website picks, else the start flag.
-        assert_eq!(chosen(Some("full"), "write", "full", &ACCESS_ORDER), "full");
-        assert_eq!(chosen(None, "write", "full", &ACCESS_ORDER), "write");
-        assert_eq!(chosen(Some("bogus"), "read", "full", &ACCESS_ORDER), "read");
-        assert_eq!(chosen(Some("bypassPermissions"), "acceptEdits", "bypassPermissions", &CLAUDE_ORDER), "bypassPermissions");
-        // A machine locked with --max-access never goes above it.
-        assert_eq!(chosen(Some("full"), "write", "write", &ACCESS_ORDER), "write");
-        assert_eq!(chosen(None, "full", "write", &ACCESS_ORDER), "write");
-        // Without a local opt-in the website tops out at write and auto.
-        assert_eq!(max_access(&json!({})), "write");
-        assert_eq!(max_claude_permission(&json!({})), "auto");
-        assert_eq!(chosen(Some("full"), "read", max_access(&json!({})), &ACCESS_ORDER), "read");
-        assert_eq!(chosen(Some("bypassPermissions"), "acceptEdits", max_claude_permission(&json!({})), &CLAUDE_ORDER), "acceptEdits");
-        assert_eq!(max_access(&json!({"maxAccess": "full"})), "full");
-        assert_eq!(max_claude_permission(&json!({"maxClaudePermission": "auto"})), "auto");
+    fn set_by_email_changes_only_model_defaults_and_start_takes_them_back() {
+        let args = |list: &[&str]| list.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+        for flag in ["--access", "--claude-permission", "--projects", "--workspace", "--routing-context", "--relay", "--name"] {
+            let error = set_email_defaults(&args(&["set", "--model", "gpt-6-sol", flag, "full"])).unwrap_err();
+            assert_eq!(error.to_string(), "Permissions and folders change only with `tagmails start` in a terminal.");
+        }
+        assert!(set_email_defaults(&args(&["set", "--effort", "huge"])).is_err());
+        assert!(set_email_defaults(&args(&["set", "--model", "gpt 6; rm"])).is_err());
+
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = env::temp_dir().join(format!("tagmails-set-test-{nonce}"));
+        env::set_var("TAGMAILS_CONFIG_DIR", &root);
+        let mut config = json!({"access": "write", "defaults": {"model": "gpt-6-luna", "effort": "low"}});
+        save_config(&config).unwrap();
+        // Email defaults start from the terminal ones and win over them.
+        set_email_defaults(&args(&["set", "--model", "claude-sonnet-5-5"])).unwrap();
+        assert_eq!(effective_defaults(&config), json!({"model": "claude-sonnet-5-5", "effort": "low"}));
+        assert_eq!(load_config(), config);
+        #[cfg(unix)]
+        assert_eq!(fs::metadata(paths::email_settings_dir()).unwrap().permissions().mode() & 0o777, 0o700);
+        // An invalid email file is ignored.
+        fs::write(paths::email_defaults_file(), r#"{"model":"x y"}"#).unwrap();
+        assert_eq!(effective_defaults(&config), config["defaults"]);
+        // --clear-defaults by email removes only the email file.
+        set_email_defaults(&args(&["set", "--speed", "fast"])).unwrap();
+        set_email_defaults(&args(&["set", "--clear-defaults"])).unwrap();
+        assert!(!paths::email_defaults_file().exists());
+        // A model choice in the terminal replaces the one set by email.
+        set_email_defaults(&args(&["set", "--model", "claude-sonnet-5-5"])).unwrap();
+        apply_start_flags(&mut config, &args(&["start", "--model", "gpt-6-sol"])).unwrap();
+        assert!(!paths::email_defaults_file().exists());
+        assert_eq!(effective_defaults(&config)["model"], "gpt-6-sol");
+        // Other start flags leave it alone.
+        set_email_defaults(&args(&["set", "--model", "claude-sonnet-5-5"])).unwrap();
+        apply_start_flags(&mut config, &args(&["start", "--access", "full"])).unwrap();
+        assert_eq!(effective_defaults(&config)["model"], "claude-sonnet-5-5");
+        // A symlink an agent plants among the email settings is never followed into config.json.
+        #[cfg(unix)]
+        {
+            let before = fs::read(paths::config_file()).unwrap();
+            for name in ["defaults.tmp", ".defaults.json.tmp"] {
+                std::os::unix::fs::symlink(paths::config_file(), paths::email_settings_dir().join(name)).unwrap();
+            }
+            set_email_defaults(&args(&["set", "--model", "gpt-6-luna"])).unwrap();
+            assert_eq!(fs::read(paths::config_file()).unwrap(), before);
+            assert_eq!(effective_defaults(&config)["model"], "gpt-6-luna");
+        }
+        env::remove_var("TAGMAILS_CONFIG_DIR");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn only_a_local_choice_raises_the_permission_ceiling() {
-        let mut config = json!({"access": "full", "claudePermission": "bypassPermissions"});
-        raise_ceilings_for_local_defaults(&mut config, false, false);
-        assert_eq!(max_access(&config), "full");
-        assert_eq!(max_claude_permission(&config), "bypassPermissions");
-        // An explicit --max-* keeps its value.
-        let mut locked = json!({"access": "full", "maxAccess": "read", "claudePermission": "bypassPermissions", "maxClaudePermission": "manual"});
-        raise_ceilings_for_local_defaults(&mut locked, true, true);
-        assert_eq!(max_access(&locked), "read");
-        assert_eq!(max_claude_permission(&locked), "manual");
-        // Write and auto stay under the default ceiling and add nothing.
-        let mut plain = json!({"access": "write", "claudePermission": "auto"});
-        raise_ceilings_for_local_defaults(&mut plain, false, false);
-        assert!(plain["maxAccess"].is_null() && plain["maxClaudePermission"].is_null());
+    fn recommended_permissions_are_the_default_and_only_the_machine_sets_them() {
+        let mut settings = Settings {
+            relay: String::new(),
+            token: String::new(),
+            access: String::new(),
+            workspace: None,
+            routing_context: String::new(),
+            claude_permission: String::new(),
+        };
+        apply_machine_settings(&mut settings, &json!({}));
+        assert_eq!((settings.access.as_str(), settings.claude_permission.as_str()), ("write", "auto"));
+        apply_machine_settings(&mut settings, &json!({"access": "full", "claudePermission": "bypassPermissions"}));
+        assert_eq!((settings.access.as_str(), settings.claude_permission.as_str()), ("full", "bypassPermissions"));
+        // A pre-0.2.20 cap below the saved setting still holds after the upgrade.
+        let capped = json!({"access": "full", "maxAccess": "read", "claudePermission": "bypassPermissions", "maxClaudePermission": "manual"});
+        apply_machine_settings(&mut settings, &capped);
+        assert_eq!((settings.access.as_str(), settings.claude_permission.as_str()), ("read", "manual"));
+        apply_machine_settings(&mut settings, &json!({"maxAccess": "read"}));
+        assert_eq!(settings.access, "read", "the new default doesn't lift an old cap either");
+        // Choosing a permission again in the terminal is what lifts it.
+        let mut config = capped.clone();
+        let args: Vec<String> = ["start", "--access", "full"].iter().map(|arg| arg.to_string()).collect();
+        apply_start_flags(&mut config, &args).unwrap();
+        apply_machine_settings(&mut settings, &config);
+        assert_eq!((settings.access.as_str(), settings.claude_permission.as_str()), ("full", "manual"));
     }
 
     #[test]
@@ -1384,16 +1366,14 @@ mod tests {
         fs::create_dir_all(&workspace).unwrap();
         fs::write(workspace.join("inside.txt"), b"safe").unwrap();
         fs::write(root.join("outside.txt"), b"private").unwrap();
-        assert_eq!(
-            workspace_file_bytes(&workspace, "inside.txt").unwrap(),
-            b"safe"
-        );
-        assert!(workspace_file_bytes(&workspace, "../outside.txt").is_err());
+        let (inside, size) = workspace_file(&workspace, "inside.txt").unwrap();
+        assert_eq!(read_capped(&inside, size).unwrap(), b"safe");
+        assert!(workspace_file(&workspace, "../outside.txt").is_err());
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(root.join("outside.txt"), workspace.join("link.txt"))
                 .unwrap();
-            assert!(workspace_file_bytes(&workspace, "link.txt").is_err());
+            assert!(workspace_file(&workspace, "link.txt").is_err());
         }
         fs::remove_dir_all(root).unwrap();
     }
@@ -1555,9 +1535,9 @@ Usage:
                  [--routing-context full|files]
                  [--model ID] [--effort LEVEL] [--speed standard|fast]
                  [--clear-defaults]
-                 [--max-access read|write|full]
-                 [--max-claude-permission manual|accept-edits|auto|bypass]
                                                    Save settings and run in the background
+  tagmails set [--model ID] [--effort LEVEL] [--speed standard|fast] [--clear-defaults]
+                                                   Change model defaults without a restart
   tagmails status                                  Show settings, connection and service state
   tagmails stop                                    Stop the background service
   tagmails logs                                    Follow the service log
@@ -1566,14 +1546,15 @@ Usage:
   tagmails uninstall                               Remove the background service
   tagmails --version
 
---access and --claude-permission set this machine's default permission. Permissions
-chosen on tagmails.com override it, up to --max-access / --max-claude-permission
-(write and auto by default). Full access and bypass are only reachable after you
-allow them here, with --max-access full / --max-claude-permission bypass or by
-choosing --access full / --claude-permission bypass.
+--access and --claude-permission set what agents may do on this machine; only this
+machine sets them. TagMails recommends Codex write and Claude auto (the default).
+Full access and bypass apply only after you choose --access full or
+--claude-permission bypass here.
 
 --model, --effort and --speed set this machine's default for emails that don't ask for
-one; a default saved on tagmails.com overrides them.
+one; a default saved on tagmails.com overrides them. `tagmails set` changes them while
+the service keeps running (an agent can run it when you ask by email); permissions and
+folders change only with `tagmails start` in a terminal.
 
 Pairing codes come from https://tagmails.com/setup. By default TagMails picks one of
 your recent Codex or Claude project folders for each new email (--projects). Use
@@ -1624,14 +1605,149 @@ fn default_device_name() -> String {
 
 fn settings_from_config() -> Result<Settings, Box<dyn Error>> {
     let config = load_config();
-    Ok(Settings {
+    let mut settings = Settings {
         relay: configured_relay(&config),
         token: read_token(&paths::token_file())?,
-        access: config["access"].as_str().unwrap_or("read").to_owned(),
-        workspace: config["workspace"].as_str().map(PathBuf::from),
-        routing_context: config["routingContext"].as_str().unwrap_or("full").to_owned(),
-        claude_permission: config["claudePermission"].as_str().unwrap_or("acceptEdits").to_owned(),
+        access: String::new(),
+        workspace: None,
+        routing_context: String::new(),
+        claude_permission: String::new(),
+    };
+    apply_machine_settings(&mut settings, &config);
+    Ok(settings)
+}
+
+/// The settings `tagmails start` saves that a running service picks up
+/// without a restart. Relay and token stay as the service started.
+/// Before 0.2.20 a machine could cap what the website chose with
+/// --max-access / --max-claude-permission. Keep honoring a cap that is lower
+/// than the saved setting until `tagmails start` sets that permission again.
+fn legacy_capped<'a>(value: &'a str, cap: Option<&'a str>, order: &[&str]) -> &'a str {
+    let rank = |item: &str| order.iter().position(|known| *known == item);
+    match (rank(value), cap.and_then(|cap| rank(cap).map(|position| (cap, position)))) {
+        (Some(wanted), Some((cap, limit))) if wanted > limit => cap,
+        _ => value,
+    }
+}
+
+fn apply_machine_settings(settings: &mut Settings, config: &Value) {
+    let access = config["access"].as_str().unwrap_or(DEFAULT_ACCESS);
+    settings.access = legacy_capped(access, config["maxAccess"].as_str(), &["read", "write", "full"]).to_owned();
+    settings.workspace = config["workspace"].as_str().map(PathBuf::from);
+    settings.routing_context = config["routingContext"].as_str().unwrap_or("full").to_owned();
+    let claude = config["claudePermission"].as_str().unwrap_or(DEFAULT_CLAUDE_PERMISSION);
+    settings.claude_permission = legacy_capped(claude, config["maxClaudePermission"].as_str(),
+        &["readonly", "manual", "acceptEdits", "auto", "bypassPermissions"]).to_owned();
+}
+
+/// Checks one model default (`model`, `effort` or `speed`) as start and set accept it.
+fn check_default(key: &str, value: &str) -> Result<(), String> {
+    let valid = match key {
+        "model" => {
+            !value.is_empty()
+                && value.len() <= 80
+                && value.chars().all(|c| c.is_ascii_alphanumeric() || "-._".contains(c))
+        }
+        "effort" => ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].contains(&value),
+        "speed" => ["standard", "fast", "ultrafast"].contains(&value),
+        _ => false,
+    };
+    if valid {
+        return Ok(());
+    }
+    Err(match key {
+        "model" => "--model must be a model id such as gpt-6-sol or claude-sonnet-5-5".into(),
+        "effort" => "--effort must be none, minimal, low, medium, high, xhigh, max or ultra".into(),
+        "speed" => "--speed must be standard, fast or ultrafast".into(),
+        _ => format!("Unknown default {key}"),
     })
+}
+
+/// Applies --clear-defaults, then --model, --effort and --speed. Returns
+/// whether any of those flags was passed.
+fn apply_default_flags(defaults: &mut serde_json::Map<String, Value>, args: &[String]) -> Result<bool, Box<dyn Error>> {
+    let mut given = false;
+    if args.iter().any(|arg| arg == "--clear-defaults") {
+        defaults.clear();
+        given = true;
+    }
+    for key in ["model", "effort", "speed"] {
+        if let Some(value) = option(args, &format!("--{key}"))? {
+            check_default(key, &value)?;
+            defaults.insert(key.into(), json!(value));
+            given = true;
+        }
+    }
+    Ok(given)
+}
+
+/// Defaults written by `tagmails set` (email/defaults.json) win while that
+/// file is valid; otherwise the ones `tagmails start` saved in config.json.
+fn effective_defaults(config: &Value) -> Value {
+    let email = fs::read(paths::email_defaults_file())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .filter(|value| {
+            value.as_object().is_some_and(|map| {
+                !map.is_empty()
+                    && map.iter().all(|(key, value)| value.as_str().is_some_and(|text| check_default(key, text).is_ok()))
+            })
+        });
+    email.unwrap_or_else(|| config["defaults"].clone())
+}
+
+fn remove_email_defaults() -> Result<(), Box<dyn Error>> {
+    match fs::remove_file(paths::email_defaults_file()) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
+        _ => Ok(()),
+    }
+}
+
+/// Everything `tagmails start` saves. A model default chosen in the terminal
+/// replaces one set by email.
+fn apply_start_flags(config: &mut Value, args: &[String]) -> Result<(), Box<dyn Error>> {
+    if let Some(access) = option(args, "--access")? {
+        if !["read", "write", "full"].contains(&access.as_str()) {
+            return Err("--access must be read, write, or full".into());
+        }
+        config["access"] = json!(access);
+        // A permission chosen in the terminal replaces any pre-0.2.20 cap.
+        config.as_object_mut().map(|map| map.remove("maxAccess"));
+    }
+    if let Some(permission) = option(args, "--claude-permission")? {
+        let mode = match permission.as_str() {
+            "manual" => "manual",
+            "accept-edits" | "acceptEdits" => "acceptEdits",
+            "auto" => "auto",
+            "bypass" | "bypassPermissions" => "bypassPermissions",
+            _ => return Err("--claude-permission must be manual, accept-edits, auto or bypass".into()),
+        };
+        config["claudePermission"] = json!(mode);
+        config.as_object_mut().map(|map| map.remove("maxClaudePermission"));
+    }
+    if let Some(context) = option(args, "--routing-context")? {
+        if !["full", "files"].contains(&context.as_str()) {
+            return Err("--routing-context must be full or files".into());
+        }
+        config["routingContext"] = json!(context);
+    }
+    let mut defaults = config["defaults"].as_object().cloned().unwrap_or_default();
+    if apply_default_flags(&mut defaults, args)? {
+        remove_email_defaults()?;
+    }
+    config["defaults"] = if defaults.is_empty() { Value::Null } else { json!(defaults) };
+    if args.iter().any(|arg| arg == "--projects") {
+        config["workspace"] = Value::Null;
+    } else if let Some(workspace) = option(args, "--workspace")? {
+        let path = PathBuf::from(&workspace);
+        let path = if path.is_absolute() { path } else { env::current_dir()?.join(path) };
+        if !path.is_dir() {
+            return Err(format!("Workspace is not a folder: {}", path.display()).into());
+        }
+        config["workspace"] = json!(path.canonicalize()?.display().to_string());
+    }
+    config["relay"] = json!(configured_relay(config));
+    Ok(())
 }
 
 /// The path the service should start. Homebrew's Cellar path changes on every
@@ -1666,102 +1782,80 @@ fn command_pair(args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Codex sandboxes read and write runs with bubblewrap on Linux, which most
+/// containers (Docker, RunPod) block. Every sandboxed command would then fail,
+/// so say so up front. Full access runs unsandboxed and is unaffected.
+fn codex_sandbox_problem(access: &str) -> Option<String> {
+    if !cfg!(target_os = "linux") || access == "full" {
+        return None;
+    }
+    let output = Command::new("codex").args(["sandbox", "--", "true"]).stdin(Stdio::null()).output().ok()?;
+    if output.status.success() {
+        return None;
+    }
+    let reason = String::from_utf8_lossy(&output.stderr).lines().next().unwrap_or("").trim().to_owned();
+    Some(format!(
+        "Codex's sandbox can't run on this computer{}. Codex emails will fail here. Use a VM or a host that allows unprivileged user namespaces, or run `tagmails start --access full` if this machine is only yours.",
+        if reason.is_empty() { String::new() } else { format!(" ({reason})") }
+    ))
+}
+
 fn command_start(args: &[String]) -> Result<(), Box<dyn Error>> {
     let mut config = load_config();
     read_token(&paths::token_file())?;
-    if let Some(access) = option(args, "--access")? {
-        if !["read", "write", "full"].contains(&access.as_str()) {
-            return Err("--access must be read, write, or full".into());
-        }
-        config["access"] = json!(access);
-    }
-    if config["access"].is_null() {
-        config["access"] = json!("read");
-    }
-    if let Some(permission) = option(args, "--claude-permission")? {
-        let mode = match permission.as_str() {
-            "manual" => "manual",
-            "accept-edits" | "acceptEdits" => "acceptEdits",
-            "auto" => "auto",
-            "bypass" | "bypassPermissions" => "bypassPermissions",
-            _ => return Err("--claude-permission must be manual, accept-edits, auto or bypass".into()),
-        };
-        config["claudePermission"] = json!(mode);
-    }
-    let explicit_max_access = option(args, "--max-access")?.is_some();
-    let explicit_max_claude = option(args, "--max-claude-permission")?.is_some();
-    if let Some(max) = option(args, "--max-access")? {
-        if !ACCESS_ORDER.contains(&max.as_str()) {
-            return Err("--max-access must be read, write, or full".into());
-        }
-        config["maxAccess"] = json!(max);
-    }
-    if let Some(max) = option(args, "--max-claude-permission")? {
-        let mode = match max.as_str() {
-            "manual" => "manual",
-            "accept-edits" | "acceptEdits" => "acceptEdits",
-            "auto" => "auto",
-            "bypass" | "bypassPermissions" => "bypassPermissions",
-            _ => return Err("--max-claude-permission must be manual, accept-edits, auto or bypass".into()),
-        };
-        config["maxClaudePermission"] = json!(mode);
-    }
-    raise_ceilings_for_local_defaults(&mut config, explicit_max_access, explicit_max_claude);
-    if let Some(context) = option(args, "--routing-context")? {
-        if !["full", "files"].contains(&context.as_str()) {
-            return Err("--routing-context must be full or files".into());
-        }
-        config["routingContext"] = json!(context);
-    }
-    let mut defaults = config["defaults"].as_object().cloned().unwrap_or_default();
-    if let Some(model) = option(args, "--model")? {
-        let valid = !model.is_empty()
-            && model.len() <= 80
-            && model.chars().all(|c| c.is_ascii_alphanumeric() || "-._".contains(c));
-        if !valid {
-            return Err("--model must be a model id such as gpt-6-sol or claude-sonnet-5-5".into());
-        }
-        defaults.insert("model".into(), json!(model));
-    }
-    if let Some(effort) = option(args, "--effort")? {
-        if !["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].contains(&effort.as_str()) {
-            return Err("--effort must be none, minimal, low, medium, high, xhigh, max or ultra".into());
-        }
-        defaults.insert("effort".into(), json!(effort));
-    }
-    if let Some(speed) = option(args, "--speed")? {
-        if !["standard", "fast", "ultrafast"].contains(&speed.as_str()) {
-            return Err("--speed must be standard, fast or ultrafast".into());
-        }
-        defaults.insert("speed".into(), json!(speed));
-    }
-    if args.iter().any(|arg| arg == "--clear-defaults") {
-        defaults.clear();
-    }
-    config["defaults"] = if defaults.is_empty() { Value::Null } else { json!(defaults) };
-    if args.iter().any(|arg| arg == "--projects") {
-        config["workspace"] = Value::Null;
-    } else if let Some(workspace) = option(args, "--workspace")? {
-        let path = PathBuf::from(&workspace);
-        let path = if path.is_absolute() { path } else { env::current_dir()?.join(path) };
-        if !path.is_dir() {
-            return Err(format!("Workspace is not a folder: {}", path.display()).into());
-        }
-        config["workspace"] = json!(path.canonicalize()?.display().to_string());
-    }
-    config["relay"] = json!(configured_relay(&config));
+    apply_start_flags(&mut config, args)?;
     save_config(&config)?;
     paths::adapters_dir()?;
     println!("{}", service::start(&service_binary()?)?);
+    let access = config["access"].as_str().unwrap_or(DEFAULT_ACCESS);
+    if let Some(problem) = codex_sandbox_problem(access) {
+        eprintln!("Warning: {problem}");
+    }
     match config["workspace"].as_str() {
-        Some(workspace) => println!("Access: {} in {workspace}", config["access"].as_str().unwrap_or("read")),
-        None => println!(
-            "Access: {} in the project folder chosen for each email (or a chat folder when none fits).",
-            config["access"].as_str().unwrap_or("read")
-        ),
+        Some(workspace) => println!("Access: {access} in {workspace}"),
+        None => println!("Access: {access} in the project folder chosen for each email (or a chat folder when none fits)."),
     }
     println!("Send an email to your agent address to try it.");
     Ok(())
+}
+
+/// Change model defaults without restarting the service, so an agent can run
+/// it from an email. It writes only email/defaults.json; permissions and
+/// folders change only with `tagmails start` in a terminal.
+fn set_email_defaults(args: &[String]) -> Result<String, Box<dyn Error>> {
+    let mut values = args.iter().skip(1);
+    while let Some(arg) = values.next() {
+        match arg.as_str() {
+            "--model" | "--effort" | "--speed" => {
+                values.next();
+            }
+            "--clear-defaults" => {}
+            "--access" | "--claude-permission" | "--projects" | "--workspace" | "--routing-context" | "--relay" | "--name" => {
+                return Err("Permissions and folders change only with `tagmails start` in a terminal.".into());
+            }
+            other => return Err(format!("Unknown option `{other}` for `tagmails set`. Pass --model, --effort, --speed or --clear-defaults.").into()),
+        }
+    }
+    let clear = args.iter().any(|arg| arg == "--clear-defaults");
+    let mut defaults = if clear {
+        serde_json::Map::new()
+    } else {
+        effective_defaults(&load_config()).as_object().cloned().unwrap_or_default()
+    };
+    if !apply_default_flags(&mut defaults, args)? {
+        return Err("Pass --model, --effort, --speed or --clear-defaults.".into());
+    }
+    if defaults.is_empty() {
+        remove_email_defaults()?;
+        return Ok("Cleared the defaults set by email. The service picks this up before its next email.".into());
+    }
+    create_private_dir(&paths::email_settings_dir())?;
+    write_private_file(&paths::email_defaults_file(), &serde_json::to_vec_pretty(&defaults)?)?;
+    let part = |key: &str| defaults.get(key).and_then(Value::as_str).unwrap_or("-").to_owned();
+    Ok(format!(
+        "Default model {} {} {}. The service picks this up before its next email.",
+        part("model"), part("effort"), part("speed")
+    ))
 }
 
 fn found(program: &str) -> String {
@@ -1800,9 +1894,12 @@ fn command_status() -> Result<(), Box<dyn Error>> {
     println!("  Connection  {connection}");
     println!("  Relay       {relay}");
     println!("  Service     {}", service::status());
-    println!("  Access      Codex {}, Claude {}", config["access"].as_str().unwrap_or("read"),
-        config["claudePermission"].as_str().unwrap_or("acceptEdits"));
-    println!("  Website max Codex {}, Claude {}", max_access(&config), max_claude_permission(&config));
+    let access = legacy_capped(config["access"].as_str().unwrap_or(DEFAULT_ACCESS), config["maxAccess"].as_str(),
+        &["read", "write", "full"]);
+    let claude = legacy_capped(config["claudePermission"].as_str().unwrap_or(DEFAULT_CLAUDE_PERMISSION),
+        config["maxClaudePermission"].as_str(), &["readonly", "manual", "acceptEdits", "auto", "bypassPermissions"]);
+    let recommended = if (access, claude) == (DEFAULT_ACCESS, DEFAULT_CLAUDE_PERMISSION) { " (recommended)" } else { "" };
+    println!("  Access      Codex {access}, Claude {claude}{recommended}");
     if config["workspace"].is_null() {
         println!("  Routing     {} context", config["routingContext"].as_str().unwrap_or("full"));
     }
@@ -1813,10 +1910,14 @@ fn command_status() -> Result<(), Box<dyn Error>> {
             projects.map_or("(not yet listed)".into(), |count| count.to_string())
         ),
     }
-    let defaults = &config["defaults"];
+    let defaults = &effective_defaults(&config);
     if defaults.is_object() {
         let part = |key: &str| defaults[key].as_str().unwrap_or("-").to_owned();
-        println!("  Default     {} {} {} (tagmails.com overrides)", part("model"), part("effort"), part("speed"));
+        let source = if paths::email_defaults_file().exists() { " (set by email)" } else { "" };
+        println!("  Default     {} {} {}{source}", part("model"), part("effort"), part("speed"));
+    }
+    if let Some(problem) = codex_sandbox_problem(config["access"].as_str().unwrap_or(DEFAULT_ACCESS)) {
+        println!("  Warning     {problem}");
     }
     println!("  Config      {}", paths::config_file().display());
     println!(
@@ -1884,7 +1985,7 @@ fn command_open(args: &[String]) -> Result<(), Box<dyn Error>> {
 }
 
 fn command_logs() -> Result<(), Box<dyn Error>> {
-    let mut command = if cfg!(target_os = "macos") {
+    let mut command = if service::logs_in_files() {
         let mut tail = Command::new("tail");
         tail.args(["-n", "100", "-F"])
             .arg(paths::log_dir().join("tagmails.log"))
@@ -1916,13 +2017,14 @@ fn main() {
     let result = match args.first().map(String::as_str) {
         Some("pair") => command_pair(&args),
         Some("start") => command_start(&args),
+        Some("set") => set_email_defaults(&args).map(|message| println!("{message}")),
         Some("stop") => service::stop().map(|message| println!("{message}")),
         Some("status") => command_status(),
         Some("logs") => command_logs(),
         Some("open") => command_open(&args),
         Some("uninstall") => service::uninstall().map(|message| println!("{message}")),
         Some("run") => settings_from_config()
-            .and_then(|settings| run_relay(&settings, args.iter().any(|arg| arg == "--once"))),
+            .and_then(|settings| run_relay(&settings, args.iter().any(|arg| arg == "--once"), true)),
         Some("--version" | "-V" | "version") => {
             println!("tagmails {VERSION}");
             Ok(())
@@ -1970,5 +2072,5 @@ fn legacy_relay(args: &[String]) -> Result<(), Box<dyn Error>> {
             _ => "readonly".into(),
         },
     };
-    run_relay(&settings, once)
+    run_relay(&settings, once, false)
 }

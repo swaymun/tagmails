@@ -1,12 +1,12 @@
 // Background service management: a launchd agent on macOS and a systemd user
-// unit on Linux. Other Unix systems can run `tagmails run` under their own
-// supervisor.
+// unit on Linux. Without a systemd user session (containers), `tagmails run`
+// runs as a detached process tracked by a pid file.
 
 use crate::paths;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 const LABEL: &str = "com.tagmails.daemon";
 const UNIT: &str = "tagmails.service";
@@ -106,11 +106,94 @@ fn systemd_file() -> PathBuf {
     base.join("systemd/user").join(UNIT)
 }
 
-fn has_systemd() -> bool {
+/// Whether a systemd user manager answers. `--version` works without one, so
+/// ask it something: containers have systemctl but no user bus.
+pub fn has_systemd() -> bool {
     Command::new("systemctl")
-        .args(["--user", "--version"])
+        .args(["--user", "show-environment"])
         .output()
         .is_ok_and(|output| output.status.success())
+}
+
+fn pid_file() -> PathBuf {
+    paths::data_dir().join("tagmails.pid")
+}
+
+/// The detached `tagmails run` from the pid file, if it is still running.
+fn background_pid() -> Option<String> {
+    let pid = fs::read_to_string(pid_file()).ok()?.trim().to_owned();
+    if pid.is_empty() || !pid.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    // A reused pid belongs to some other program; only signal our own
+    // `tagmails run`. If that can't be verified, treat the pid as stale.
+    let cmdline = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    is_tagmails_run(&cmdline).then_some(pid)
+}
+
+fn is_tagmails_run(cmdline: &[u8]) -> bool {
+    let mut args = cmdline.split(|byte| *byte == 0);
+    let program = args.next().map(|arg| Path::new(std::str::from_utf8(arg).unwrap_or("")).file_name().is_some_and(|name| name == "tagmails"));
+    program == Some(true) && args.next() == Some(b"run".as_slice())
+}
+
+fn stop_background() -> bool {
+    let Some(pid) = background_pid() else {
+        let _ = fs::remove_file(pid_file());
+        return false;
+    };
+    let _ = quiet(Command::new("kill").arg(&pid));
+    for _ in 0..50 {
+        if background_pid().is_none() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    let _ = fs::remove_file(pid_file());
+    true
+}
+
+#[cfg(unix)]
+extern "C" {
+    fn setsid() -> i32;
+}
+
+/// Run `tagmails run` in its own session, detached from this terminal, with
+/// output appended to the log files.
+#[cfg(unix)]
+fn start_background(binary: &Path) -> Result<String, Box<dyn Error>> {
+    use std::os::unix::process::CommandExt;
+    stop_background();
+    let logs = paths::log_dir();
+    fs::create_dir_all(&logs)?;
+    let append = |name: &str| fs::OpenOptions::new().create(true).append(true).open(logs.join(name));
+    let mut command = Command::new(binary);
+    command
+        .arg("run")
+        .current_dir(paths::home())
+        .stdin(Stdio::null())
+        .stdout(append("tagmails.log")?)
+        .stderr(append("tagmails.error.log")?);
+    // SAFETY: setsid is async-signal-safe and touches no memory.
+    unsafe {
+        command.pre_exec(|| {
+            setsid();
+            Ok(())
+        });
+    }
+    let child = command.spawn()?;
+    write_private(&pid_file(), &format!("{}\n", child.id()))?;
+    Ok(format!(
+        "Started TagMails in the background (pid {}). Logs: {}\n\
+No systemd user session here, so it won't restart after a reboot; run `tagmails start` again then.",
+        child.id(),
+        logs.display()
+    ))
+}
+
+#[cfg(not(unix))]
+fn start_background(_binary: &Path) -> Result<String, Box<dyn Error>> {
+    Err("No supported service manager found. Run `tagmails run` under your own supervisor.".into())
 }
 
 /// Install (or replace) the background service and start it.
@@ -170,7 +253,7 @@ pub fn start(binary: &Path) -> Result<String, Box<dyn Error>> {
 To keep it running after you log out: loginctl enable-linger \"$USER\""
         ));
     }
-    Err("No supported service manager found. Run `tagmails run` under your own supervisor (for example tmux or your init system).".into())
+    start_background(binary)
 }
 
 pub fn stop() -> Result<String, Box<dyn Error>> {
@@ -183,7 +266,7 @@ pub fn stop() -> Result<String, Box<dyn Error>> {
         quiet(Command::new("systemctl").args(["--user", "disable", "--now", UNIT]))?;
         return Ok("Stopped TagMails.".into());
     }
-    Err("No supported service manager found.".into())
+    Ok(if stop_background() { "Stopped TagMails." } else { "TagMails was not running." }.into())
 }
 
 pub fn uninstall() -> Result<String, Box<dyn Error>> {
@@ -234,11 +317,19 @@ pub fn status() -> String {
             state
         };
     }
-    "no service manager".into()
+    match background_pid() {
+        Some(pid) => format!("running (pid {pid}, background process)"),
+        None => "not running".into(),
+    }
+}
+
+/// Whether logs go to files (launchd or a background process) rather than journald.
+pub fn logs_in_files() -> bool {
+    cfg!(target_os = "macos") || !has_systemd()
 }
 
 pub fn log_hint() -> String {
-    if cfg!(target_os = "macos") {
+    if logs_in_files() {
         format!("tail -f \"{}\"", paths::log_dir().join("tagmails.log").display())
     } else {
         "journalctl --user -u tagmails -f".into()
@@ -267,5 +358,13 @@ mod tests {
         assert!(unit.contains("ExecStart=\"/home/me/my apps/tagmails\" run"));
         assert!(unit.contains("Environment=\"PATH=/usr/bin:/bin\""));
         assert!(unit.contains("WantedBy=default.target"));
+    }
+
+    #[test]
+    fn only_a_tagmails_run_pid_is_ours() {
+        assert!(super::is_tagmails_run(b"/root/.local/bin/tagmails\0run\0"));
+        assert!(!super::is_tagmails_run(b"npm\0run\0dev\0"));
+        assert!(!super::is_tagmails_run(b"/usr/bin/node\0tagmails\0run\0"));
+        assert!(!super::is_tagmails_run(b"tagmails\0status\0"));
     }
 }

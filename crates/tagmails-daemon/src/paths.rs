@@ -22,8 +22,9 @@ fn xdg(name: &str, fallback: &str) -> PathBuf {
 }
 
 pub fn config_dir() -> PathBuf {
-    if let Some(dir) = env::var_os("TAGMAILS_CONFIG_DIR") {
-        return PathBuf::from(dir);
+    // Relative overrides are ignored, as the Node adapters do, so both resolve the same folder.
+    if let Some(dir) = env::var_os("TAGMAILS_CONFIG_DIR").map(PathBuf::from).filter(|dir| dir.is_absolute()) {
+        return dir;
     }
     xdg("XDG_CONFIG_HOME", ".config").join("tagmails")
 }
@@ -49,6 +50,16 @@ pub fn log_dir() -> PathBuf {
 
 pub fn config_file() -> PathBuf {
     config_dir().join("config.json")
+}
+
+/// The only TagMails settings an email-started agent may write: model defaults
+/// from `tagmails set`. Permissions and folders stay in config.json.
+pub fn email_settings_dir() -> PathBuf {
+    config_dir().join("email")
+}
+
+pub fn email_defaults_file() -> PathBuf {
+    email_settings_dir().join("defaults.json")
 }
 
 pub fn token_file() -> PathBuf {

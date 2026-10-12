@@ -63,7 +63,10 @@ for (const [target, zigTarget] of Object.entries(TARGETS)) {
   for (const file of adapters) fs.copyFileSync(path.join(root, file), path.join(top, 'libexec/tagmails', path.basename(file)));
   fs.copyFileSync(path.join(root, 'LICENSE'), path.join(top, 'LICENSE'));
   const output = path.join(destination, `tagmails-${version}-${target}.tar.gz`);
-  execFileSync('tar', ['-czf', output, '-C', stage, `tagmails-${version}`], { env: { ...process.env, COPYFILE_DISABLE: '1' } });
+  // macOS bsdtar stores xattrs such as com.apple.provenance as LIBARCHIVE.xattr
+  // headers, which GNU tar on Linux warns about; COPYFILE_DISABLE alone keeps them.
+  const noXattrs = process.platform === 'darwin' ? ['--no-xattrs'] : [];
+  execFileSync('tar', [...noXattrs, '-czf', output, '-C', stage, `tagmails-${version}`], { env: { ...process.env, COPYFILE_DISABLE: '1' } });
   fs.rmSync(stage, { recursive: true, force: true });
   sums[target] = sha256(output);
 }
@@ -75,6 +78,9 @@ fs.writeFileSync(path.join(destination, 'install.sh'),
     .replace(/^VERSION=.*$/m, `VERSION="\${TAGMAILS_VERSION:-${version}}"`)
     .replace(/^PINNED_SUMS=.*$/m, `PINNED_SUMS='${sumsText}'`));
 fs.chmodSync(path.join(destination, 'install.sh'), 0o755);
+// tagmails.com/install.sh is the copy the setup prompt runs; keep it on this release.
+const siteInstaller = path.join(root, 'site/dist/install.sh');
+if (fs.existsSync(siteInstaller)) fs.copyFileSync(path.join(destination, 'install.sh'), siteInstaller);
 fs.writeFileSync(path.join(destination, 'SHA256SUMS'), `${sumsText}\n`);
 
 const asset = (target) => `    url "${releaseBase}/tagmails-${version}-${target}.tar.gz"\n    sha256 "${sums[target]}"`;

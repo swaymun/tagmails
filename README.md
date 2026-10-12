@@ -48,12 +48,17 @@ Gmail ─► Cloudflare Email Routing (or Resend webhook) ─► relay Worker (D
 
 | Flag | Effect |
 | --- | --- |
-| `--access read` (default) | Agent can read the workspace, no edits. |
-| `--access write` | Edits inside the chosen folder. Authorized participants can request edits too. |
+Defaults are **TagMails recommended permissions**: Codex `write` with Codex's own reviewer deciding anything outside the sandbox ("approve for me"), and Claude Code `auto`. Owner runs may also use the owner's connectors and `tagmails set`, so an email can change the default model. Permissions and folders change only with `tagmails start` on the machine, never by email or from the website.
+
+| `--access read` | Agent can read the workspace, no edits. |
+| `--access write` (default) | Edits inside the chosen folder. Authorized participants can request edits too. |
 | `--access full` | No sandbox. Only runs emails from the account owner. |
 | `--projects` (default) / `--workspace PATH` | Pick from recent Codex/Claude project folders per thread, or pin one folder. |
-| `--claude-permission manual\|accept-edits\|auto\|bypass` | Claude Code permission mode. `bypass` is owner-only. |
-| `--max-access`, `--max-claude-permission` | Ceiling for permissions chosen on the website. Defaults to `write` and `auto`. Full access and `bypass` are reachable only after you allow them on the machine (`--max-access full`, or `--access full` / `--claude-permission bypass`). |
+| `--claude-permission manual\|accept-edits\|auto\|bypass` | Claude Code permission mode, `auto` by default. `bypass` is owner-only. |
+
+`tagmails set --model/--effort/--speed/--clear-defaults` changes model defaults without restarting the service.
+
+Replies attach files a mail client opens, up to 3.5 MB in total (Cloudflare's 5 MiB send cap). TagMails doesn't host larger files; the agent uses the owner's own storage (for example a Google Drive connector) or says the file was too large.
 
 Owner emails get the owner's own tool setup (MCP servers, connectors, skills). Participant emails run with none of it. Config is in `~/.config/tagmails/`, data in `~/Library/Application Support/TagMails` or `~/.local/share/tagmails`.
 
@@ -64,7 +69,7 @@ Owner emails get the owner's own tool setup (MCP servers, connectors, skills). P
 - The daemon only runs in folders it published itself or in a per-thread chat folder. Attachments are staged as fixed file names and labeled untrusted.
 - Follow-ups sent mid-run join the live turn only when they come from the same sender as the running email.
 - With `STORAGE_KEY` set, stored mail, results and files are sealed with AES-256-GCM.
-- Email content is untrusted input to the agent. Read access is the default for a reason; see [docs/email-privacy.md](docs/email-privacy.md) for what the relay keeps.
+- Email content is untrusted input to the agent. Participants never get the owner's tools or settings; see [docs/email-privacy.md](docs/email-privacy.md) for what the relay keeps.
 
 ## Development
 
