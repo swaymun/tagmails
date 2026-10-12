@@ -52,6 +52,11 @@ function configuredOrigin(value) {
   } catch { return null; }
 }
 
+// The owner opens a run on the Site, as email footers link it (services/outbox.mjs).
+function receiptUrl(ctx, runId) {
+  return ctx.siteOrigin ? `${ctx.siteOrigin}/?run=${encodeURIComponent(runId)}#emails` : `${ctx.relayOrigin}/runs/${runId}`;
+}
+
 async function wallet(env, accountId) {
   const snapshot = await testWalletSnapshot(env, accountId);
   const enabled = Boolean(testBillingEnabled(env));
@@ -71,7 +76,7 @@ async function recentRuns(env, ctx, { limit, threadId = null }) {
     id: row.id, threadId: row.thread_id, state: row.state, createdAt: row.created_at,
     subject: await readableText(env, row.subject), from: row.sender_email, project: projectName(row.workspace_json),
     model: selectedModelStatus(row.model_json), delivery: row.delivery_state ?? null,
-    receiptUrl: `${ctx.relayOrigin}/runs/${row.id}`,
+    receiptUrl: receiptUrl(ctx, row.id),
   })));
 }
 
@@ -205,14 +210,14 @@ async function run(env, ctx, args) {
       answer, answerTruncated: typeof result?.answer === 'string' && result.answer.length > 20_000,
       details: text(result?.details, 4000),
       checks: Array.isArray(result?.checks) ? result.checks.filter((check) => typeof check === 'string').slice(0, 20) : [] },
-    files, receiptUrl: `${ctx.relayOrigin}/runs/${row.id}`,
+    files, receiptUrl: receiptUrl(ctx, row.id),
   };
 }
 
 async function billing(env, ctx, _args, { stripeFetch }) {
   const balance = await wallet(env, ctx.account.id);
   if (!balance.topUpsEnabled) return { ...balance, checkoutUrl: null, message: 'Top-ups are not enabled on this relay.' };
-  const site = configuredOrigin(env.SITE_ORIGIN);
+  const site = ctx.siteOrigin;
   const checkout = await startCheckout(env, ctx.account, {
     successUrl: site ? `${site}/?topup=returned#billing` : `${ctx.relayOrigin}/account?topup=returned`,
     cancelUrl: site ? `${site}/?topup=canceled#billing` : `${ctx.relayOrigin}/account?topup=canceled`,
@@ -381,7 +386,7 @@ export async function handleMcpRequest(request, env, { stripeFetch = fetch } = {
   if (!['string', 'number'].includes(typeof id)) return reply(rpcError(null, -32600, 'Invalid request id'), 400);
   // The connector may be reached through the Site's domain (tagmails.com/mcp);
   // computers and receipts still use the relay's own origin.
-  const ctx = { ...grant, relayOrigin: configuredOrigin(env.PUBLIC_ORIGIN) ?? url.origin };
+  const ctx = { ...grant, relayOrigin: configuredOrigin(env.PUBLIC_ORIGIN) ?? url.origin, siteOrigin: configuredOrigin(env.SITE_ORIGIN) };
   if (method === 'initialize') {
     const requested = params?.protocolVersion;
     return reply(rpc(id, {

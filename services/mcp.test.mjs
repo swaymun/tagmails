@@ -297,6 +297,9 @@ test('runs and run cover only this account and tolerate a missing or unreadable 
   const one = (await tool(env, tokens.access_token, 'run', { runId: run(1) })).data;
   assert.deepEqual([one.result.status, one.result.summary, one.result.answer], ['available', 'Build fixed.', 'Done.']);
   assert.equal(one.receiptUrl, `${ORIGIN}/runs/${run(1)}`);
+  env.SITE_ORIGIN = 'https://tagmails.com';
+  assert.equal((await tool(env, tokens.access_token, 'run', { runId: run(1) })).data.receiptUrl,
+    `https://tagmails.com/?run=${run(1)}#emails`, 'the owner opens runs on the Site, like email footers');
   assert.equal((await tool(env, tokens.access_token, 'run', { runId: run(2) })).data.result.status, 'expired');
   const sealed = (await tool(env, tokens.access_token, 'run', { runId: run(3) })).data;
   assert.deepEqual([sealed.result.status, sealed.result.summary, sealed.subject], ['unreadable', null, 'Fix the build']);
