@@ -12,7 +12,7 @@ Email your coding agent: TagMails hands each email to Codex or Claude Code on yo
 
 By hand instead: `brew install swaymun/tagmails/tagmails` (or `curl -fsSL https://tagmails.com/install.sh | sh`, Node.js 20.16+), then `tagmails pair tm_pair_…` and `tagmails start --projects`.
 
-`tagmails status`, `logs`, `stop`, `open <thread-id>` and `uninstall` cover the rest; see `tagmails --help`.
+`tagmails doctor` checks the setup and prints a fix for each problem. `tagmails status`, `logs`, `stop`, `open <thread-id>` and `uninstall` cover the rest; see `tagmails --help`.
 
 **Self-host** on your own Cloudflare account: `npm ci && node scripts/self-host-setup.mjs`, then pair with `--relay <your-origin>`. See [docs/self-hosting.md](docs/self-hosting.md).
 

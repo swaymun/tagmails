@@ -1812,6 +1812,7 @@ Usage:
                                                    Change model defaults or your standing
                                                    instructions without a restart
   tagmails status                                  Show settings, connection and service state
+  tagmails doctor                                  Check the setup and print a fix for each problem
   tagmails stop                                    Stop the background service
   tagmails logs                                    Follow the service log
   tagmails open <thread-id>                        Open an email thread's agent session
@@ -2262,6 +2263,71 @@ fn found(program: &str) -> String {
     }
 }
 
+/// Runs a command quietly and returns its stdout when it succeeded.
+fn probe(program: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(program).args(args).stdin(Stdio::null()).output().ok()?;
+    output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Checks everything a working setup needs and prints the fix for each
+/// failure. Exits non-zero when anything blocks emails from running.
+fn command_doctor() -> Result<(), Box<dyn Error>> {
+    let config = load_config();
+    let relay = configured_relay(&config);
+    let mut failures = 0;
+    let mut check = |ok: bool, label: &str, fix: &str| {
+        if ok {
+            println!("  ok    {label}");
+        } else {
+            failures += 1;
+            println!("  FAIL  {label}\n        fix: {fix}");
+        }
+    };
+    println!("TagMails {VERSION} doctor");
+    let token = read_token(&paths::token_file());
+    check(token.is_ok(), "paired with a relay", "copy the setup prompt at https://tagmails.com, or run `tagmails pair <code>`");
+    if let Ok(token) = &token {
+        let client = Client::builder().timeout(Duration::from_secs(10)).build()?;
+        match device_is_paired(&client, &relay, token) {
+            Ok(paired) => check(paired, "relay accepts this computer", "it was disconnected; pair again with a new code"),
+            Err(error) => check(false, &format!("relay reachable ({relay})"), &format!("check the network ({error})")),
+        }
+    }
+    let service = service::status();
+    check(service.starts_with("running"), &format!("background service ({service})"), "run `tagmails start --projects`");
+    check(paths::adapters_dir().is_ok(), "agent adapters installed", "reinstall: `brew reinstall swaymun/tagmails/tagmails` or the install script");
+    let node = probe("node", &["--version"]).unwrap_or_default();
+    let major = node.trim().trim_start_matches('v').split('.').next().and_then(|value| value.parse::<u32>().ok()).unwrap_or(0);
+    check(major >= 20, &format!("Node.js 20+ ({})", if node.trim().is_empty() { "not found" } else { node.trim() }), "install Node.js 20 or newer");
+    let codex = found("codex") != "not found";
+    let claude = found("claude") != "not found";
+    check(codex || claude, "Codex or Claude Code installed", "install the Codex CLI (`npm i -g @openai/codex`) or Claude Code");
+    if codex {
+        check(probe("codex", &["login", "status"]).is_some(), "Codex signed in", "run `codex login`");
+        let access = config["access"].as_str().unwrap_or(DEFAULT_ACCESS);
+        let problem = codex_sandbox_problem(access);
+        check(problem.is_none(), "Codex sandbox can run", problem.as_deref().unwrap_or(""));
+    }
+    if claude {
+        let signed_in = probe("claude", &["auth", "status"]).and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .is_some_and(|value| value["loggedIn"] == true);
+        check(signed_in, "Claude Code signed in", "run `claude` once and sign in");
+    }
+    if config["workspace"].is_null() {
+        let projects = fs::read(paths::projects_file()).ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .and_then(|value| value["projects"].as_array().map(Vec::len)).unwrap_or(0);
+        check(projects > 0, &format!("project folders found ({projects})"),
+            "open a project once in Codex or Claude Code so TagMails can route emails to it; until then emails run in a chat folder");
+    }
+    if failures == 0 {
+        println!("All good. Email your agent address to try it.");
+        Ok(())
+    } else {
+        Err(format!("{failures} check(s) failed").into())
+    }
+}
+
 fn command_status() -> Result<(), Box<dyn Error>> {
     let config = load_config();
     let relay = configured_relay(&config);
@@ -2415,6 +2481,7 @@ fn main() {
         Some("set") => set_email_defaults(&args).map(|message| println!("{message}")),
         Some("stop") => service::stop().map(|message| println!("{message}")),
         Some("status") => command_status(),
+        Some("doctor") => command_doctor(),
         Some("logs") => command_logs(),
         Some("open") => command_open(&args),
         Some("uninstall") => service::uninstall().map(|message| println!("{message}")),
