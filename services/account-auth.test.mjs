@@ -377,9 +377,9 @@ test('pairing codes stop working at sign-out and are limited per hour', async ()
   const { code } = await (await handleAccountRequest(site('/api/site/pairing-code', 'POST'), env, options)).json();
   assert.equal((await handleAccountRequest(site('/api/site/logout', 'POST'), env, options)).status, 200);
   assert.equal((await pair(code)).status, 409, 'the next person at this browser cannot use the old setup prompt');
-  for (let index = 1; index < PAIRING_CODES_PER_HOUR; index += 1) {
-    assert.equal((await handleAccountRequest(site('/api/site/pairing-code', 'POST'), env, options)).status, 200);
-  }
+  const burst = await Promise.all([...Array(PAIRING_CODES_PER_HOUR + 10)].map(() =>
+    handleAccountRequest(site('/api/site/pairing-code', 'POST'), env, options)));
+  assert.equal(burst.filter((response) => response.status === 200).length, PAIRING_CODES_PER_HOUR - 1);
   assert.equal((await handleAccountRequest(site('/api/site/pairing-code', 'POST'), env, options)).status, 429);
 });
 

@@ -250,12 +250,13 @@ export const PAIRING_CODES_PER_HOUR = 20;
 // A fresh 10-minute code, or null once the account hit its hourly limit.
 export async function createPairingCode(env, accountId) {
   await env.DB.prepare("DELETE FROM pairing_codes WHERE account_id = ? AND created_at < datetime('now', '-1 day')").bind(accountId).run();
-  const recent = await env.DB.prepare("SELECT COUNT(*) AS n FROM pairing_codes WHERE account_id = ? AND created_at > datetime('now', '-1 hour')")
-    .bind(accountId).first();
-  if (recent.n >= PAIRING_CODES_PER_HOUR) return null;
   const code = `tm_pair_${randomBytes(20).toString('base64url')}`;
-  await env.DB.prepare("INSERT INTO pairing_codes (code_hash, account_id, expires_at) VALUES (?, ?, datetime('now', '+10 minutes'))")
-    .bind(hash(code), accountId).run();
+  // One statement counts and inserts, so concurrent requests can't all pass the check.
+  const inserted = await env.DB.prepare(`INSERT INTO pairing_codes (code_hash, account_id, expires_at)
+    SELECT ?1, ?2, datetime('now', '+10 minutes')
+    WHERE (SELECT COUNT(*) FROM pairing_codes WHERE account_id = ?2 AND created_at > datetime('now', '-1 hour')) < ?3`)
+    .bind(hash(code), accountId, PAIRING_CODES_PER_HOUR).run();
+  if (!(inserted.meta?.changes ?? inserted.changes)) return null;
   return { code, expiresInSeconds: 600 };
 }
 
