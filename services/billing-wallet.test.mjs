@@ -120,6 +120,12 @@ test('a dispute withdraws its amount from spendable credit once, and a reinstate
   assert.equal((await call(event('charge.dispute.funds_reinstated', 'evt_d2'))).status, 200);
   assert.equal((await call(event('charge.dispute.funds_reinstated', 'evt_d2_replay'))).status, 200);
   assert.equal(await balance(), 1000);
+  // Stripe may deliver the reinstatement first; the late withdrawal must not take the money again.
+  const second = { ...dispute, id: 'du_test_2' };
+  const late = (type, id) => signedEvent({ id, livemode: false, type, data: { object: second } });
+  assert.equal((await call(late('charge.dispute.funds_reinstated', 'evt_d4'))).status, 200);
+  assert.equal((await call(late('charge.dispute.funds_withdrawn', 'evt_d5'))).status, 200);
+  assert.equal(await balance(), 1000);
   assert.equal((await call(signedEvent({ id: 'evt_d3', livemode: false, type: 'charge.dispute.funds_withdrawn',
     data: { object: { ...dispute, id: 'du_other', payment_intent: 'pi_unknown' } } }))).status, 409);
 });

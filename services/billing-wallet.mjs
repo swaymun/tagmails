@@ -178,14 +178,16 @@ async function disputedCheckout(env, type, dispute) {
   const credited = await env.DB.prepare("SELECT id FROM credit_ledger WHERE checkout_id = ? AND kind = 'test_top_up'")
     .bind(row.id).first();
   if (!credited) return json({ error: 'Top-up has not been credited; retry later' }, 409);
-  await env.DB.prepare(type === 'charge.dispute.funds_withdrawn'
-    ? `INSERT INTO credit_ledger (id, account_id, checkout_id, amount_cents, kind, source_id)
-      VALUES (?1, ?2, ?3, ?4, 'test_refund', ?5) ON CONFLICT(kind, source_id) DO NOTHING`
-    : `INSERT INTO credit_ledger (id, account_id, checkout_id, amount_cents, kind, source_id)
-      SELECT ?1, account_id, checkout_id, -amount_cents, 'test_refund_restored', source_id
-      FROM credit_ledger WHERE kind = 'test_refund' AND source_id = ?5 AND checkout_id = ?3
-      ON CONFLICT(kind, source_id) DO NOTHING`)
-    .bind(randomUUID(), row.account_id, row.id, -dispute.amount, dispute.id).run();
+  // Stripe doesn't order events: a reinstatement that arrives first records the
+  // withdrawal too, so the late withdrawal finds it already there.
+  const withdrawal = env.DB.prepare(`INSERT INTO credit_ledger (id, account_id, checkout_id, amount_cents, kind, source_id)
+    VALUES (?, ?, ?, ?, 'test_refund', ?) ON CONFLICT(kind, source_id) DO NOTHING`)
+    .bind(randomUUID(), row.account_id, row.id, -dispute.amount, dispute.id);
+  const restoration = env.DB.prepare(`INSERT INTO credit_ledger (id, account_id, checkout_id, amount_cents, kind, source_id)
+    SELECT ?, account_id, checkout_id, -amount_cents, 'test_refund_restored', source_id
+    FROM credit_ledger WHERE kind = 'test_refund' AND source_id = ? AND checkout_id = ?
+    ON CONFLICT(kind, source_id) DO NOTHING`).bind(randomUUID(), dispute.id, row.id);
+  await env.DB.batch(type === 'charge.dispute.funds_withdrawn' ? [withdrawal] : [withdrawal, restoration]);
   return json({ received: true });
 }
 
