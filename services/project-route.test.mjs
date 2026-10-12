@@ -110,6 +110,27 @@ test('a new email runs in the chosen published folder and replies stay there', a
   assert.deepEqual(envelope(reply.body).workspace, { kind: 'project', path: '/Users/me/code/tagmails' });
 });
 
+test('a new thread routes only among the projects of the Mac it is pinned to', async () => {
+  const { env, sqlite } = bindings();
+  env.TYPESAFE_API_KEY = 'jev-test';
+  const tokens = {};
+  for (const id of ['mac-a', 'mac-b']) {
+    tokens[id] = `tm_dev_${randomBytes(32).toString('base64url')}`;
+    sqlite.prepare('INSERT INTO devices (id, account_id, token_hash) VALUES (?, ?, ?)')
+      .run(id, 'account-1', createHash('sha256').update(tokens[id]).digest('hex'));
+  }
+  // Mac B published projects; Mac A refreshed its models more recently, so new threads pin to A.
+  assert.equal((await call(env, tokens['mac-b'], 'projects', { projects: PROJECTS })).status, 200);
+  sqlite.prepare("UPDATE devices SET model_catalog_json = '[]', model_catalog_at = datetime('now', '-1 minute') WHERE id = 'mac-b'").run();
+  sqlite.prepare("UPDATE devices SET model_catalog_json = '[]', model_catalog_at = CURRENT_TIMESTAMP WHERE id = 'mac-a'").run();
+  const seen = [];
+  await inbound(env, 'mixed', 'In TagMails, fix the footer spacing.', [], jev('p_0000000001', seen));
+  assert.equal(sqlite.prepare('SELECT device_id FROM threads').get().device_id, 'mac-a');
+  assert.equal(seen.filter((request) => request.questions.folder).length, 0, "Mac B's folders are not offered");
+  const claim = envelope((await call(env, tokens['mac-a'], 'claim')).body);
+  assert.notEqual(claim.workspace?.path, '/Users/me/code/tagmails');
+});
+
 test('standalone and unclear work both run in a chat folder instead of asking', async () => {
   const { env, sqlite } = bindings();
   env.TYPESAFE_API_KEY = 'jev-test';
