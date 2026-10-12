@@ -71,7 +71,11 @@ function cells(line) {
   return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
 }
 
-export function renderMarkdown(markdown, { styled = true } = {}) {
+// Deeper quotes render as text: each level recurses, and an agent answer of
+// thousands of ">" would otherwise overflow the stack and stall the reply queue.
+const MAX_QUOTE_DEPTH = 8;
+
+export function renderMarkdown(markdown, { styled = true, depth = 0 } = {}) {
   const lines = String(markdown ?? '').replace(/\r\n?/g, '\n').split('\n');
   const html = [];
   let index = 0;
@@ -108,10 +112,10 @@ export function renderMarkdown(markdown, { styled = true } = {}) {
         `<tr>${head.map((_, column) => `<td${css('cell', styled)}>${inline(row[column] ?? '', styled)}</td>`).join('')}</tr>`).join('')}</tbody></table>`);
       continue;
     }
-    if (/^\s*>/.test(line)) {
+    if (/^\s*>/.test(line) && depth < MAX_QUOTE_DEPTH) {
       const quoted = [];
       while (index < lines.length && /^\s*>/.test(lines[index])) quoted.push(lines[index++].replace(/^\s*>\s?/, ''));
-      html.push(`<blockquote${css('quote', styled)}>${renderMarkdown(quoted.join('\n'), { styled })}</blockquote>`);
+      html.push(`<blockquote${css('quote', styled)}>${renderMarkdown(quoted.join('\n'), { styled, depth: depth + 1 })}</blockquote>`);
       continue;
     }
     if (LIST_ITEM.test(line)) {
@@ -131,7 +135,9 @@ export function renderMarkdown(markdown, { styled = true } = {}) {
     }
     const paragraph = [];
     while (index < lines.length && lines[index].trim() && !LIST_ITEM.test(lines[index]) &&
-      !/^\s*(```|~~~|#{1,6}\s|>)/.test(lines[index])) paragraph.push(lines[index++].trim());
+      !/^\s*(```|~~~|#{1,6}\s)/.test(lines[index]) && !(/^\s*>/.test(lines[index]) && depth < MAX_QUOTE_DEPTH)) {
+      paragraph.push(lines[index++].trim());
+    }
     html.push(`<p${css('p', styled)}>${paragraph.map((line) => inline(line, styled)).join('<br>')}</p>`);
   }
   return html.join('');
