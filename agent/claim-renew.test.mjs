@@ -4,7 +4,8 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { keepClaim, renewClaim } from './claim-renew.mjs';
+import { spawn } from 'node:child_process';
+import { keepClaim, renewClaim, terminate, whileHoldingClaim } from './claim-renew.mjs';
 
 test('a relay-backed runtime renews with its device credential and lease ID', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tagmails-relay-renew-'));
@@ -98,4 +99,36 @@ test('a follow-up from a different sender never joins the turn and is handed bac
   stop();
   assert.deepEqual(delivered, []);
   assert.ok(acks.length >= 1 && acks.every(([id, ok]) => id === 's2' && ok === false));
+});
+
+test('a steer is delivered once even when renewals overlap a slow delivery', async () => {
+  let deliveries = 0;
+  const steer = { id: 'steer-1', from: 'owner@gmail.com', text: 'also Osaka' };
+  const stop = keepClaim({ request: { from: 'owner@gmail.com' } }, () => {}, {
+    every: 5, renew: async () => ({ steers: [steer] }), ack: async () => {},
+    onSteer: async () => { deliveries += 1; await new Promise((resolve) => setTimeout(resolve, 40)); return true; },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  stop();
+  assert.equal(deliveries, 1);
+});
+
+test('preparing a run renews the lease, and a lease lost meanwhile releases the work and stops the run', async () => {
+  let renewals = 0;
+  const slow = () => new Promise((resolve) => setTimeout(() => resolve({ staged: true }), 40));
+  assert.deepEqual(await whileHoldingClaim({}, slow, { every: 5, renew: async () => { renewals += 1; return {}; } }), { staged: true });
+  assert.ok(renewals >= 2, 'renewed during preparation');
+  const released = [];
+  await assert.rejects(whileHoldingClaim({}, slow, { every: 5, release: async (value) => released.push(value),
+    renew: async () => { throw Object.assign(new Error('gone'), { leaseGone: true }); } }), /lost while preparing/);
+  assert.deepEqual(released, [{ staged: true }]);
+});
+
+test('an agent CLI that ignores SIGTERM is killed', async () => {
+  const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000)"],
+    { stdio: ['ignore', 'pipe', 'ignore'] });
+  await new Promise((resolve) => child.stdout.once('data', resolve));
+  const exited = new Promise((resolve) => child.once('exit', (code, signal) => resolve(signal)));
+  terminate(child, 50);
+  assert.equal(await exited, 'SIGKILL');
 });

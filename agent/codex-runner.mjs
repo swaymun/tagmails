@@ -8,7 +8,7 @@ import { stageAgentAttachments } from './agent-attachments.mjs';
 import { formatAgentAnswer } from './answer-result.mjs';
 import { CONNECTED_APPS, ownerInstructions, ownerToolsFor, TAGMAILS_EMAIL, tagmailsConfigDir } from './email-context.mjs';
 import { prepareCodexProfile, prepareOwnerCodexHome, PROFILE, WRITE_PROFILE, FULL_PROFILE } from './codex-profile.mjs';
-import { keepClaim, steerPrompt } from './claim-renew.mjs';
+import { keepClaim, steerPrompt, terminate, whileHoldingClaim } from './claim-renew.mjs';
 import { addRunEvent, codexRunEvent, finishRunTranscript, runTranscript } from './run-transcript.mjs';
 
 const CODEX_MODEL_ID = /^[a-z][a-z0-9][a-z0-9._-]{0,62}$/;
@@ -232,10 +232,10 @@ async function runCodex(claim, workspace, home, sessionId, staged, write, full =
     rejectTurn(error);
   };
   lines.on('line', (line) => {
-    if (Buffer.byteLength(line) > MAX_EVENT) { stop(new Error('Codex sent an oversized event')); child.kill(); return; }
+    if (Buffer.byteLength(line) > MAX_EVENT) { stop(new Error('Codex sent an oversized event')); terminate(child); return; }
     let message;
     try { message = JSON.parse(line); }
-    catch { stop(new Error('Invalid Codex app-server event')); child.kill(); return; }
+    catch { stop(new Error('Invalid Codex app-server event')); terminate(child); return; }
     if (message.id !== undefined && !message.method) {
       const target = pending.get(message.id);
       if (target) {
@@ -280,10 +280,10 @@ async function runCodex(claim, workspace, home, sessionId, staged, write, full =
     addRunEvent(transcript, 'request', steer.text);
     return true;
   };
-  const stopRenewing = keepClaim(claim, () => { leaseLost = true; child.kill(); }, { onSteer });
+  const stopRenewing = keepClaim(claim, () => { leaseLost = true; terminate(child); }, { onSteer });
   // No time limit unless one is configured; the lease keeps long runs alive.
   const limit = Number(process.env.TAGMAILS_CODEX_TIMEOUT_MS || 0);
-  const timeout = limit > 0 ? setTimeout(() => { timedOut = true; stop(new Error('Codex exceeded the configured time limit')); child.kill(); }, limit) : null;
+  const timeout = limit > 0 ? setTimeout(() => { timedOut = true; stop(new Error('Codex exceeded the configured time limit')); terminate(child); }, limit) : null;
   try {
     await request('initialize', { clientInfo: { name: 'tagmails', title: 'TagMails', version: '0.1.0' },
       capabilities: { experimentalApi: true } });
@@ -372,7 +372,7 @@ async function runCodex(claim, workspace, home, sessionId, staged, write, full =
   } finally {
     stopRenewing();
     clearTimeout(timeout);
-    child.kill();
+    terminate(child);
     lines.close();
   }
 }
@@ -405,7 +405,8 @@ export async function runClaim(claim, { write = false, full = false } = {}) {
   if (Object.hasOwn(store.jobs, claim.jobId)) return store.jobs[claim.jobId];
   const existing = Object.hasOwn(store.threads, sessionKey(claim)) ? store.threads[sessionKey(claim)] : null;
   if (existing && existing.workspace !== workspace) return fail('This email thread was paired with a different workspace.', write, full);
-  const staged = await stageAgentAttachments(claim.request.attachments, workspace);
+  const staged = await whileHoldingClaim(claim, () => stageAgentAttachments(claim.request.attachments, workspace),
+    { release: (files) => files.cleanup() });
   try {
     if (write) {
       await updateStore(storeFile, (saved) => { saved.jobs[claim.jobId] = fail('A previous local write attempt stopped before TagMails recorded its result. Inspect the workspace before sending a new request.', true, full); }, 'Codex session');

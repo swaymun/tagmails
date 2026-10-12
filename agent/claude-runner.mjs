@@ -8,7 +8,7 @@ import { readStore, updateStore, sessionKey } from './session-store.mjs';
 import { stageAgentAttachments } from './agent-attachments.mjs';
 import { formatAgentAnswer } from './answer-result.mjs';
 import { CONNECTED_APPS, ownerInstructions, ownerToolsFor, TAGMAILS_EMAIL, tagmailsConfigDir } from './email-context.mjs';
-import { keepClaim, steerPrompt } from './claim-renew.mjs';
+import { keepClaim, steerPrompt, terminate, whileHoldingClaim } from './claim-renew.mjs';
 import { addRunEvent, claudeRunEvents, finishRunTranscript, runTranscript } from './run-transcript.mjs';
 
 const SESSION_ID = /^[0-9a-f-]{36}$/i;
@@ -200,10 +200,10 @@ async function runClaude(claim, workspace, sessionId, staged, write) {
   const lines = readline.createInterface({ input: child.stdout });
   lines.on('line', (line) => {
     // Bound one event, not the run: long turns stream far more in total.
-    if (Buffer.byteLength(line) > 8 * 1024 * 1024) { outputExceeded = true; child.kill(); return; }
+    if (Buffer.byteLength(line) > 8 * 1024 * 1024) { outputExceeded = true; terminate(child); return; }
     let event;
     try { event = JSON.parse(line); }
-    catch { invalidOutput = true; child.kill(); return; }
+    catch { invalidOutput = true; terminate(child); return; }
     for (const item of claudeRunEvents(event)) addRunEvent(transcript, item.kind, item.text);
     // Claude CLI currently reports restricted file denials as tool-result text.
     if (event.type === 'user' && event.message?.content?.some((item) => item.type === 'tool_result' &&
@@ -223,10 +223,10 @@ async function runClaude(claim, workspace, sessionId, staged, write) {
     addRunEvent(transcript, 'request', steer.text);
     return true;
   };
-  const stopRenewing = keepClaim(claim, () => { leaseLost = true; child.kill(); }, { onSteer });
+  const stopRenewing = keepClaim(claim, () => { leaseLost = true; terminate(child); }, { onSteer });
   // No time limit unless one is configured; the lease keeps long runs alive.
   const limit = Number(process.env.TAGMAILS_CLAUDE_TIMEOUT_MS || 0);
-  const timeout = limit > 0 ? setTimeout(() => { timedOut = true; child.kill(); }, limit) : null;
+  const timeout = limit > 0 ? setTimeout(() => { timedOut = true; terminate(child); }, limit) : null;
   try {
     const code = await new Promise((resolve, reject) => {
       child.once('error', reject);
@@ -284,7 +284,8 @@ export async function runClaim(claim) {
   if (Object.hasOwn(store.jobs, claim.jobId)) return store.jobs[claim.jobId];
   const existing = Object.hasOwn(store.threads, sessionKey(claim)) ? store.threads[sessionKey(claim)] : null;
   if (existing && existing.workspace !== workspace) return fail('This email thread was paired with a different workspace.', write);
-  const staged = await stageAgentAttachments(claim.request.attachments, workspace);
+  const staged = await whileHoldingClaim(claim, () => stageAgentAttachments(claim.request.attachments, workspace),
+    { release: (files) => files.cleanup() });
   try {
     if (write) {
       await updateStore(storeFile, (saved) => { saved.jobs[claim.jobId] = fail('A previous local write attempt stopped before TagMails recorded its result. Inspect the workspace before sending a new request.', true); }, 'Claude session');
