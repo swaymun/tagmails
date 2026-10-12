@@ -9,7 +9,7 @@ import { stageAgentAttachments } from './agent-attachments.mjs';
 import { formatAgentAnswer } from './answer-result.mjs';
 import { CONNECTED_APPS, ownerInstructions, ownerToolsFor, TAGMAILS_EMAIL, tagmailsConfigDir } from './email-context.mjs';
 import { deviceSecretFiles } from './codex-profile.mjs';
-import { keepClaim, steerPrompt, terminate, whileHoldingClaim } from './claim-renew.mjs';
+import { keepClaim, localFollowUp, steerPrompt, terminate, whileHoldingClaim } from './claim-renew.mjs';
 import { addRunEvent, claudeRunEvents, finishRunTranscript, runTranscript } from './run-transcript.mjs';
 
 const SESSION_ID = /^[0-9a-f-]{36}$/i;
@@ -277,7 +277,7 @@ async function runClaude(claim, workspace, sessionId, staged, write) {
     addRunEvent(transcript, 'request', steer.text);
     return true;
   };
-  const stopRenewing = keepClaim(claim, () => { leaseLost = true; terminate(child); }, { onSteer });
+  const stopRenewing = keepClaim(claim, () => { leaseLost = true; terminate(child); }, { onSteer, classify: process.env.TAGMAILS_RELAY_URL ? localFollowUp : null });
   // No time limit unless one is configured; the lease keeps long runs alive.
   const limit = Number(process.env.TAGMAILS_CLAUDE_TIMEOUT_MS || 0);
   const timeout = limit > 0 ? setTimeout(() => { timedOut = true; terminate(child); }, limit) : null;

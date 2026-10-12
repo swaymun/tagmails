@@ -28,19 +28,7 @@ async function call(env, token, path, body) {
 
 function envelope(body) { return JSON.parse(Buffer.from(body.payload, 'base64url').toString('utf8')); }
 
-// A fake Jev that answers the folder question with `folder` and leaves model routing alone.
-function jev(folder, seen = []) {
-  return async (_url, init) => {
-    const request = JSON.parse(init.body);
-    seen.push(request);
-    const answers = request.questions.folder
-      ? { folder: { type: 'choice', choice: folder, probabilities: { [folder]: 0.95 } } }
-      : { route: { type: 'choice', choice: 'none', probabilities: { none: 0.9 } } };
-    return Response.json({ answers });
-  };
-}
-
-async function inbound(env, id, body, parentIds = [], fetchModel) {
+async function inbound(env, id, body, parentIds = []) {
   const messageId = `<${id}@gmail.com>`;
   const rawMime = Buffer.from([
     'From: owner@gmail.com', 'To: agent@wonder.test', 'Subject: Fix the footer', `Message-ID: ${messageId}`,
@@ -50,7 +38,7 @@ async function inbound(env, id, body, parentIds = [], fetchModel) {
   const message = { providerEmailId: id, messageId, from: 'owner@gmail.com', agentAddress: 'agent@wonder.test',
     to: ['agent@wonder.test'], cc: [], bcc: [], subject: 'Fix the footer', parentIds, rawMime, body };
   const response = await handleInbound(new Request('https://relay.test/webhooks/resend', { method: 'POST', body: '{}' }), env, {
-    inspect: async () => message, fetchModel,
+    inspect: async () => message,
   });
   return response.json();
 }
@@ -77,43 +65,77 @@ test('only a confident, clearly leading folder choice is accepted', () => {
   assert.deepEqual(Object.keys(prompt.questions.folder.criteria), ['p_0000000002', 'p_0000000001', 'ad_hoc', 'ask']);
 });
 
-test('routing falls back to a chat folder when Jev fails, and asks only about an unknown named folder', async () => {
+test('routing falls back to a chat folder when the classifier fails, and asks only about an unknown named folder', async () => {
   const projects = cleanProjectCatalog(PROJECTS);
-  const failing = async () => new Response('down', { status: 503 });
+  const failing = async () => { throw new Error('classifier down'); };
   const original = console.error; console.error = () => {};
   try {
-    assert.deepEqual(await routeProject('Fix it', projects, { apiKey: 'k', fetcher: failing }), { kind: 'scratch' });
+    assert.deepEqual(await routeProject('Fix it', projects, { ask: failing }), { kind: 'scratch' });
   } finally { console.error = original; }
-  assert.match((await routeProject('Work in /Users/me/code/elsewhere and fix it', projects, { apiKey: 'k', fetcher: failing })).ask, /Which project/);
-  assert.deepEqual(await routeProject('Fix it', [], { apiKey: 'k', fetcher: failing }), { kind: 'scratch' });
+  assert.match((await routeProject('Work in /Users/me/code/elsewhere and fix it', projects, { ask: failing })).ask, /Which project/);
+  assert.deepEqual(await routeProject('Fix it', [], { ask: failing }), { kind: 'scratch' });
+  assert.deepEqual(await routeProject('Fix it', projects), { kind: 'scratch' });
 });
 
-test('a new email runs in the chosen published folder and replies stay there', async () => {
+test('the relay leaves the folder to the Mac; the Mac reports it and the thread keeps it', async () => {
   const { env, sqlite } = bindings();
-  env.TYPESAFE_API_KEY = 'jev-test';
   const token = device(sqlite);
   assert.deepEqual((await call(env, token, 'projects', { projects: PROJECTS })).body, { saved: true, count: 2 });
-  const seen = [];
-  await inbound(env, 'first', 'In TagMails, fix the footer spacing.', [], jev('p_0000000001', seen));
-  const folderCalls = seen.filter((request) => request.questions.folder);
-  assert.equal(folderCalls.length, 1);
-  assert.match(folderCalls[0].state, /^New request:\nSubject: Fix the footer\nIn TagMails/);
-  const claim = await call(env, token, 'claim');
-  assert.deepEqual(envelope(claim.body).workspace, { kind: 'project', path: '/Users/me/code/tagmails' });
-  await call(env, token, 'complete', { jobId: envelope(claim.body).jobId, leaseId: envelope(claim.body).leaseId,
-    result: { state: 'completed', summary: 'Fixed.' } });
-
-  const later = [];
-  await inbound(env, 'reply', 'Also tighten the line height.', ['<first@gmail.com>'], jev('p_0000000002', later));
-  assert.equal(later.filter((request) => request.questions.folder).length, 0);
-  const reply = await call(env, token, 'claim');
+  await inbound(env, 'first', 'In TagMails, fix the footer spacing.');
+  assert.equal(sqlite.prepare('SELECT workspace_json FROM jobs').get().workspace_json, null, 'the relay does not guess a folder');
+  const claim = envelope((await call(env, token, 'claim', { routing: 'local' })).body);
+  assert.equal(claim.workspace, undefined);
+  // The Mac chose TagMails and says so.
+  assert.deepEqual((await call(env, token, 'route', { jobId: claim.jobId, leaseId: claim.leaseId,
+    workspace: { kind: 'project', path: '/Users/me/code/tagmails' } })).body, { routed: true });
+  await call(env, token, 'complete', { jobId: claim.jobId, leaseId: claim.leaseId, result: { state: 'completed', summary: 'Fixed.' } });
+  await inbound(env, 'reply', 'Also tighten the line height.', ['<first@gmail.com>']);
+  const reply = await call(env, token, 'claim', { routing: 'local' });
   assert.deepEqual(envelope(reply.body).workspace, { kind: 'project', path: '/Users/me/code/tagmails' });
+});
+
+test('an explicit work-in path is still settled by the relay', async () => {
+  const { env, sqlite } = bindings();
+  const token = device(sqlite);
+  await call(env, token, 'projects', { projects: PROJECTS });
+  await inbound(env, 'explicit', 'Work in /Users/me/code/pupcal and fix checkout.');
+  assert.deepEqual(envelope((await call(env, token, 'claim')).body).workspace, { kind: 'project', path: '/Users/me/code/pupcal' });
+});
+
+test('the Mac can record a model and a scratch folder, and a bad report is refused', async () => {
+  const { env, sqlite } = bindings();
+  const token = device(sqlite);
+  await inbound(env, 'poem', 'Write a short poem about autumn.');
+  const claim = envelope((await call(env, token, 'claim', { routing: 'local' })).body);
+  const lease = { jobId: claim.jobId, leaseId: claim.leaseId };
+  assert.equal((await call(env, token, 'route', { ...lease, workspace: { kind: 'project', path: 'relative' } })).status, 400);
+  assert.equal((await call(env, token, 'route', { ...lease, model: { id: 'gpt-6-luna', effort: 'bogus' } })).status, 400);
+  env.CLAUDE_ROUTE_ENABLED = 'false';
+  assert.equal((await call(env, token, 'route', { ...lease, model: { id: 'claude-sonnet-5-5', effort: 'medium' } })).status, 422, 'Claude stays gated by the pilot flag');
+  assert.equal((await call(env, token, 'route', { jobId: claim.jobId, leaseId: 'wrong', workspace: { kind: 'scratch' } })).status, 409);
+  assert.deepEqual((await call(env, token, 'route', { ...lease, model: { id: 'gpt-6-luna', effort: 'low', speed: 'fast' }, workspace: { kind: 'scratch' } })).body, { routed: true });
+  const row = sqlite.prepare('SELECT model_json, workspace_json FROM jobs').get();
+  assert.deepEqual(JSON.parse(row.model_json), { id: 'gpt-6-luna', effort: 'low', speed: 'fast', source: 'classified' });
+  assert.deepEqual(JSON.parse(row.workspace_json), { kind: 'scratch' });
+});
+
+test('a routed job whose folder is busy waits in the queue with that folder recorded', async () => {
+  const { env, sqlite } = bindings();
+  const token = device(sqlite);
+  await inbound(env, 'busy', 'Fix the footer in TagMails.');
+  const claim = envelope((await call(env, token, 'claim', { routing: 'local', busyFolders: [] })).body);
+  await call(env, token, 'route', { jobId: claim.jobId, leaseId: claim.leaseId, workspace: { kind: 'project', path: '/Users/me/code/tagmails' } });
+  assert.deepEqual((await call(env, token, 'release', { jobId: claim.jobId, leaseId: claim.leaseId })).body, { released: true });
+  assert.equal(sqlite.prepare('SELECT state, attempts FROM jobs').get().state, 'queued');
+  assert.equal((await call(env, token, 'release', { jobId: claim.jobId, leaseId: claim.leaseId })).status, 409, 'the lease is gone');
+  // While the Mac is busy there, the job is not offered again; once free it is.
+  assert.equal((await call(env, token, 'claim', { busyFolders: ['/Users/me/code/tagmails'] })).body.claimed, false);
+  assert.equal(envelope((await call(env, token, 'claim', { busyFolders: [] })).body).jobId, claim.jobId);
 });
 
 test('a new thread routes only among the projects of the Mac it is pinned to', async () => {
   const { env, sqlite } = bindings();
-  env.TYPESAFE_API_KEY = 'jev-test';
-  const tokens = {};
+    const tokens = {};
   for (const id of ['mac-a', 'mac-b']) {
     tokens[id] = `tm_dev_${randomBytes(32).toString('base64url')}`;
     sqlite.prepare('INSERT INTO devices (id, account_id, token_hash) VALUES (?, ?, ?)')
@@ -123,36 +145,18 @@ test('a new thread routes only among the projects of the Mac it is pinned to', a
   assert.equal((await call(env, tokens['mac-b'], 'projects', { projects: PROJECTS })).status, 200);
   sqlite.prepare("UPDATE devices SET model_catalog_json = '[]', model_catalog_at = datetime('now', '-1 minute') WHERE id = 'mac-b'").run();
   sqlite.prepare("UPDATE devices SET model_catalog_json = '[]', model_catalog_at = CURRENT_TIMESTAMP WHERE id = 'mac-a'").run();
-  const seen = [];
-  await inbound(env, 'mixed', 'In TagMails, fix the footer spacing.', [], jev('p_0000000001', seen));
+  await inbound(env, 'mixed', 'In TagMails, fix the footer spacing.');
   assert.equal(sqlite.prepare('SELECT device_id FROM threads').get().device_id, 'mac-a');
-  assert.equal(seen.filter((request) => request.questions.folder).length, 0, "Mac B's folders are not offered");
   const claim = envelope((await call(env, tokens['mac-a'], 'claim')).body);
   assert.notEqual(claim.workspace?.path, '/Users/me/code/tagmails');
 });
 
-test('standalone and unclear work both run in a chat folder instead of asking', async () => {
-  const { env, sqlite } = bindings();
-  env.TYPESAFE_API_KEY = 'jev-test';
-  const token = device(sqlite);
-  await call(env, token, 'projects', { projects: PROJECTS });
-  await inbound(env, 'poem', 'Write a short poem about autumn.', [], jev('ad_hoc'));
-  assert.deepEqual(envelope((await call(env, token, 'claim')).body).workspace, { kind: 'scratch' });
-  await inbound(env, 'vague', 'Fix the app.', [], jev('ask'));
-  const vague = sqlite.prepare("SELECT model_json, workspace_json FROM jobs j JOIN messages m ON m.id = j.message_id WHERE m.provider_email_id = 'vague'").get();
-  assert.equal(JSON.parse(vague.model_json).error, undefined);
-  assert.deepEqual(JSON.parse(vague.workspace_json), { kind: 'scratch' });
-});
-
 test('a machine pinned to one folder clears its published projects', async () => {
   const { env, sqlite } = bindings();
-  env.TYPESAFE_API_KEY = 'jev-test';
-  const token = device(sqlite);
+    const token = device(sqlite);
   await call(env, token, 'projects', { projects: PROJECTS });
   await call(env, token, 'projects', { projects: [] });
-  const seen = [];
-  await inbound(env, 'pinned', 'In TagMails, fix the footer.', [], jev('p_0000000001', seen));
-  assert.equal(seen.filter((request) => request.questions.folder).length, 0);
+  await inbound(env, 'pinned', 'In TagMails, fix the footer.');
   assert.equal(sqlite.prepare('SELECT workspace_json FROM jobs').get().workspace_json, null);
 });
 
@@ -182,12 +186,12 @@ test('an explicit work-in path is decided locally, never from a quoted stranger'
   assert.equal(explicitWorkspace('See /Users/me/Downloads/shot.png and fix TagMails.', projects), null);
 });
 
-test('routing uses the explicit path without calling Jev', async () => {
+test('routing uses the explicit path without asking the classifier', async () => {
   const projects = cleanProjectCatalog(PROJECTS);
-  const fail = async () => { throw new Error('Jev should not be called'); };
-  assert.deepEqual(await routeProject('Work in /Users/me/code/pupcal.', projects, { apiKey: 'k', fetcher: fail }),
+  const fail = async () => { throw new Error('The classifier should not be called'); };
+  assert.deepEqual(await routeProject('Work in /Users/me/code/pupcal.', projects, { ask: fail }),
     { kind: 'project', id: 'p_0000000002', name: 'PupCal', path: '/Users/me/code/pupcal' });
-  assert.match((await routeProject('Work in /tmp/elsewhere and fix it.', projects, { apiKey: 'k', fetcher: fail })).ask, /Which project/);
+  assert.match((await routeProject('Work in /tmp/elsewhere and fix it.', projects, { ask: fail })).ask, /Which project/);
 });
 
 test('a machine project list is sealed at rest, since recent requests quote the owner', async () => {

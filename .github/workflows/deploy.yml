@@ -2,7 +2,7 @@ name: Deploy relay (dev)
 
 # Pushes to main run the tests, apply D1 migrations, then deploy the dev Worker.
 # Needs repository secrets CLOUDFLARE_API_TOKEN (Workers Scripts, D1 and R2 edit)
-# and CLOUDFLARE_ACCOUNT_ID. Worker secrets (RESEND_API_KEY, TYPESAFE_API_KEY, ...)
+# and CLOUDFLARE_ACCOUNT_ID. Worker secrets (RESEND_API_KEY, ...)
 # stay in Cloudflare. The Mac daemon and Homebrew release are not part of this.
 on:
   push:

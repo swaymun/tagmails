@@ -13,10 +13,10 @@ Set up a self-hosted TagMails relay from this repo by following docs/self-hostin
    logged in, ask me to run `npx wrangler login` and wait.
 2. Ask me for: the Worker name (default tagmails-selfhost), the mail path (cloudflare or resend),
    the agent mail domain, my Gmail address, whether you may enable Email Routing and Sending on
-   that domain (it replaces the domain's MX records), and optionally a TypeSafe API key. On the
+   that domain (it replaces the domain's MX records). On the
    Resend path, also ask for the Resend API key.
 3. Run `node scripts/self-host-setup.mjs < /dev/null` with those values exported as WORKER_NAME,
-   MAIL_PROVIDER, AGENT_DOMAIN, PILOT_OWNER_EMAIL, SETUP_MAIL_ROUTING=yes|no, TYPESAFE_API_KEY and
+   MAIL_PROVIDER, AGENT_DOMAIN, PILOT_OWNER_EMAIL, SETUP_MAIL_ROUTING=yes|no and
    RESEND_API_KEY. Pass secrets through the environment of that one command only.
 4. Give me the Worker origin it prints and wait while I create a Google OAuth client (Web
    application) with that origin as an authorized JavaScript origin. Rerun the script with

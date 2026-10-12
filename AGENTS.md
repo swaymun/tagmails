@@ -5,7 +5,7 @@ Email-to-agent relay: a Cloudflare Worker (`services/`, `apps/mock-inbox/`, D1 +
 ## Checks
 
 - `npm test` (Node, ~1 min; the full agent suite is slow only if a fake CLI hangs) and `cargo test -p tagmails-daemon`.
-- Jev routing prompts are checked against the live API with `npm run eval:model-routing` and `node scripts/research-steer.mjs` (needs `TYPESAFE_API_KEY`, or `~/.config/wonder/jev.json`). Both cost fractions of a cent.
+- Routing prompts (`agent/routing-*.mjs`, rules in `agent/local-router.mjs`) are checked against the real CLIs with `node scripts/routing-model-compare.mjs` (Haiku 5.5 via `claude`, Luna via `codex`; uses your subscriptions) and `node scripts/eval-dictation.mjs`.
 - After a change is committed locally, push it to `origin main` without asking. Pushes to `services/`, `apps/` or `wrangler.jsonc` also deploy the relay.
 - Don't commit `calls.jsonl` (test noise) or the `site` submodule pointer unless asked.
 
@@ -59,5 +59,5 @@ Migrations go in `services/migrations/NNNN_name.sql`; the test fixture applies t
 ## Conventions
 
 - Emails: lead with the answer; plain call4.me-style pages, no decoration.
-- Models: Codex `gpt-6-sol`/`gpt-6-luna`, Claude `claude-sonnet-5-5`; availability comes from the Mac's live catalog (`/api/device/models`). A model route needs one Jev choice per model, or probability splits and nothing clears the threshold.
-- Follow-ups sent mid-run are classified by Jev (`services/steer-route.mjs`): steer joins the live turn (Codex `turn/steer`, Claude stream-json `priority: "next"`), queue waits, ack is dropped. Undelivered steers requeue.
+- Models: Codex `gpt-6-sol`/`gpt-6-luna`, Claude `claude-sonnet-5-5`; availability comes from the Mac's live catalog (`/api/device/models`). A model route needs one classifier choice per model; the classifier answers with a key and the router never sees probabilities.
+- Routing runs on the owner's Mac (`agent/local-router.mjs`: Claude Haiku 5.5 medium for Claude users, GPT-6 Luna medium for Codex users, the other CLI as fallback). The relay only settles what the email says itself (`Model:` line, thread model/folder, an explicit work-in path); the daemon reports its choice to `/api/device/route`, or `/api/device/release` if the folder is busy. A mid-run follow-up is offered to the run's Mac (only if it claimed with `routing: "local"`) which classifies it: steer joins the live turn (Codex `turn/steer`, Claude stream-json `priority: "next"`), queue waits as its own job, ack is dropped. Undelivered steers requeue. A classification failure means defaults/queue, never a blocked job.

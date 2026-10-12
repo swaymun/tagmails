@@ -2,8 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { Resend } from 'resend';
 import { inspectCloudflareInbound } from './cloudflare-mail.mjs';
 import { openText, protectedEnv, sealText } from './storage-crypto.mjs';
-import { currentText, routeModel } from './jev-route.mjs';
-import { accountProjectCatalog, routeProject } from './project-route.mjs';
+import { currentText, prepareModelRoute } from '../agent/routing-model.mjs';
+import { accountProjectCatalog } from './project-route.mjs';
+import { prepareProjectRoute } from '../agent/project-routing.mjs';
 import { inspectResendInbound } from './resend-inbound.mjs';
 import { knownAgentAddresses } from './agent-addresses.mjs';
 import { failOneAbandonedJob, handleDeviceRequest } from './device-jobs.mjs';
@@ -24,7 +25,6 @@ import { sendNextStatusReaction } from './status-reactions.mjs';
 import { accountModelCatalog } from './model-catalog.mjs';
 import { accountPreferences } from './account-preferences.mjs';
 import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.mjs';
-import { routeFollowUp } from './steer-route.mjs';
 import { iconResponse } from './brand-icons.mjs';
 import { publicPath, rateLimited, tooManyRequests } from './rate-limit.mjs';
 
@@ -175,7 +175,7 @@ async function recordReaction(env, account, message) {
   return Response.json({ accepted: true, reaction: true, duplicate: false });
 }
 
-export async function handleInbound(request, env, { inspect = inspectResendInbound, getReceivedEmail = (id) => receivedEmail(env, id), fetchRaw = fetch, fetchModel = fetch, resolveTxt } = {}) {
+export async function handleInbound(request, env, { inspect = inspectResendInbound, getReceivedEmail = (id) => receivedEmail(env, id), fetchRaw = fetch, resolveTxt } = {}) {
   if (request.method !== 'POST' || new URL(request.url).pathname !== '/webhooks/resend') return new Response('Not found', { status: 404 });
   if (!env.DB || !env.MAIL || !env.RESEND_WEBHOOK_SECRET || !env.RESEND_API_KEY) {
     throw new Error('Resend relay bindings and secrets are incomplete');
@@ -205,7 +205,7 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
   }
   if (message.sent) return Response.json(await reconcileSentEvent(env, message.sent));
   if (message.deliveryOutcome) return Response.json(await recordDeliveryOutcome(env, message.deliveryOutcome));
-  return acceptMessage(env, message, { fetchModel });
+  return acceptMessage(env, message);
 }
 
 // Mail delivered straight to the Worker by Cloudflare Email Routing.
@@ -218,43 +218,27 @@ export async function handleEmail(emailMessage, env, { fetchModel = fetch, resol
     console.log('Inbound email ignored:', message.reason);
     return Response.json({ accepted: false, reason: message.reason });
   }
-  return acceptMessage(env, message, { fetchModel });
+  return acceptMessage(env, message);
 }
 
-// A follow-up that arrives while an earlier email in its thread is running can
-// adjust that run instead of waiting behind it. Returns the run to steer, or
-// null to queue as usual. Attachments and explicit Model lines always queue.
-// Only the running email's own sender can steer it: an owner turn may have
-// full access and the owner's connectors, which a participant must not reach.
-async function steerTarget(env, agent, threadId, message, fetchModel) {
-  if (!threadId || !env.TYPESAFE_API_KEY || message.attachments?.length || /^Model:/im.test(message.body ?? '')) return null;
-  const running = await env.DB.prepare(`SELECT j.id, m.object_key, m.message_id, m.sender_email, m.seal_key_id FROM jobs j
-    JOIN messages m ON m.id = j.message_id
+// A follow-up that arrives while an earlier email in its thread is running is
+// offered to that run; the Mac that runs it decides locally whether it steers
+// the run, waits as its own task, or is only an acknowledgement (a Mac without
+// local routing never gets one: it would steer everything). Attachments and
+// explicit Model lines always queue. Only the running email's own sender can
+// steer it: an owner turn may have full access and the owner's connectors,
+// which a participant must not reach.
+async function steerTarget(env, threadId, message) {
+  if (!threadId || message.attachments?.length || /^Model:/im.test(message.body ?? '')) return null;
+  const running = await env.DB.prepare(`SELECT j.id, m.sender_email FROM jobs j
+    JOIN messages m ON m.id = j.message_id JOIN devices d ON d.id = j.device_id
     WHERE j.thread_id = ? AND j.state = 'running' AND j.lease_until > CURRENT_TIMESTAMP
+      AND d.local_routing_at > datetime('now', '-1 hour')
     ORDER BY m.rowid DESC LIMIT 1`).bind(threadId).first();
-  if (!running || running.sender_email !== message.from) return null;
-  try {
-    let running_context;
-    if (running.seal_key_id) {
-      // The running email is sealed; describe it from the follow-up itself:
-      // its subject and the text it quotes.
-      const quoted = String(message.body ?? '').slice(currentText(message.body).length)
-        .split(/\r?\n/).map((line) => line.replace(/^\s*>+\s?/, '')).join('\n').trim();
-      running_context = `Subject: ${String(message.subject ?? '').replace(/^(?:re|fwd?)\s*:\s*/i, '')}\n${quoted}`;
-    } else {
-      const object = await env.MAIL.get(running.object_key);
-      if (!object) return null;
-      const earlier = await parseInbound(await object.arrayBuffer(), agent, {
-        verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false });
-      running_context = `Subject: ${earlier.subject}\n${currentText(earlier.body)}`;
-    }
-    const choice = await routeFollowUp(running_context,
-      currentText(message.body), { apiKey: env.TYPESAFE_API_KEY, fetcher: fetchModel });
-    return choice === 'queue' ? null : { id: running.id, ack: choice === 'ack' };
-  } catch { return null; }
+  return running && running.sender_email === message.from ? { id: running.id } : null;
 }
 
-async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
+async function acceptMessage(env, message) {
   const agent = (message.agentAddress ?? '').trim().toLowerCase();
   const account = await env.DB.prepare(`SELECT a.id, a.owner_email, a.default_model
     FROM account_agent_addresses aa JOIN accounts a ON a.id = aa.account_id
@@ -347,18 +331,17 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
     : typeof priorWorkspace?.asked === 'string'
       ? `${subjectLine ? `Subject: ${subjectLine}\n` : ''}The agent asked: ${priorWorkspace.asked}\nThe sender replied:\n${currentText(message.body)}`
       : requestText;
-  const [routedModel, workspace] = await Promise.all([
-    stopped ? null : routeModel(message.body, account.default_model, {
-      apiKey: env.TYPESAFE_API_KEY, fetcher: fetchModel, priorModel, subject: message.subject,
-      pilotCodexModel: env.PILOT_CODEX_MODEL,
-      defaultEffort: account.default_effort, defaultSpeed: account.default_speed,
-      availableModels: catalog.models,
-    }),
-    priorWorkspace?.kind ? priorWorkspace
-      : projects.length && env.TYPESAFE_API_KEY
-        ? routeProject(projectState, projects, { apiKey: env.TYPESAFE_API_KEY, fetcher: fetchModel })
-        : projects.length ? { kind: 'scratch' } : null,
-  ]);
+  // The relay decides only what the email itself settles: an explicit Model line,
+  // the thread's model and folder, or a folder path in the text. Anything else
+  // (natural-language model requests, which project) is routed on the Mac that
+  // claims the job (agent/local-router.mjs) and reported back to /api/device/route.
+  const routedModel = stopped ? null : prepareModelRoute(message.body, account.default_model, {
+    priorModel, subject: message.subject, pilotCodexModel: env.PILOT_CODEX_MODEL,
+    defaultEffort: account.default_effort, defaultSpeed: account.default_speed,
+    availableModels: catalog.models,
+  }).done;
+  const workspace = priorWorkspace?.kind ? priorWorkspace
+    : projects.length ? prepareProjectRoute(projectState, projects).done ?? null : null;
   let model = routedModel;
   let workspaceJson = workspace?.kind ? JSON.stringify(workspace) : null;
   if (workspace?.ask && model && !model.error) {
@@ -369,10 +352,8 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
   if (model?.id?.startsWith('claude-') && env.CLAUDE_ROUTE_ENABLED !== 'true') {
     model = { error: 'Claude models are not enabled in this pilot. Ask for an available OpenAI model or omit the model to use your default.' };
   }
-  const followUp = stopped || model?.error ? null : await steerTarget(env, agent, threadId, message, fetchModel);
-  // A bare acknowledgement ("Thanks!") mid-run is recorded and dropped: no turn, no reply, no charge.
-  const acknowledged = Boolean(followUp?.ack);
-  const steerOf = followUp && !followUp.ack ? followUp.id : null;
+  const followUp = stopped || model?.error ? null : await steerTarget(env, threadId, message);
+  const steerOf = followUp ? followUp.id : null;
   const unavailableResult = refused ? {
     runtime: 'relay', state: 'failed',
     summary: owner
@@ -391,14 +372,14 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
     httpMetadata: { contentType: 'application/json' },
   });
   // A steer joins its run only if the run is still going when this commits; if
-  // it finished while Jev was classifying, the follow-up queues as its own turn.
+  // it finished meanwhile, the follow-up queues as its own turn.
   const steerLive = `(?8 IS NOT NULL AND EXISTS (SELECT 1 FROM jobs WHERE id = ?8 AND state = 'running'))`;
   statements.push(env.DB.prepare(`INSERT INTO jobs (id, thread_id, message_id, state, model_json, result_key, workspace_json, steer_of, steer_state)
     SELECT ?1, ?2, ?3, CASE WHEN ${steerLive} THEN 'completed' ELSE ?4 END, ?5, ?6, ?7,
       CASE WHEN ${steerLive} THEN ?8 END, CASE WHEN ${steerLive} THEN 'pending' END`)
-    .bind(jobId, newThreadId, id, stopped ? 'failed' : acknowledged ? 'completed' : 'queued',
+    .bind(jobId, newThreadId, id, stopped ? 'failed' : 'queued',
       model && JSON.stringify(model), resultKey, workspaceJson, steerOf));
-  if (!stopped && !acknowledged && !model?.error && env.STATUS_REACTIONS_ENABLED === 'true' && message.from.endsWith('@gmail.com')) {
+  if (!stopped && !model?.error && env.STATUS_REACTIONS_ENABLED === 'true' && message.from.endsWith('@gmail.com')) {
     // Reactions are opt-in per account (off by default).
     statements.push(env.DB.prepare(`INSERT INTO status_reactions (job_id, status)
       SELECT ?, 'received' WHERE (SELECT status_reactions FROM accounts WHERE id = ?) = 1`).bind(jobId, account.id));
@@ -415,7 +396,6 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
     if (raced) return Response.json({ accepted: true, duplicate: true });
     throw error;
   }
-  if (acknowledged) return Response.json({ accepted: true, duplicate: false, acknowledged: true });
   // The running agent receives it on its next lease renewal; no reply or charge of its own.
   if (steerOf && (await env.DB.prepare('SELECT steer_state FROM jobs WHERE id = ?').bind(jobId).first())?.steer_state === 'pending') {
     return Response.json({ accepted: true, duplicate: false, steering: true });

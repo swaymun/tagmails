@@ -1,11 +1,11 @@
-// Live Jev check that dictated model names route correctly and that the same
-// words in ordinary text don't. Costs a fraction of a cent.
+// Live check of the on-device router (Haiku via `claude`, else Luna via `codex`, on your
+// subscription) that dictated model names route correctly and that the same words in
+// ordinary text don't.
 //   node scripts/eval-dictation.mjs
-import fs from 'node:fs';
-import { routeModel } from '../services/jev-route.mjs';
+import { routeModel } from '../agent/routing-model.mjs';
+import { classify } from '../agent/local-router.mjs';
 
-const apiKey = process.env.TYPESAFE_API_KEY ||
-  JSON.parse(fs.readFileSync(`${process.env.HOME}/.config/wonder/jev.json`, 'utf8')).api_key;
+const ask = async (request) => (await classify(request, 'claude')).answers;
 const m = (id, name, efforts = ['low', 'medium', 'high', 'xhigh', 'max'], speeds = ['standard']) => ({ id, name, efforts, speeds });
 // A catalog like the pilot Mac's: several versions per family.
 const catalog = [
@@ -31,7 +31,7 @@ const cases = [
 ];
 let passed = 0;
 for (const [body, want] of cases) {
-  const route = await routeModel(body, D, { apiKey, availableModels: catalog, pilotCodexModel: 'gpt-6-sol' });
+  const route = await routeModel(body, D, { ask, availableModels: catalog, pilotCodexModel: 'gpt-6-sol' });
   const got = route.error ? 'error' : route.id;
   if (got === want) passed += 1;
   console.log(`${got === want ? 'PASS' : 'FAIL'} ${JSON.stringify(body)} => ${got}${got === want ? '' : ` (expected ${want})`}`);

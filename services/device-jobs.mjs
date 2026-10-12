@@ -8,7 +8,7 @@ import { cleanProjectCatalog } from './project-route.mjs';
 import { sealText } from './storage-crypto.mjs';
 import { attachmentKey, registerDeviceKey, resultMeta, sealedObject, sealedObjectText, storeSealedResult } from './device-sealing.mjs';
 import { deliverReply, heldReplies, sendHeldReply } from './outbox.mjs';
-import { currentText } from './jev-route.mjs';
+import { currentText } from '../agent/routing-model.mjs';
 import { openDevicePush } from './device-push.mjs';
 import { rateLimited, tooManyRequests } from './rate-limit.mjs';
 
@@ -63,19 +63,27 @@ async function boundedJson(request, limit = MAX_RESULT_BYTES) {
 // A daemon running several jobs names the project folders it is busy in, so a
 // second thread never lands in a checkout another job is using. Older daemons
 // send {} and keep one job at a time.
-async function busyFolders(request) {
+// `routing: 'local'` says the computer classifies model requests, the project
+// and follow-ups itself (0.2.27+); the relay offers it mid-run follow-ups only then.
+async function claimOptions(request) {
   try {
-    const folders = (await boundedJson(request))?.busyFolders;
-    return Array.isArray(folders) ? folders.filter((folder) => typeof folder === 'string' && folder.length <= 1024).slice(0, 16) : [];
-  } catch { return []; }
+    const body = await boundedJson(request);
+    const folders = body?.busyFolders;
+    return {
+      busy: Array.isArray(folders) ? folders.filter((folder) => typeof folder === 'string' && folder.length <= 1024).slice(0, 16) : [],
+      local: body?.routing === 'local',
+    };
+  } catch { return { busy: [], local: false }; }
 }
 
-async function claim(env, device, busy = []) {
+async function claim(env, device, { busy = [], local = false } = {}) {
   // Claims also come from idle polls (every 15s without push, every 10 minutes
   // with it), so most find the queue empty. Throttle the last-seen write.
   await env.DB.prepare(`UPDATE devices SET last_seen_at = CURRENT_TIMESTAMP
     WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < datetime('now', '-2 minutes'))`)
     .bind(device.id).run();
+  if (local) await env.DB.prepare(`UPDATE devices SET local_routing_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND (local_routing_at IS NULL OR local_routing_at < datetime('now', '-5 minutes'))`).bind(device.id).run();
   const leaseId = randomUUID();
   const funded = testBillingEnabled(env)
     ? `AND EXISTS
@@ -309,6 +317,47 @@ async function steered(env, device, body) {
   return json({ ok: true });
 }
 
+const ROUTE_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+
+// The computer's routing of a claimed job (agent/local-router.mjs): the model and
+// folder it chose. Stored on the job so the thread's later emails continue with
+// them, exactly as when the relay chose.
+async function routed(env, device, body) {
+  if (typeof body.jobId !== 'string' || typeof body.leaseId !== 'string') return json({ error: 'Invalid lease' }, 400);
+  const model = body.model === undefined ? null : body.model;
+  const workspace = body.workspace === undefined ? null : body.workspace;
+  if (model !== null && !(model && typeof model.id === 'string' && /^[a-z0-9][a-z0-9._-]{0,79}$/i.test(model.id) &&
+      ROUTE_EFFORTS.has(model.effort) && (model.speed === undefined || ['standard', 'fast', 'ultrafast'].includes(model.speed)))) {
+    return json({ error: 'Invalid model' }, 400);
+  }
+  if (workspace !== null && !(workspace?.kind === 'scratch' ||
+      (workspace?.kind === 'project' && typeof workspace.path === 'string' && workspace.path.startsWith('/') && workspace.path.length <= 1024))) {
+    return json({ error: 'Invalid workspace' }, 400);
+  }
+  if (model?.id.startsWith('claude-') && env.CLAUDE_ROUTE_ENABLED !== 'true') {
+    return json({ error: 'Claude models are not enabled in this pilot. Ask for an available OpenAI model or omit the model to use your default.' }, 422);
+  }
+  const stored = model && { id: model.id, effort: model.effort, ...(model.speed && model.speed !== 'standard' ? { speed: model.speed } : {}), source: 'classified' };
+  const row = await env.DB.prepare(`UPDATE jobs SET model_json = COALESCE(?, model_json), workspace_json = COALESCE(?, workspace_json)
+    WHERE id = ? AND device_id = ? AND lease_id = ? AND state = 'running' AND lease_until > CURRENT_TIMESTAMP
+      AND EXISTS (SELECT 1 FROM threads t WHERE t.id = jobs.thread_id AND t.account_id = ?) RETURNING id`)
+    .bind(stored ? JSON.stringify(stored) : null, workspace ? JSON.stringify(workspace.kind === 'project' ? { kind: 'project', path: workspace.path } : { kind: 'scratch' }) : null,
+      body.jobId, device.id, body.leaseId, device.account_id).first();
+  return row ? json({ routed: true }) : json({ error: 'Lease expired or replaced' }, 409);
+}
+
+// A routed job whose folder this computer is already using waits in the queue
+// with that folder recorded, so the next claim skips it until the folder is free.
+async function released(env, device, body) {
+  if (typeof body.jobId !== 'string' || typeof body.leaseId !== 'string') return json({ error: 'Invalid lease' }, 400);
+  const row = await env.DB.prepare(`UPDATE jobs SET state = 'queued', lease_until = NULL, lease_id = NULL,
+    attempts = MAX(attempts - 1, 0)
+    WHERE id = ? AND device_id = ? AND lease_id = ? AND state = 'running' AND lease_until > CURRENT_TIMESTAMP
+      AND EXISTS (SELECT 1 FROM threads t WHERE t.id = jobs.thread_id AND t.account_id = ?) RETURNING id`)
+    .bind(body.jobId, device.id, body.leaseId, device.account_id).first();
+  return row ? json({ released: true }) : json({ error: 'Lease expired or replaced' }, 409);
+}
+
 async function started(env, device, body) {
   if (typeof body.jobId !== 'string' || typeof body.leaseId !== 'string') return json({ error: 'Invalid lease' }, 400);
   const row = await env.DB.prepare(`SELECT m.sender_email FROM jobs j
@@ -539,7 +588,7 @@ export async function handleDeviceRequest(request, env) {
   const url = new URL(request.url);
   if (!((request.method === 'GET' && ['/api/device/attachment', '/api/device/status', '/api/device/push'].includes(url.pathname)) ||
     (request.method === 'GET' && url.pathname === '/api/device/pending-sends') ||
-    (request.method === 'POST' && ['/api/device/claim', '/api/device/renew', '/api/device/steered', '/api/device/started', '/api/device/complete', '/api/device/artifacts', '/api/device/models', '/api/device/projects', '/api/device/file-route', '/api/device/key', '/api/device/send'].includes(url.pathname)))) {
+    (request.method === 'POST' && ['/api/device/claim', '/api/device/renew', '/api/device/route', '/api/device/release', '/api/device/steered', '/api/device/started', '/api/device/complete', '/api/device/artifacts', '/api/device/models', '/api/device/projects', '/api/device/file-route', '/api/device/key', '/api/device/send'].includes(url.pathname)))) {
     return new Response('Not found', { status: 404 });
   }
   if (url.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(url.hostname)) return json({ error: 'HTTPS required' }, 403);
@@ -558,7 +607,7 @@ export async function handleDeviceRequest(request, env) {
   if (url.pathname === '/api/device/claim' && !device.key_id && env.SEALED_STORAGE_REQUIRED === 'true') {
     return json({ error: 'Update TagMails to 0.2.24 or later: brew upgrade tagmails && tagmails start' }, 426);
   }
-  if (url.pathname === '/api/device/claim') return claim(env, device, await busyFolders(request));
+  if (url.pathname === '/api/device/claim') return claim(env, device, await claimOptions(request));
   if (url.pathname === '/api/device/artifacts') return uploadRunArtifact(request, env, device);
   if (url.pathname === '/api/device/pending-sends') return json({ replies: await heldReplies(env, device) });
   let body;
@@ -605,6 +654,8 @@ export async function handleDeviceRequest(request, env) {
     return json({ saved: true, count: projects.length });
   }
   if (url.pathname === '/api/device/renew') return renew(env, device, body);
+  if (url.pathname === '/api/device/route') return routed(env, device, body);
+  if (url.pathname === '/api/device/release') return released(env, device, body);
   if (url.pathname === '/api/device/steered') return steered(env, device, body);
   return url.pathname === '/api/device/started' ? started(env, device, body) : complete(env, device, body);
 }

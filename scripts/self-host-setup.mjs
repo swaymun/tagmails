@@ -13,7 +13,7 @@
 //   WORKER_NAME        default tagmails-selfhost (also names the D1 database and R2 bucket)
 //   MAIL_PROVIDER      cloudflare (default: Email Routing + Email Sending) or resend
 //   AGENT_DOMAIN, PILOT_OWNER_EMAIL, GOOGLE_CLIENT_ID, PUBLIC_ORIGIN,
-//   TYPESAFE_API_KEY, RESEND_API_KEY, RESEND_WEBHOOK_SECRET
+//   RESEND_API_KEY, RESEND_WEBHOOK_SECRET
 //   SETUP_MAIL_ROUTING yes to let the script enable Email Routing and Sending
 //                      on AGENT_DOMAIN (replaces that domain's MX records)
 
@@ -142,10 +142,6 @@ async function main() {
     secrets.RESEND_API_KEY = await value(saved, 'RESEND_API_KEY', 'Resend API key (sending and receiving access)', { hidden: true });
     secrets.RESEND_WEBHOOK_SECRET = await value(saved, 'RESEND_WEBHOOK_SECRET', 'Resend webhook signing secret (blank until the webhook exists)',
       { hidden: true, placeholder: PENDING.RESEND_WEBHOOK_SECRET });
-  }
-  if (firstSecrets || process.env.TYPESAFE_API_KEY) {
-    secrets.TYPESAFE_API_KEY = await value(saved, 'TYPESAFE_API_KEY', 'TypeSafe API key for Jev routing (optional, blank to skip)',
-      { hidden: true, optional: true });
   }
   writeSecrets(secrets);
   console.log(`Saved secrets to ${SECRETS} (git-ignored). Keep STORAGE_KEY: sealed mail can't be read without it.`);

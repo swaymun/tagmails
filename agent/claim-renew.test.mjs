@@ -143,3 +143,19 @@ test('an agent CLI that ignores SIGTERM is killed', async () => {
   terminate(child, 50);
   assert.equal(await exited, 'SIGKILL');
 });
+
+test('the Mac decides each follow-up: steer is delivered, ack is acknowledged without injecting, queue is handed back', async () => {
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const delivered = [];
+  const acks = new Map();
+  const verdicts = { s1: 'steer', s2: 'ack', s3: 'queue' };
+  const renew = async () => ({ steers: ['s1', 's2', 's3'].map((id) => ({ id, from: 'a@b.c', text: id })) });
+  const stop = keepClaim({ jobId: 'j', request: { from: 'a@b.c' } }, () => {}, { every: 5, renew,
+    classify: async (_claim, steer) => verdicts[steer.id],
+    onSteer: async (steer) => { delivered.push(steer.id); return true; },
+    ack: async (_claim, id, ok) => { acks.set(id, ok); } });
+  await wait(40);
+  stop();
+  assert.deepEqual(delivered, ['s1'], 'only a steer reaches the agent');
+  assert.deepEqual([...acks], [['s1', true], ['s2', true], ['s3', false]]);
+});

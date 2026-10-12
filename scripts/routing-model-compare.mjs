@@ -1,33 +1,30 @@
 #!/usr/bin/env node
-// Compares TagMails' three routing classifiers (model choice, project folder,
-// mid-run steer/queue/ack) across Jev (today's router), Claude Haiku 5.5 low
-// (`claude -p`) and GPT-6 Luna low (`codex exec`).
+// Compares the models that can route TagMails mail on the owner's own machine: Claude
+// Haiku 5.5 (`claude -p`) and GPT-6 Luna (`codex exec`), on the three routing tasks (model
+// choice, project folder, mid-run steer/queue/ack). The routers run as in production
+// (agent/routing-model.mjs, routing-steer.mjs, project-routing.mjs); only the classifier is
+// swapped: each model gets the same questions and criteria as a JSON-only prompt (v1: as is,
+// v2/v3: plus rules, see agent/local-router.mjs for the shipped v2) and answers with a key.
+// The Oct 12 numbers with Jev as the baseline are in .local/routing-compare-2026-10-12/.
 //
-// The production routers (routeModel, acceptSelection/buildProjectPrompt,
-// routeFollowUp) run unchanged. Only the HTTP call to Jev is swapped: for the CLI
-// models a fetch adapter renders the same Jev request (state + questions with
-// their criteria) as a JSON-only prompt and returns a Jev-shaped response with the
-// chosen key at probability 1. Prompts, candidates and post-processing are
-// therefore identical; the CLI models just can't hedge below Jev's thresholds.
+//   node scripts/routing-model-compare.mjs [--providers haiku,luna] [--tasks model,project,steer]
+//        [--effort low|medium] [--prompt v1|v2|v3] [--real <.local dir>] [--agentic] [--lookup]
+//        [--only id,id] [--rerun-failed] [--concurrency 3] [--out .local/routing-compare-DATE]
 //
-//   node scripts/routing-model-compare.mjs [--providers jev,haiku,luna] [--tasks model,project,steer]
-//        [--effort low|medium] [--prompt v1|v2|v3] [--real <.local dir>] [--agentic] [--lookup] [--only id,id] [--rerun-failed] [--concurrency 3] [--out .local/routing-compare-DATE]
-//
-// Jev key: TYPESAFE_API_KEY or ~/.config/wonder/jev.json. CLI models use the local
-// subscriptions (no API key). Set LUNA_PRICE_IN / LUNA_PRICE_OUT ($ per million
-// tokens) to price Luna; Haiku cost is the `claude` CLI's own list-price figure.
+// CLI models use the local subscriptions (no API key). Set LUNA_PRICE_IN / LUNA_PRICE_OUT
+// ($ per million tokens) to price Luna; Haiku cost is the `claude` CLI's own list-price figure.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { routeModel } from '../services/jev-route.mjs';
-import { routeFollowUp } from '../services/steer-route.mjs';
-import { buildProjectPrompt, acceptSelection, cleanProjectCatalog } from '../services/project-route.mjs';
+import { routeModel } from '../agent/routing-model.mjs';
+import { routeFollowUp } from '../agent/routing-steer.mjs';
+import { buildProjectPrompt, acceptSelection, cleanProjectCatalog } from '../agent/project-routing.mjs';
 import { MODEL_CATALOG as SYNTH_CATALOG, MODEL_CASES as SYNTH_MODEL, PROJECTS as SYNTH_PROJECTS, PROJECT_CASES as SYNTH_PROJECT, STEER_CASES } from './routing-compare-cases.mjs';
 
 const args = process.argv.slice(2);
 const opt = (name, fallback) => { const i = args.indexOf(`--${name}`); return i < 0 ? fallback : args[i + 1]; };
-const providers = opt('providers', 'jev,haiku,luna').split(',');
+const providers = opt('providers', 'haiku,luna').split(',');
 const tasks = opt('tasks', 'model,project,steer').split(',');
 const only = opt('only') ? new Set(opt('only').split(',')) : null;
 const concurrency = Number(opt('concurrency', 3));
@@ -37,7 +34,6 @@ const agentic = args.includes('--agentic');   // project task only: CLI models m
 const lookup = args.includes('--lookup');   // project task only: short descriptions in the prompt, full detail via a read-only shell command
 const realDir = opt('real');   // a .local dir holding the private October 4 real-history sets; results stay under --out
 const outDir = path.resolve(opt('out', '.local/routing-compare-2026-10-12'));
-const JEV_RATE = 0.042 / 1e6;
 const CLI_TIMEOUT = agentic ? 300000 : 120000;
 fs.mkdirSync(outDir, { recursive: true });
 const resultsFile = path.join(outDir, 'results.json');
@@ -45,11 +41,6 @@ const previous = fs.existsSync(resultsFile) ? JSON.parse(fs.readFileSync(results
 const key = (r) => `${r.provider}/${r.task}/${r.id}`;
 const kept = new Map(previous.map((r) => [key(r), r]));
 const rerunFailed = args.includes('--rerun-failed');
-
-function jevKey() {
-  if (process.env.TYPESAFE_API_KEY) return process.env.TYPESAFE_API_KEY;
-  return JSON.parse(fs.readFileSync(`${os.homedir()}/.config/wonder/jev.json`, 'utf8')).api_key;
-}
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'routing-compare-'));
 const toolPath = path.resolve(path.dirname(new URL(import.meta.url).pathname), 'routing-compare-projects-tool.mjs');
@@ -126,28 +117,18 @@ function classifierPrompt(request, agenticNow = false, lookupNow = false) {
     `${agenticNow ? `${AGENTIC_HINT}\n\n` : ''}${lookupNow ? `${LOOKUP_HINT(catalogFile)}\n\n` : ''}${promptVersion === 'v3' ? `${GUIDANCE_V3}\n\n` : promptVersion === 'v2' ? `${GUIDANCE_V2}\n\n` : ''}Return one JSON object mapping each question name to the chosen criteria key, for example {"${Object.keys(request.questions)[0]}":"<key>"}.`;
 }
 
-// A fetch stand-in: real Jev for 'jev', otherwise an LLM answering the same request.
-function makeFetcher(provider, rec) {
-  const apiKey = provider === 'jev' ? jevKey() : null;
-  const fetcher = async (url, options) => {
+// The classifier for one provider: an LLM answering the request's questions.
+function makeAsk(provider, rec) {
+  return async (request) => {
     const started = performance.now();
     try {
-      if (provider === 'jev') {
-        const response = await fetch(url, options);
-        const payload = await response.json();
-        rec.inTok += payload.usage?.input_tokens ?? 0;
-        rec.outTok += payload.usage?.output_tokens ?? 0;
-        rec.costUsd = (rec.costUsd ?? 0) + (payload.usage?.input_tokens ?? 0) * JEV_RATE;
-        if (!response.ok) rec.errors.push(`Jev HTTP ${response.status}`);
-        return Response.json(payload, { status: response.status });
-      }
-      const request = JSON.parse(options.body);
       const agenticNow = agentic && rec.task === 'project', lookupNow = lookup && rec.task === 'project';
       const reply = await (provider === 'haiku' ? askHaiku : askLuna)(classifierPrompt(request, agenticNow, lookupNow), agenticNow, lookupNow);
-      rec.tools = (rec.tools ?? 0) + (reply.tools ?? 0);
       rec.inTok += reply.inTok; rec.outTok += reply.outTok;
+      rec.tools = (rec.tools ?? 0) + (reply.tools ?? 0);
       if (reply.costUsd != null) rec.costUsd = (rec.costUsd ?? 0) + reply.costUsd;
       const chosen = parseJson(reply.text);
+      rec.raw = chosen;
       const answers = {};
       for (const [name, question] of Object.entries(request.questions)) {
         const choice = chosen[name];
@@ -155,14 +136,12 @@ function makeFetcher(provider, rec) {
           answers[name] = { type: 'choice', choice, probabilities: { [choice]: 1 } };
         } else rec.errors.push(`invalid answer for ${name}: ${JSON.stringify(choice)}`);
       }
-      rec.raw = chosen;
-      return Response.json({ answers, usage: { input_tokens: reply.inTok } });
+      return answers;
     } catch (error) {
       rec.errors.push(String(error.message ?? error));
-      return new Response('{}', { status: 502 });
+      throw error;
     } finally { rec.ms += performance.now() - started; }
   };
-  return { fetcher, apiKey: apiKey ?? 'cli' };
 }
 
 let MODEL_CATALOG = SYNTH_CATALOG, MODEL_CASES = SYNTH_MODEL, PROJECT_CASES = SYNTH_PROJECT, PROJECT_LIST = SYNTH_PROJECTS;
@@ -188,8 +167,8 @@ const projectPrompt = buildProjectPrompt(lookup ? projects.map((p) => ({ ...p, d
 const SOL = 'gpt-6-sol';
 
 const runners = {
-  async model(c, { fetcher, apiKey }) {
-    const route = await routeModel(c.body, c.defaultModel ?? SOL, { apiKey, fetcher, priorModel: c.priorModel, subject: c.subject,
+  async model(c, ask) {
+    const route = await routeModel(c.body, c.defaultModel ?? SOL, { ask, priorModel: c.priorModel, subject: c.subject,
       defaultSpeed: c.defaultSpeed, availableModels: MODEL_CATALOG, pilotCodexModel: SOL });
     const actual = route.error ? 'error' : route.id;
     const extra = [c.expectedEffort && route.effort, c.expectedSpeed && (route.speed ?? 'standard')].filter(Boolean);
@@ -197,17 +176,14 @@ const runners = {
     const got = [actual, ...extra].join('/');
     return { expected, actual: got, ok: got === expected };
   },
-  async project(c, { fetcher, apiKey }) {
-    const response = await fetcher('https://api.typesafe.ai/v1/systemone', { method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...projectPrompt, state: `New request:\n${c.body}` }), signal: AbortSignal.timeout(CLI_TIMEOUT) });
-    const answer = response.ok ? (await response.json()).answers?.folder : null;
-    const actual = answer ? acceptSelection(answer, projects) : 'error';
+  async project(c, ask) {
+    const answers = await ask({ state: `New request:\n${c.body}`, questions: projectPrompt.questions }).catch(() => null);
+    const actual = answers ? acceptSelection(answers.folder, projects) : 'error';
     const wrongFolder = actual !== c.expected && projects.some((p) => p.id === actual);
     return { expected: c.expected, actual, ok: actual === c.expected, wrongFolder };
   },
-  async steer(c, { fetcher, apiKey }) {
-    const actual = await routeFollowUp(c.running, c.body, { apiKey, fetcher, prompt: 'v4' });
+  async steer(c, ask) {
+    const actual = await routeFollowUp(c.running, c.body, { ask, prompt: 'v4' });
     return { expected: c.expected, actual, ok: actual === c.expected };
   },
 };
@@ -228,7 +204,7 @@ for (const provider of providers) {
     await pool(selected, async (c) => {
       const rec = { provider, task, id: c.id, body: c.body, ms: 0, inTok: 0, outTok: 0, costUsd: null, errors: [], raw: null };
       try {
-        Object.assign(rec, await runners[task](c, makeFetcher(provider, rec)));
+        Object.assign(rec, await runners[task](c, makeAsk(provider, rec)));
       } catch (error) { rec.errors.push(String(error.message ?? error)); rec.ok = false; rec.actual = 'error'; }
       if (rec.errors.length) rec.ok = false;
       rec.ms = Math.round(rec.ms);
@@ -247,7 +223,7 @@ const mean = (values) => values.length ? values.reduce((a, b) => a + b, 0) / val
 const money = (v) => (v == null ? 'n/a' : `$${v.toFixed(5)}`);
 const summary = {};
 const lines = ['| task | provider | correct | p50 ms | p95 ms | in tok/call | cost/call (list) | errors | wrong folder | tool calls/case |', '|---|---|---|---:|---:|---:|---:|---:|---:|---:|'];
-for (const task of activeTasks) for (const provider of ['jev', 'haiku', 'luna']) {
+for (const task of activeTasks) for (const provider of ['haiku', 'luna']) {
   const rows = all.filter((r) => r.task === task && r.provider === provider);
   if (!rows.length) continue;
   const costs = rows.map((r) => r.costUsd).filter((v) => v != null);
@@ -259,13 +235,13 @@ for (const task of activeTasks) for (const provider of ['jev', 'haiku', 'luna'])
   lines.push(`| ${task} | ${provider} | ${s.correct}/${s.n} | ${s.p50} | ${s.p95} | ${s.inTok} | ${money(s.costPerCall)} | ${s.errors} | ${task === 'project' ? s.wrongFolder : '-'} | ${s.tools.toFixed(2)} |`);
 }
 const failIds = [...new Set(all.filter((r) => !r.ok).map((r) => `${r.task}/${r.id}`))];
-const failures = ['', '### Failures (cases any provider missed)', '', `| case | expected | jev | haiku 5.5 ${effort} | luna ${effort} |`, '|---|---|---|---|---|'];
+const failures = ['', '### Failures (cases any provider missed)', '', `| case | expected | haiku 5.5 ${effort} | luna ${effort} |`, '|---|---|---|---|'];
 for (const id of failIds) {
   const [task, ...rest] = id.split('/'); const caseId = rest.join('/');
   const cell = (p) => { const r = all.find((x) => x.provider === p && x.task === task && x.id === caseId);
     return r ? (r.ok ? 'ok' : `**${r.actual}**${r.errors?.length ? ' (err)' : ''}`) : '-'; };
   const any = all.find((x) => x.task === task && x.id === caseId);
-  failures.push(`| ${id} | ${String(any.expected).replace(/\|/g, '/')} | ${cell('jev')} | ${cell('haiku')} | ${cell('luna')} |`);
+  failures.push(`| ${id} | ${String(any.expected).replace(/\|/g, '/')} | ${cell('haiku')} | ${cell('luna')} |`);
 }
 fs.writeFileSync(path.join(outDir, 'summary.json'), JSON.stringify(summary, null, 2));
 fs.writeFileSync(path.join(outDir, 'report.md'), [`# Routing comparison (${new Date().toISOString()})`, '', ...lines, ...failures, ''].join('\n'));

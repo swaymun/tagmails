@@ -30,6 +30,17 @@ export async function renewClaim(claim) {
   return { steers: opened };
 }
 
+// Decides on this computer what a follow-up to the running email is: 'steer' (adjust the
+// run), 'queue' (its own task afterwards) or 'ack' (thanks only). A failure queues it.
+export async function localFollowUp(claim, steer) {
+  const { routeFollowUpLocally } = await import('./local-router.mjs');
+  const running = `Subject: ${claim.request?.subject ?? ''}\n${String(claim.request?.body ?? '').slice(0, 2000)}`;
+  const { choice } = await routeFollowUpLocally({ running, followUp: steer.text,
+    preferred: String(claim.model?.id ?? '').startsWith('claude-') ? 'claude' : 'codex',
+    dataDir: process.env.TAGMAILS_DATA_DIR || null });
+  return choice;
+}
+
 // Tell the relay whether a follow-up reached the running agent. An undelivered
 // one is queued as an ordinary job; a delivered one gets no reply of its own.
 export async function ackSteer(claim, steerId, delivered) {
@@ -87,7 +98,7 @@ export function steerPrompt(steer) {
 // successful renewal is older than the relay's lease (90 seconds).
 export function keepClaim(claim, onLost, { every = Number(process.env.TAGMAILS_CLAIM_RENEW_MS || 15_000),
   leaseMs = Number(process.env.TAGMAILS_CLAIM_LEASE_MS || 80_000), renew = renewClaim, now = Date.now,
-  onSteer = null, ack = ackSteer } = {}) {
+  onSteer = null, ack = ackSteer, classify = null } = {}) {
   let lastOk = now();
   let lost = false;
   // Delivered follow-ups are re-offered until the relay hears the ack; never
@@ -108,7 +119,13 @@ export function keepClaim(claim, onLost, { every = Number(process.env.TAGMAILS_C
         const sameSender = typeof steer.from === 'string' && steer.from === claim.request?.from;
         if (!handled.has(steer.id)) {
           // A delivered follow-up is remembered so it is never opened again.
-          handled.set(steer.id, sameSender ? onSteer(steer).then(async (delivered) => {
+          // With a classifier (relay mode) the computer decides: queue hands the follow-up back as
+          // its own job, ack is delivered with nothing injected (no turn, reply or charge).
+          const deliver = async () => {
+            const verdict = classify ? await classify(claim, steer) : 'steer';
+            return verdict === 'queue' ? false : verdict === 'ack' ? true : onSteer(steer);
+          };
+          handled.set(steer.id, sameSender ? deliver().then(async (delivered) => {
             if (delivered) await rememberDone(steer.id).catch(() => {});
             return Boolean(delivered);
           }, () => false) : Promise.resolve(false));

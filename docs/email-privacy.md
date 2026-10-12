@@ -42,10 +42,11 @@ transcript.
 
 - Each incoming email, to check DKIM, the sender and the recipients, choose a
   model and project, and seal it.
-- The routing call to Jev (`api.typesafe.ai`). For a new email it sends the
-  subject and the first 4,000 characters of the new text. For a follow-up
-  during a run, it sends the follow-up and the text it quotes. For an answer to
-  "which project?", it sends the subject, the question and the answer.
+- Nothing for routing: since 0.2.27 the model, project and follow-up choices are
+  made on the paired computer (`agent/local-router.mjs`) by the owner's own Claude
+  Haiku or Codex Luna, which see the email and the owner's project list under the
+  owner's own subscription terms. The relay settles only an explicit `Model:` line,
+  the thread's model and folder, and a written work-in path.
 - The agent's result and files during the completion request, to render and
   send the reply. The relay's own replies are rendered the same way at intake.
 - The reply itself then passes through the mail provider (Cloudflare Email
@@ -151,8 +152,7 @@ Sources: [Resend inbound visibility](https://resend.com/blog/inbound-emails),
    for about seven days. Confirm delivery, reply threading, bounce handling,
    Gmail reactions, and provider access before migration.
 3. Done for computers on 0.2.24+: stored mail and results are sealed to a key
-   held only by the paired computer (see the first section). Still open: move
-   Jev classification to the device if the relay must not see task text, and
+   held only by the paired computer (see the first section). Routing moved to the device in 0.2.27. Still open:
    relay-key storage for mail was retired on 2026-10-12.
 4. Recheck all vendor dashboards, logs, backups, and administrator access with
    real test messages. Publish a precise privacy statement before customer
@@ -198,7 +198,7 @@ Provider references: [SES Lambda receive event](https://docs.aws.amazon.com/ses/
 - Disabling outbound preview removes its body preview, but Cloudflare's email
   activity and analytics still expose metadata such as sender, recipient,
   subject, message ID, and authentication/delivery status. The relay's own R2
-  plaintext and the off-device Jev request remain separate privacy gaps.
+  plaintext remains a separate privacy gap.
 - The current Cloudflare account has no Email Routing zone for TagMails. The
   domain remains partially verified at Resend despite a publicly resolving
   `rsend` CNAME. A Resend verification restart briefly returned to Pending,

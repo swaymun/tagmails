@@ -5,7 +5,7 @@
 import { createHash } from 'node:crypto';
 import { parseInbound, RELAY_INBOUND_LIMITS } from '../apps/mock-inbox/inbound.mjs';
 import { base64url, isDeviceSealed, keyIdFor, sealForDevice, sealTextForDevice, validPublicKey } from '../agent/device-seal.mjs';
-import { currentText } from './jev-route.mjs';
+import { currentText } from '../agent/routing-model.mjs';
 
 export { isDeviceSealed, keyIdFor, validPublicKey };
 

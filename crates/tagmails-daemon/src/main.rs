@@ -152,7 +152,8 @@ fn agent_result(
             .env("TAGMAILS_RELAY_URL", base)
             .env("TAGMAILS_DEVICE_TOKEN_FILE", token_file)
             .env("TAGMAILS_DEVICE_KEY_FILE", paths::device_key_file())
-            .env("TAGMAILS_DONE_JOBS_FILE", paths::done_jobs_file());
+            .env("TAGMAILS_DONE_JOBS_FILE", paths::done_jobs_file())
+            .env("TAGMAILS_DATA_DIR", paths::data_dir());
     }
     let mut child = command
         .env("TAGMAILS_RUNTIME", runtime)
@@ -315,6 +316,11 @@ fn publish_model_catalog(
     let defaults = effective_defaults(&load_config());
     if defaults.is_object() {
         catalog["defaults"] = defaults;
+    }
+    if let Err(error) = create_private_dir(&paths::data_dir())
+        .and_then(|()| write_private_file(&paths::models_file(), catalog.to_string().as_bytes()))
+    {
+        eprintln!("Could not save the model list for local routing: {error}");
     }
     let response = relay_post(client, base, "/api/device/models", token, catalog)?;
     if response["saved"] != true {
@@ -992,7 +998,7 @@ static SENDING_HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBo
 /// Claim the next job, skipping project folders other running jobs are using.
 fn claim_next(client: &Client, settings: &Settings, busy: &[String]) -> Result<Option<Value>, Box<dyn Error>> {
     let token = settings.token.as_str();
-    let response = relay_post(client, &settings.relay, "/api/device/claim", token, json!({"busyFolders": busy}))?;
+    let response = relay_post(client, &settings.relay, "/api/device/claim", token, json!({"busyFolders": busy, "routing": "local"}))?;
     if response["pendingSends"] == true && !SENDING_HELD.swap(true, std::sync::atomic::Ordering::SeqCst) {
         // Replies the relay held sealed to this machine; it opens and returns
         // them. In the background, so a job claimed in this same response keeps its lease.
@@ -1010,13 +1016,13 @@ fn claim_next(client: &Client, settings: &Settings, busy: &[String]) -> Result<O
     }
     let claim = verified_claim(&response, token)?;
     if claim["sealed"] != true {
-        return Ok(Some(claim));
+        return route_claim(client, settings, claim, busy);
     }
     // The request is sealed to this machine's key; open it locally.
     match device_key(&["open-claim"], Some(claim.to_string().as_bytes()), None)
         .and_then(|bytes| Ok(serde_json::from_slice::<Value>(&bytes)?))
     {
-        Ok(opened) => Ok(Some(opened)),
+        Ok(opened) => route_claim(client, settings, opened, busy),
         Err(error) => {
             eprintln!("Sealed email could not be opened: {error}");
             let result = json!({"runtime":"tagmails-router","state":"failed","summary":"This computer could not open the sealed email. If it was paired again, ask the sender to resend it."});
@@ -1026,6 +1032,108 @@ fn claim_next(client: &Client, settings: &Settings, busy: &[String]) -> Result<O
             Ok(None)
         }
     }
+}
+
+const CLAUDE_NOT_ENABLED: &str = "Claude models are not enabled in this pilot. Ask for an available OpenAI model or omit the model to use your default.";
+
+/// Routes a claimed owner email on this machine (agent/local-router.mjs): which model
+/// the text asks for and which project folder it means, with Claude Haiku or Codex
+/// Luna on the owner's own subscription. The relay only settles what the email
+/// itself says; this fills in the rest and reports it back so the thread continues
+/// with the same model and folder. A routing failure never blocks the job: it runs
+/// with the relay's defaults. A reply to the sender (an unavailable model, a "which
+/// project?" question) is carried in `routingReply`; None means the job went back
+/// to the queue because its folder is busy.
+fn route_claim(client: &Client, settings: &Settings, mut claim: Value, busy: &[String]) -> Result<Option<Value>, Box<dyn Error>> {
+    if claim["request"]["fromOwner"] != true || claim["model"]["source"] == "explicit" {
+        return Ok(Some(claim));
+    }
+    let projects = if settings.workspace.is_some() || claim["workspace"]["kind"].is_string() {
+        json!([])
+    } else {
+        fs::read(paths::projects_file()).ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .map_or(json!([]), |inventory| inventory["projects"].clone())
+    };
+    let catalog = fs::read(paths::models_file()).ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+    let input = json!({"claim": claim, "catalog": catalog, "projects": projects});
+    let started = Instant::now();
+    let routed = (|| -> Result<Value, Box<dyn Error>> {
+        let mut child = Command::new("node")
+            .arg(paths::adapters_dir()?.join("local-router.mjs"))
+            .arg("route")
+            .env("TAGMAILS_DATA_DIR", paths::data_dir())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        child.stdin.take().ok_or("Router stdin unavailable")?.write_all(input.to_string().as_bytes())?;
+        let output = child.wait_with_output()?;
+        if !output.status.success() {
+            return Err(format!("router failed: {}", String::from_utf8_lossy(&output.stderr).trim()).into());
+        }
+        Ok(serde_json::from_slice(&output.stdout)?)
+    })();
+    let out = match routed {
+        Ok(out) => out,
+        Err(error) => {
+            eprintln!("{}: local routing failed ({error}); running with the relay's defaults", claim["jobId"].as_str().unwrap_or(""));
+            return Ok(Some(claim));
+        }
+    };
+    println!(
+        "{}: routed in {} ms{}",
+        claim["jobId"].as_str().unwrap_or(""),
+        started.elapsed().as_millis(),
+        out["runner"].as_str().map_or(String::new(), |runner| format!(" ({runner})"))
+    );
+    if let Some(error) = out["model"]["error"].as_str().or_else(|| out["ask"].as_str()) {
+        claim["routingReply"] = json!(error);
+        return Ok(Some(claim));
+    }
+    let mut report = json!({"jobId": claim["jobId"], "leaseId": claim["leaseId"]});
+    if out["model"]["id"].is_string() && out["model"] != claim["model"] {
+        report["model"] = out["model"].clone();
+    }
+    if matches!(out["workspace"]["kind"].as_str(), Some("project" | "scratch")) {
+        report["workspace"] = out["workspace"].clone();
+    }
+    if report.as_object().is_some_and(|object| object.len() > 2) {
+        match relay_post(client, &settings.relay, "/api/device/route", &settings.token, report.clone()) {
+            Ok(_) => {
+                if report["model"].is_object() {
+                    claim["model"] = report["model"].clone();
+                    claim["model"]["source"] = json!("classified");
+                }
+                if report["workspace"].is_object() {
+                    claim["workspace"] = report["workspace"].clone();
+                }
+            }
+            Err(error) => {
+                let status = error.downcast_ref::<reqwest::Error>().and_then(reqwest::Error::status).map(|status| status.as_u16());
+                if status == Some(422) {
+                    claim["routingReply"] = json!(CLAUDE_NOT_ENABLED);
+                    return Ok(Some(claim));
+                }
+                // A lost lease or an older relay: let the job's normal checks decide.
+                eprintln!("{}: could not record the routing ({error})", claim["jobId"].as_str().unwrap_or(""));
+                if status == Some(409) {
+                    return Ok(None);
+                }
+            }
+        }
+    }
+    // The chosen folder may be in use by another job of this machine: queue it again,
+    // with its folder recorded, until that job finishes.
+    if let Some(folder) = claim_folder(&claim) {
+        if busy.contains(&folder) {
+            let _ = relay_post(client, &settings.relay, "/api/device/release", &settings.token,
+                json!({"jobId": claim["jobId"], "leaseId": claim["leaseId"]}));
+            println!("{}: {folder} is busy; queued until it is free", claim["jobId"].as_str().unwrap_or(""));
+            return Ok(None);
+        }
+    }
+    Ok(Some(claim))
 }
 
 /// The project folder a claim will run in, if the relay chose one.
@@ -1049,8 +1157,16 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
     let access = settings.access.as_str();
     let claude_permission = settings.claude_permission.as_str();
     let file_request = requested_workspace_file(&claim);
-    let workspace = job_workspace(settings, &claim);
+    let routing_reply = claim["routingReply"].as_str().map(str::to_owned);
+    let workspace = if routing_reply.is_some() {
+        Err("Answered without running an agent".into())
+    } else {
+        job_workspace(settings, &claim)
+    };
     let mut result = match (&file_request, &workspace) {
+        _ if routing_reply.is_some() => {
+            json!({"runtime":"tagmails-router","state":"needs_clarification","summary":routing_reply})
+        }
         (Err(message), _) => {
             json!({"runtime":"tagmails-router","state":"needs_clarification","summary":message})
         }
@@ -2539,8 +2655,11 @@ fn command_doctor() -> Result<(), Box<dyn Error>> {
     let codex = found("codex") != "not found";
     let claude = found("claude") != "not found";
     check(codex || claude, "Codex or Claude Code installed", "install the Codex CLI (`npm i -g @openai/codex`) or Claude Code");
+    let mut router_ready = false;
     if codex {
-        check(probe("codex", &["login", "status"]).is_some(), "Codex signed in", "run `codex login`");
+        let signed_in = probe("codex", &["login", "status"]).is_some();
+        router_ready |= signed_in;
+        check(signed_in, "Codex signed in", "run `codex login`");
         let access = config["access"].as_str().unwrap_or(DEFAULT_ACCESS);
         let problem = codex_sandbox_problem(access);
         check(problem.is_none(), "Codex sandbox can run", problem.as_deref().unwrap_or(""));
@@ -2548,8 +2667,11 @@ fn command_doctor() -> Result<(), Box<dyn Error>> {
     if claude {
         let signed_in = probe("claude", &["auth", "status"]).and_then(|text| serde_json::from_str::<Value>(&text).ok())
             .is_some_and(|value| value["loggedIn"] == true);
+        router_ready |= signed_in;
         check(signed_in, "Claude Code signed in", "run `claude` once and sign in");
     }
+    check(router_ready, "local routing model available (Claude Haiku 5.5 or Codex Luna)",
+        "sign in to Claude Code or Codex; without one, emails run with your default model in a chat folder");
     if config["workspace"].is_null() {
         let projects = fs::read(paths::projects_file()).ok()
             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
@@ -2563,6 +2685,31 @@ fn command_doctor() -> Result<(), Box<dyn Error>> {
     } else {
         Err(format!("{failures} check(s) failed").into())
     }
+}
+
+/// p50/p95 of each local routing step over the last 500 recorded (agent/local-router.mjs
+/// appends one line per step to routing-latency.jsonl), e.g. "model 3.1s/5.0s, folder 3.2s/5.4s (41 emails)".
+fn routing_latency_summary() -> Option<String> {
+    let text = fs::read_to_string(paths::data_dir().join("routing-latency.jsonl")).ok()?;
+    let lines: Vec<&str> = text.lines().collect();
+    let mut steps: Vec<(String, Vec<f64>)> = Vec::new();
+    for line in &lines[lines.len().saturating_sub(500)..] {
+        let Ok(entry) = serde_json::from_str::<Value>(line) else { continue };
+        let (Some(step), Some(ms)) = (entry["step"].as_str(), entry["ms"].as_f64()) else { continue };
+        match steps.iter_mut().find(|(name, _)| name == step) {
+            Some((_, values)) => values.push(ms),
+            None => steps.push((step.to_owned(), vec![ms])),
+        }
+    }
+    if steps.is_empty() {
+        return None;
+    }
+    let parts: Vec<String> = steps.iter_mut().map(|(name, values)| {
+        values.sort_by(f64::total_cmp);
+        let at = |quantile: f64| values[(((values.len() as f64) * quantile).ceil() as usize).clamp(1, values.len()) - 1] / 1000.0;
+        format!("{name} {:.1}s/{:.1}s", at(0.5), at(0.95))
+    }).collect();
+    Some(format!("{} p50/p95 ({} steps)", parts.join(", "), steps.iter().map(|(_, values)| values.len()).sum::<usize>()))
 }
 
 fn command_status() -> Result<(), Box<dyn Error>> {
@@ -2612,6 +2759,9 @@ fn command_status() -> Result<(), Box<dyn Error>> {
     }
     if let Some(problem) = codex_sandbox_problem(config["access"].as_str().unwrap_or(DEFAULT_ACCESS)) {
         println!("  Warning     {problem}");
+    }
+    if let Some(summary) = routing_latency_summary() {
+        println!("  Routing time {summary}");
     }
     println!("  Reactions   {}", if reactions_choice() == Some(true) { "on (Gmail 👀 and ✅)" } else { "off" });
     if let Some(text) = owner_instructions() {

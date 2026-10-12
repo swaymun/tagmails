@@ -5,7 +5,7 @@ Status: 2026-10-12. The hosted relay charges **$0.0025 (a quarter of a cent) per
 ## What is charged
 
 - Every reply TagMails sends for an accepted email is charged, including failed and approval-waiting runs and questions TagMails sends back (which project, an unavailable model, a revoked computer). A question back is sent free when the balance can't cover it, so it never waits for a top-up; an account without balance gets at most five such free replies a day (`FREE_RELAY_REPLIES_PER_DAY`), after which the answer is only on the run page.
-- Free: duplicate mail, Gmail status reactions, follow-ups that join a running turn (steers), a bare thank-you sent mid-run (dropped), and mail from senders TagMails ignores.
+- Free: duplicate mail, Gmail status reactions, follow-ups that join a running turn (steers), a bare thank-you sent mid-run (the Mac drops it), and mail from senders TagMails ignores.
 - A run whose computer stops responding three times is failed by the relay with a reply (`MAX_ATTEMPTS`); that reply is charged like any other.
 - A charge is released when the reply is blocked before sending or bounces for its only To recipient.
 - A Stripe dispute takes its amount back from the balance when Stripe withdraws the funds and returns it if the dispute is won (the webhook must be subscribed to `charge.dispute.funds_withdrawn` and `charge.dispute.funds_reinstated`).
@@ -20,17 +20,16 @@ Costed at paid rates, ignoring every free allowance. Sources and method: `.local
 | Per reply | Cost | Basis |
 | --- | --- | --- |
 | Outbound mail: reply, plus 👀 and ✅ reactions when the owner turned them on | $0.00035–$0.00105 | 1–3 × $0.35 per 1,000 (Cloudflare Email Sending); reactions are off by default |
-| Jev routing (model and project, about 10k input tokens) | $0.00042 | $0.042 per million input tokens; estimated from eval runs, not yet measured in production |
+| Routing | $0 | runs on the owner's Mac with their own Claude or Codex subscription (since 0.2.27); it was Jev at about $0.0004 per email before |
 | Workers, D1, R2 | under $0.0001 | estimated |
 | Stripe ($0.59 per $10 top-up) | $0.00015 | 5.9% of revenue |
-| **Total** | **about $0.0017** | |
-| **Margin at $0.0025** | **about $0.0008 (≈32%)** | |
+| **Total** | **about $0.0006** | |
+| **Margin at $0.0025** | **about $0.0019 (≈76%)** | |
 
 Where the margin shrinks or goes negative:
 
-- A machine with about 40 project folders makes the project-routing prompt about 40k tokens ($0.0017 per email), which by itself costs about as much as the price.
-- Each steer is free but costs a 👀 reaction and up to two Jev calls (about $0.0005).
+- Each steer is free but costs a 👀 reaction when the owner turned them on.
 - Fixed costs: the $5/month Workers Paid plan needs about 6,000 replies a month to cover at this margin.
 - A Stripe dispute costs $15, and Stripe keeps its fee on a refunded top-up.
 
-Before changing the price, measure real Jev token counts per email in production and the actual outbound sends per reply.
+Before changing the price, measure the actual outbound sends per reply. Routing latency (not cost) is the new routing metric: `tagmails status` prints p50/p95 per step from the Mac's `routing-latency.jsonl`.

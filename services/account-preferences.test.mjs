@@ -2,9 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { bindings } from './bindings-fixture.mjs';
 import { accountPreferences, saveAccountPreferences } from './account-preferences.mjs';
-import { routeModel } from './jev-route.mjs';
+import { routeModel as routeModelWith } from '../agent/routing-model.mjs';
+// The classifier is injected as `ask`; these tests drive it with canned answers.
+const route = routeModelWith;
+const routeModel = (body, defaultModel, { apiKey, fetcher, ...rest } = {}) => route(body, defaultModel, { ...rest,
+  ask: fetcher && (async (request) => (await (await fetcher('https://classifier.test', { method: 'POST', body: JSON.stringify(request) })).json()).answers) });
 
-test('email defaults persist and supply a fallback while Jev may override task choices', async () => {
+
+test('email defaults persist and supply a fallback while the Mac may override task choices', async () => {
   const { env } = bindings();
   const account = { id: 'account-1', default_model: 'gpt-6.1-sol' };
   assert.deepEqual(await accountPreferences(env, account), {

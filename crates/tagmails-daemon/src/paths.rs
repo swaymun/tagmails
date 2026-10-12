@@ -88,6 +88,11 @@ pub fn done_jobs_file() -> PathBuf {
     data_dir().join("done-jobs")
 }
 
+/// The model catalog last published to the relay, which the local router checks model requests against.
+pub fn models_file() -> PathBuf {
+    data_dir().join("models.json")
+}
+
 pub fn projects_file() -> PathBuf {
     data_dir().join("projects.json")
 }

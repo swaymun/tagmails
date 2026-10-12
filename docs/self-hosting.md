@@ -24,7 +24,7 @@ npm ci
 node scripts/self-host-setup.mjs
 ```
 
-The script asks for the Worker name, mail path, agent domain, your Gmail and (optionally) the Google client ID and a TypeSafe key, then:
+The script asks for the Worker name, mail path, agent domain, your Gmail and (optionally) the Google client ID, then:
 
 1. writes `wrangler.selfhost.jsonc` from `wrangler.selfhost.example.jsonc` and `.env.selfhost` with the Worker's secrets (both git-ignored; secrets are never printed),
 2. generates `STORAGE_KEY`,
@@ -75,7 +75,6 @@ Secrets live in `.env.selfhost`; the script uploads them on every deploy. You ca
 | `PILOT_OWNER_EMAIL` | yes | Your Gmail. Anyone else gets "signup is closed". |
 | `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET` | Resend path only | API key with sending and receiving access; the webhook's signing secret. |
 | `STORAGE_KEY` | recommended (the script sets it) | 32 random bytes, base64. Seals stored mail, results and files with AES-256-GCM. Set it before the first mail and never change it. |
-| `TYPESAFE_API_KEY` | optional | Jev routing: natural-language model requests, project folder choice, mid-run steering. Without it `Model:` lines and defaults still work, new threads run in a chat folder, and follow-ups queue. |
 
 Variables (put them under `vars` in `wrangler.selfhost.jsonc`): `CLAUDE_ROUTE_ENABLED=true` (the script sets it; without it Claude model requests get a clarification), `STATUS_REACTIONS_ENABLED=true` (Gmail status reactions), `ADDRESS_DOMAIN` (lets you choose `name@domain`), `PILOT_CODEX_MODEL`, `RESEND_TEST_FROM=onboarding@resend.dev` (replies before your Resend domain verifies). The rest (`SITE_*`, `GOOGLE_CLIENT_SECRET`, `BILLING_*`, `STRIPE_*`, `PUBLIC_SIGNUP_ENABLED`) are for the hosted service; leave them unset.
 

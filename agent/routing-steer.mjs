@@ -1,4 +1,4 @@
-// Decides, with one Jev call, whether a follow-up email sent while an earlier
+// Decides whether a follow-up email sent while an earlier
 // email in the same thread is still running should steer that run (adjust or
 // add to the same task) or queue behind it (a separate task).
 export const STEER_PROMPTS = {
@@ -33,26 +33,27 @@ export const STEER_PROMPTS = {
   },
 };
 
-export async function routeFollowUp(running, followUp, { apiKey, fetcher = fetch, prompt = 'v4', onUsage } = {}) {
-  if (!apiKey || !String(followUp ?? '').trim()) return 'queue';
+// A follow-up that arrives while an earlier email in the same thread is still
+// running: steer (adjust the run), queue (separate task) or ack (just thanks).
+// Answer request.questions with a choice, then pass the answers to finish().
+export function prepareFollowUp(running, followUp, { prompt = 'v4' } = {}) {
   const def = STEER_PROMPTS[prompt];
-  try {
-    const response = await fetcher('https://api.typesafe.ai/v1/systemone', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'jev-1.13.0',
-        state: `Running task:\n${String(running).slice(0, 2000)}\n\nFollow-up email:\n${String(followUp).slice(0, 2000)}`,
-        questions: { route: { type: 'choice', ...def } },
-      }),
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!response.ok) throw new Error(`Jev HTTP ${response.status}`);
-    const body = await response.json();
-    onUsage?.(body.usage);
-    const answer = body.answers?.route;
+  const request = {
+    state: `Running task:\n${String(running).slice(0, 2000)}\n\nFollow-up email:\n${String(followUp).slice(0, 2000)}`,
+    questions: { route: { type: 'choice', ...def } },
+  };
+  const finish = (answers) => {
+    const answer = answers?.route;
     const choice = answer?.type === 'choice' ? answer.choice : null;
     if (choice === 'ack' && answer.probabilities?.ack >= 0.7) return 'ack';
     return choice === 'steer' && answer.probabilities?.steer >= 0.7 ? 'steer' : 'queue';
-  } catch { return 'queue'; }
+  };
+  return { request, finish };
+}
+
+/** The follow-up's route, or 'queue' when it cannot be classified. */
+export async function routeFollowUp(running, followUp, { ask, prompt } = {}) {
+  if (!ask || !String(followUp ?? '').trim()) return 'queue';
+  const prepared = prepareFollowUp(running, followUp, { prompt });
+  try { return prepared.finish(await ask(prepared.request)); } catch { return 'queue'; }
 }

@@ -22,53 +22,42 @@ async function deliver(env, message, options = {}) {
   return response.json();
 }
 
-test('Jev routes natural model requests in a thread and ordinary replies inherit the route', async () => {
+test('the relay keeps the default for a natural-language model request and the thread keeps what the Mac chose', async () => {
   const { env, sqlite } = bindings();
-  env.TYPESAFE_API_KEY = 'test-key';
-  let calls = 0;
-  const fetchModel = async () => {
-    calls += 1;
-    const choice = ['claude', 'none', 'codex'][calls - 1];
-    return Response.json({ answers: { route: { type: 'choice', choice,
-      probabilities: { [choice]: 0.96 } } } });
-  };
   const first = mail('email-1', 'owner@gmail.com', {
     subject: 'Use Claude for the review', body: 'Use Claude to review this.',
   });
-  await deliver(env, first, { fetchModel });
+  await deliver(env, first);
+  // The Mac that claimed the first email read it, chose Claude and reported it (/api/device/route).
+  sqlite.prepare("UPDATE jobs SET model_json = ?").run(JSON.stringify({ id: 'claude-sonnet-5-5', effort: 'medium', source: 'classified' }));
   const second = mail('email-2', 'owner@gmail.com', {
     subject: first.subject, parentIds: [first.messageId], body: 'Continue the review.',
   });
-  await deliver(env, second, { fetchModel });
+  await deliver(env, second);
   await deliver(env, mail('email-3', 'owner@gmail.com', {
     subject: first.subject, parentIds: [second.messageId],
-    body: 'Please use Seoul for this next step.',
-  }), { fetchModel });
-  assert.equal(calls, 3);
+    body: 'Model: Luna\nFor this step.',
+  }));
   assert.deepEqual(sqlite.prepare('SELECT model_json FROM jobs ORDER BY rowid').all()
     .map((row) => JSON.parse(row.model_json)), [
     { id: 'claude-sonnet-5-5', effort: 'medium', source: 'classified' },
     { id: 'claude-sonnet-5-5', effort: 'medium', source: 'thread' },
-    { id: 'gpt-6.1-sol', effort: 'medium', source: 'classified' },
+    { id: 'gpt-6-luna', effort: 'medium', source: 'explicit' },
   ]);
+  const fresh = bindings();
+  await deliver(fresh.env, mail('plain', 'owner@gmail.com', { body: 'Use Claude to review this.' }));
+  assert.equal(JSON.parse(fresh.sqlite.prepare('SELECT model_json FROM jobs').get().model_json).source, 'default',
+    'a request in plain language is routed on the Mac, not guessed by the relay');
 });
 
-test('a new thread uses the paired Mac catalog for Jev and stays on that Mac', async () => {
+test('a new thread checks an explicit model against the paired Mac catalog and stays on that Mac', async () => {
   const { env, sqlite } = bindings();
-  env.TYPESAFE_API_KEY = 'test-key';
   sqlite.prepare(`INSERT INTO devices (id, account_id, token_hash, model_catalog_json, model_catalog_at)
     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`).run('mac-1', 'account-1', 'hash-1',
     JSON.stringify([{ id: 'gpt-6-astra', name: 'GPT-6 Astra', efforts: ['medium'],
       speeds: ['standard'] }, { id: 'gpt-6-sol', name: 'GPT-6 Sol', efforts: ['medium'],
       speeds: ['standard'] }]));
-  const fetchModel = async (_url, request) => {
-    const route = JSON.parse(request.body).questions.route;
-    assert.match(route.criteria.model0, /GPT-6 Astra/);
-    assert.equal(route.criteria.codex61, undefined);
-    return Response.json({ answers: { route: { type: 'choice', choice: 'model0',
-      probabilities: { model0: 0.96 } } } });
-  };
-  await deliver(env, mail('mac-model', 'owner@gmail.com', { body: 'Use Astra for this review.' }), { fetchModel });
+  await deliver(env, mail('mac-model', 'owner@gmail.com', { body: 'Model: gpt-6-astra\nReview this.' }));
   assert.equal(sqlite.prepare('SELECT device_id FROM threads').get().device_id, 'mac-1');
   assert.equal(JSON.parse(sqlite.prepare('SELECT model_json FROM jobs').get().model_json).id, 'gpt-6-astra');
 });

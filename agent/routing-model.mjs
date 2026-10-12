@@ -1,10 +1,10 @@
-import { chooseModel, UNAVAILABLE_MODEL } from '../apps/mock-inbox/model.mjs';
+import { chooseModel, UNAVAILABLE_MODEL } from './model-choice.mjs';
 
 const CLAUDE = { id: 'claude-sonnet-5-5', effort: 'medium' };
 const LUNA = { id: 'gpt-6-luna', effort: 'medium' };
 const EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 
-// How dictation commonly mishears model names. Shown to Jev next to each name;
+// How dictation commonly mishears model names. Shown to the classifier next to each name;
 // they only count inside a model request ("find hotels in Seoul" is not one).
 export const SOUNDS_LIKE = {
   sol: ['Seoul', 'soul', 'sole', 'saul', 'sold'],
@@ -40,7 +40,11 @@ export function currentText(body) {
   return lines.join('\n').slice(0, 4000);
 }
 
-export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, priorModel, subject,
+// Resolves the model for an email. Returns { done } when the email decides it (an explicit Model:
+// line, a thread's model, the default) or { request, finish } when a classifier should read the text:
+// answer request.questions (choice per question) and pass the answers to finish(). The relay uses it
+// with classify: false; the Mac's local router classifies (agent/local-router.mjs).
+export function prepareModelRoute(body, defaultModel, { classify = false, priorModel, subject,
   pilotCodexModel, defaultEffort = 'medium', defaultSpeed = 'standard', availableModels } = {}) {
   const catalog = Array.isArray(availableModels) && availableModels.length ? availableModels : null;
   const codexModels = catalog?.filter((model) => !model.id.startsWith('claude-')) ?? [];
@@ -77,7 +81,7 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
   const direct = chooseModel(body, defaultModel, { codexModel, availableModels: catalog });
   const knownPrior = priorModel && Object.values(routes).some(({ id }) => priorModel.id === id) &&
     EFFORTS.has(priorModel.effort);
-  // Let Jev recover a natural request from a malformed Model line. If it
+  // Let the classifier recover a natural request from a malformed Model line. If it
   // cannot identify a supported choice, ask rather than run a different model.
   const fallback = direct.source === 'explicit' ? direct : knownPrior
     ? { id: priorModel.id, effort: priorModel.effort, source: 'thread' }
@@ -102,14 +106,9 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
     }
     return selection;
   }
-  if (direct.source === 'explicit' || !apiKey || !state.trim()) return checked(direct.error ? direct : fallback, direct.source === 'explicit');
+  if (direct.source === 'explicit' || !classify || !state.trim()) return { done: checked(direct.error ? direct : fallback, direct.source === 'explicit') };
 
-  try {
-    const response = await fetcher('https://api.typesafe.ai/v1/systemone', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'jev-1.13.0',
+  const request = {
         state,
         questions: {
           route: {
@@ -175,13 +174,11 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
             },
           },
         },
-      }),
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!response.ok) throw new Error(`Jev HTTP ${response.status}`);
-    const answers = (await response.json()).answers;
+  };
+  const finish = (answers) => {
+    try {
     const routeChoice = confidentChoice(answers?.route, 0.6);
-    if (!routeChoice) console.log('Jev route unconfident', answers?.route?.choice, JSON.stringify(Object.entries(answers?.route?.probabilities ?? {}).filter(([, p]) => p > 0.05)));
+    if (!routeChoice) console.log('Model route unconfident', answers?.route?.choice, JSON.stringify(Object.entries(answers?.route?.probabilities ?? {}).filter(([, p]) => p > 0.05)));
     if (routeChoice === 'unsupported') return { error: UNAVAILABLE_MODEL };
     const route = Object.hasOwn(routes, routeChoice) ? routes[routeChoice] : null;
     if (!route && direct.error) return direct;
@@ -199,8 +196,18 @@ export async function routeModel(body, defaultModel, { apiKey, fetcher = fetch, 
     if (speed === 'fast' || speed === 'ultrafast') selected.speed = speed;
     if (speed === 'standard') delete selected.speed;
     return checked(selected, EFFORTS.has(requestedEffort) || speed === 'fast' || speed === 'ultrafast');
-  } catch (error) {
-    if (direct.source !== 'explicit') console.error('Jev model routing fell back to the saved route', error);
-    return direct.error ? direct : fallback;
-  }
+    } catch (error) {
+      console.error('Model routing fell back to the saved route', error);
+      return direct.error ? direct : fallback;
+    }
+  };
+  return { request, finish };
+}
+
+// prepare + classify in one call. ask(request) answers request.questions: { name: { type:'choice', choice, probabilities } }.
+export async function routeModel(body, defaultModel, { ask, ...options } = {}) {
+  const prepared = prepareModelRoute(body, defaultModel, { ...options, classify: Boolean(ask) });
+  if (prepared.done) return prepared.done;
+  try { return prepared.finish(await ask(prepared.request)); }
+  catch (error) { console.error('Model routing fell back to the saved route', error); return prepared.finish(null); }
 }

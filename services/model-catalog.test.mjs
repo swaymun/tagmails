@@ -5,7 +5,12 @@ import { bindings } from './bindings-fixture.mjs';
 import { handleDeviceRequest } from './device-jobs.mjs';
 import { accountModelCatalog, cleanCodexCatalog } from './model-catalog.mjs';
 import { accountPreferences, clearAccountPreferences, saveAccountPreferences } from './account-preferences.mjs';
-import { routeModel } from './jev-route.mjs';
+import { routeModel as routeModelWith } from '../agent/routing-model.mjs';
+// The classifier is injected as `ask`; these tests drive it with canned answers.
+const route = routeModelWith;
+const routeModel = (body, defaultModel, { apiKey, fetcher, ...rest } = {}) => route(body, defaultModel, { ...rest,
+  ask: fetcher && (async (request) => (await (await fetcher('https://classifier.test', { method: 'POST', body: JSON.stringify(request) })).json()).answers) });
+
 
 const token = `tm_dev_${'a'.repeat(43)}`;
 const reported = [
@@ -42,7 +47,7 @@ test('a paired Mac publishes a bounded model list that is scoped to its owner', 
   assert.deepEqual((await accountModelCatalog(env.DB, 'account-1')).models, []);
 });
 
-test('Jev chooses a model from the Mac catalog and rejects unsupported settings', async () => {
+test('the classifier chooses a model from the Mac catalog and rejects unsupported settings', async () => {
   const availableModels = cleanCodexCatalog(reported);
   const fetcher = async (_url, request) => {
     const criteria = JSON.parse(request.body).questions.route.criteria;
@@ -76,18 +81,19 @@ test('a machine can publish Codex and Claude models together, or either alone', 
 });
 
 test('"use Claude" routes to the machine\'s Claude model', async () => {
-  const { routeModel } = await import('./jev-route.mjs');
+  const { routeModel: routeModelWith2 } = await import('../agent/routing-model.mjs');
+  const routeModel = (b, d, { apiKey, fetcher, ...rest } = {}) => routeModelWith2(b, d, { ...rest, ask: fetcher && (async (request) => (await (await fetcher('x', { method: 'POST', body: JSON.stringify(request) })).json()).answers) });
   const availableModels = [
     { id: 'gpt-6-sol', name: 'GPT-6 Sol', efforts: ['low', 'medium', 'high'], speeds: ['standard'] },
     { id: 'claude-opus-5-5', name: 'Opus 5.5', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], speeds: ['standard', 'fast'] },
   ];
-  const jev = async (_url, init) => {
+  const classifier = async (_url, init) => {
     const body = JSON.parse(init.body);
     assert.match(body.questions.route.criteria.model1, /Opus 5\.5 \(claude-opus-5-5\)/);
     return Response.json({ answers: { route: { type: 'choice', choice: 'claude', probabilities: { claude: 0.9 } },
       requestedEffort: { type: 'choice', choice: 'max', probabilities: { max: 0.9 } } } });
   };
-  assert.deepEqual(await routeModel('Use Claude at max effort to review this.', 'gpt-6-sol', { apiKey: 'k', fetcher: jev, availableModels }),
+  assert.deepEqual(await routeModel('Use Claude at max effort to review this.', 'gpt-6-sol', { apiKey: 'k', fetcher: classifier, availableModels }),
     { id: 'claude-opus-5-5', effort: 'max', source: 'classified' });
 });
 
