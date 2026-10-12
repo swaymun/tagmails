@@ -632,8 +632,10 @@ export async function sendNextOutbox(env, options = {}) {
     // Cloudflare still needs Resend's lookup for its Message-ID.
     let sentBy = null;
     try { sentBy = JSON.parse(accepted.payload_json ?? 'null')?.provider ?? null; } catch { /* Untagged. */ }
-    const lookup = !options.getSentEmail && sentBy && sentBy !== outbound.provider
-      ? senders({ ...env, EMAIL: sentBy === 'cloudflare' ? env.EMAIL : undefined }).getSentEmail : getSentEmail;
+    // Cloudflare's "lookup" only reformats the ID it returned, so it needs no binding.
+    const lookup = options.getSentEmail || !sentBy || sentBy === outbound.provider ? getSentEmail
+      : sentBy === 'cloudflare' ? senders({ EMAIL: true }).getSentEmail
+        : senders({ RESEND_API_KEY: env.RESEND_API_KEY }).getSentEmail;
     return finalize(env, accepted, lookup);
   }
 
