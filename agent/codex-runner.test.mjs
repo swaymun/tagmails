@@ -4,7 +4,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { runClaim } from './codex-runner.mjs';
+import { promptFor, runClaim } from './codex-runner.mjs';
 
 // These cover the locked-down setup; owner tools are tested in codex-profile.test.mjs.
 process.env.TAGMAILS_OWNER_TOOLS = 'off';
@@ -466,4 +466,19 @@ test('a long turn that streams megabytes of small events still completes', async
   setup(t, 'chatty');
   const result = await runClaim(claim('job-chatty', 'thread-chatty'));
   assert.equal(result.state, 'completed');
+});
+
+test('owner standing instructions reach owner prompts only', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tagmails-instructions-'));
+  const previous = process.env.TAGMAILS_CONFIG_DIR;
+  process.env.TAGMAILS_CONFIG_DIR = dir;
+  t.after(() => { if (previous === undefined) delete process.env.TAGMAILS_CONFIG_DIR; else process.env.TAGMAILS_CONFIG_DIR = previous; fs.rmSync(dir, { recursive: true, force: true }); });
+  fs.mkdirSync(path.join(dir, 'email'));
+  fs.writeFileSync(path.join(dir, 'email', 'instructions.md'), 'Put files too large for email in my Google Drive.\n');
+  const owner = claim('job-instructions', 'thread-instructions');
+  owner.request.fromOwner = true;
+  assert.match(promptFor(owner), /standing instructions for TagMails[^\n]*\nPut files too large for email in my Google Drive\./);
+  const participant = claim('job-instructions-2', 'thread-instructions');
+  participant.request.fromOwner = false;
+  assert.doesNotMatch(promptFor(participant), /Google Drive|standing instructions for TagMails/);
 });

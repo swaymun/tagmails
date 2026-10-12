@@ -837,7 +837,12 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
             ) {
                 eprintln!("Status reaction could not be queued: {error}");
             }
-            relay_result(&claim, base, access, claude_permission, workspace)?
+            let instructions = owner_instructions();
+            let mut result = relay_result(&claim, base, access, claude_permission, workspace)?;
+            if let Some(note) = instructions_change_note(&instructions, &owner_instructions()) {
+                push_check(&mut result, note);
+            }
+            result
         }
     };
     if result["state"] == "completed" && wants_answer_file(&claim) {
@@ -926,9 +931,7 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
                 result["artifactIds"] = json!(ids);
             }
             if !skipped.is_empty() {
-                if let Some(checks) = result["checks"].as_array_mut() {
-                    checks.push(json!(format!("Could not attach: {}", skipped.join(", "))));
-                }
+                push_check(&mut result, format!("Could not attach: {}", skipped.join(", ")));
             }
         }
     }
@@ -1176,6 +1179,23 @@ mod tests {
             assert_eq!(fs::read(paths::config_file()).unwrap(), before);
             assert_eq!(effective_defaults(&config)["model"], "gpt-6-luna");
         }
+        // Standing instructions: set, shown in replies when a run changes them, cleared.
+        assert!(set_email_defaults(&args(&["set"])).is_err());
+        let before = owner_instructions();
+        assert_eq!(before, None);
+        set_email_defaults(&args(&["set", "--instructions", "Put files too large for email in my Google Drive."])).unwrap();
+        let after = owner_instructions();
+        assert_eq!(after.as_deref(), Some("Put files too large for email in my Google Drive.\n"));
+        assert!(instructions_change_note(&before, &after).unwrap().contains("They now read: \"Put files too large"));
+        assert_eq!(instructions_change_note(&after, &after), None);
+        assert!(set_email_defaults(&args(&["set", "--instructions", &"x".repeat(MAX_INSTRUCTIONS + 1)])).is_err());
+        set_email_defaults(&args(&["set", "--clear-instructions"])).unwrap();
+        assert_eq!(owner_instructions(), None);
+        assert!(instructions_change_note(&after, &None).unwrap().contains("cleared"));
+        let mut result = json!({"checks": (0..12).map(|index| index.to_string()).collect::<Vec<_>>()});
+        push_check(&mut result, "y".repeat(400));
+        assert_eq!(result["checks"].as_array().unwrap().len(), 12, "the relay rejects more than 12 checks");
+        assert_eq!(result["checks"][11].as_str().unwrap().len(), 300);
         env::remove_var("TAGMAILS_CONFIG_DIR");
         fs::remove_dir_all(root).unwrap();
     }
@@ -1537,7 +1557,9 @@ Usage:
                  [--clear-defaults]
                                                    Save settings and run in the background
   tagmails set [--model ID] [--effort LEVEL] [--speed standard|fast] [--clear-defaults]
-                                                   Change model defaults without a restart
+               [--instructions TEXT] [--clear-instructions]
+                                                   Change model defaults or your standing
+                                                   instructions without a restart
   tagmails status                                  Show settings, connection and service state
   tagmails stop                                    Stop the background service
   tagmails logs                                    Follow the service log
@@ -1552,9 +1574,10 @@ Full access and bypass apply only after you choose --access full or
 --claude-permission bypass here.
 
 --model, --effort and --speed set this machine's default for emails that don't ask for
-one; a default saved on tagmails.com overrides them. `tagmails set` changes them while
-the service keeps running (an agent can run it when you ask by email); permissions and
-folders change only with `tagmails start` in a terminal.
+one. `tagmails set` changes them while the service keeps running (an agent can run it
+when you ask by email); permissions and folders change only with `tagmails start` in a
+terminal. --instructions are standing instructions every one of your emails follows
+(for example where to put files too large for email); a reply says when they change.
 
 Pairing codes come from https://tagmails.com/setup. By default TagMails picks one of
 your recent Codex or Claude project folders for each new email (--projects). Use
@@ -1826,15 +1849,29 @@ fn set_email_defaults(args: &[String]) -> Result<String, Box<dyn Error>> {
     let mut values = args.iter().skip(1);
     while let Some(arg) = values.next() {
         match arg.as_str() {
-            "--model" | "--effort" | "--speed" => {
+            "--model" | "--effort" | "--speed" | "--instructions" => {
                 values.next();
             }
-            "--clear-defaults" => {}
+            "--clear-defaults" | "--clear-instructions" => {}
             "--access" | "--claude-permission" | "--projects" | "--workspace" | "--routing-context" | "--relay" | "--name" => {
                 return Err("Permissions and folders change only with `tagmails start` in a terminal.".into());
             }
-            other => return Err(format!("Unknown option `{other}` for `tagmails set`. Pass --model, --effort, --speed or --clear-defaults.").into()),
+            other => return Err(format!("Unknown option `{other}` for `tagmails set`. Pass --model, --effort, --speed, --clear-defaults, --instructions or --clear-instructions.").into()),
         }
+    }
+    let mut messages = Vec::new();
+    if let Some(text) = option(args, "--instructions")? {
+        messages.push(set_instructions(Some(&text))?);
+    } else if args.iter().any(|arg| arg == "--clear-instructions") {
+        messages.push(set_instructions(None)?);
+    }
+    let model_flags = ["--model", "--effort", "--speed", "--clear-defaults"];
+    if !args.iter().any(|arg| model_flags.contains(&arg.as_str())) {
+        return if messages.is_empty() {
+            Err("Pass --model, --effort, --speed, --clear-defaults, --instructions or --clear-instructions.".into())
+        } else {
+            Ok(messages.join(" "))
+        };
     }
     let clear = args.iter().any(|arg| arg == "--clear-defaults");
     let mut defaults = if clear {
@@ -1847,15 +1884,70 @@ fn set_email_defaults(args: &[String]) -> Result<String, Box<dyn Error>> {
     }
     if defaults.is_empty() {
         remove_email_defaults()?;
-        return Ok("Cleared the defaults set by email. The service picks this up before its next email.".into());
+        messages.push("Cleared the defaults set by email. The service picks this up before its next email.".into());
+        return Ok(messages.join(" "));
     }
     create_private_dir(&paths::email_settings_dir())?;
     write_private_file(&paths::email_defaults_file(), &serde_json::to_vec_pretty(&defaults)?)?;
     let part = |key: &str| defaults.get(key).and_then(Value::as_str).unwrap_or("-").to_owned();
-    Ok(format!(
+    messages.push(format!(
         "Default model {} {} {}. The service picks this up before its next email.",
         part("model"), part("effort"), part("speed")
-    ))
+    ));
+    Ok(messages.join(" "))
+}
+
+/// Adds a reply check within the relay's limits (12 checks of 300 characters).
+fn push_check(result: &mut Value, check: String) {
+    let check: String = check.chars().take(300).collect();
+    if !result["checks"].is_array() {
+        result["checks"] = json!([]);
+    }
+    if let Some(checks) = result["checks"].as_array_mut() {
+        checks.truncate(11);
+        checks.push(json!(check));
+    }
+}
+
+/// Longest standing instructions an owner can set; they ride in every prompt.
+const MAX_INSTRUCTIONS: usize = 4000;
+
+/// The owner's standing instructions, if any.
+fn owner_instructions() -> Option<String> {
+    fs::read_to_string(paths::email_instructions_file()).ok().filter(|text| !text.trim().is_empty())
+}
+
+/// Replaces (or with None, removes) the owner's standing instructions.
+fn set_instructions(text: Option<&str>) -> Result<String, Box<dyn Error>> {
+    let Some(text) = text.map(str::trim).filter(|text| !text.is_empty()) else {
+        match fs::remove_file(paths::email_instructions_file()) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+            _ => return Ok("Cleared your TagMails instructions.".into()),
+        }
+    };
+    if text.chars().count() > MAX_INSTRUCTIONS || text.contains('\0') {
+        return Err(format!("Instructions must be plain text up to {MAX_INSTRUCTIONS} characters.").into());
+    }
+    create_private_dir(&paths::email_settings_dir())?;
+    write_private_file(&paths::email_instructions_file(), format!("{text}\n").as_bytes())?;
+    Ok("Saved your TagMails instructions; every email you send from now on follows them.".into())
+}
+
+/// A reply line naming instructions that changed during a run, so a change an
+/// email (or text quoted in it) caused is never silent.
+fn instructions_change_note(before: &Option<String>, after: &Option<String>) -> Option<String> {
+    if before == after {
+        return None;
+    }
+    Some(match after {
+        None => "Your TagMails instructions were cleared during this run.".into(),
+        Some(text) => {
+            let text = text.trim();
+            let shown: String = text.chars().take(200).collect();
+            let more = if text.chars().count() > 200 { "…" } else { "" };
+            format!("Your TagMails instructions changed during this run. They now read: \"{shown}{more}\"")
+        }
+    })
 }
 
 fn found(program: &str) -> String {
@@ -1918,6 +2010,9 @@ fn command_status() -> Result<(), Box<dyn Error>> {
     }
     if let Some(problem) = codex_sandbox_problem(config["access"].as_str().unwrap_or(DEFAULT_ACCESS)) {
         println!("  Warning     {problem}");
+    }
+    if let Some(text) = owner_instructions() {
+        println!("  Instructions {} characters ({})", text.trim().chars().count(), paths::email_instructions_file().display());
     }
     println!("  Config      {}", paths::config_file().display());
     println!(

@@ -62,6 +62,11 @@ pub fn email_defaults_file() -> PathBuf {
     email_settings_dir().join("defaults.json")
 }
 
+/// The owner's standing instructions, added to every owner run's prompt.
+pub fn email_instructions_file() -> PathBuf {
+    email_settings_dir().join("instructions.md")
+}
+
 pub fn token_file() -> PathBuf {
     config_dir().join("device-token")
 }
