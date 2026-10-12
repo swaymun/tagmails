@@ -68,8 +68,15 @@ content stays on the computer, in the Codex or Claude session.
   it to log or keep mail that arrives afterwards. Sealing protects what is
   stored, not mail in flight. Only sender-side encryption or a user-owned
   mailbox would change that.
-- The private key sits next to the device token. An agent run with owner access
-  could read that folder; Codex owner write turns are denied both files.
+- The private key sits next to the device token. Codex owner write turns are
+  denied both files by Codex's OS sandbox. Claude runs get Claude Code deny
+  rules for both files: they block the Read and Edit tools and the shell
+  commands Claude Code recognises as file reads (`cat`, `head`, `grep`...), but
+  not a program that opens the file itself (`python3 -c "open(...)"`, `node`).
+  Owner `auto` turns run without Claude Code's OS sandbox, which would close
+  that gap but breaks keychain-backed tools such as `gh`, so there the auto
+  classifier is the remaining guard (in testing it refused even a plain `cat`
+  of `device-key` as credential exploration). Participant runs have no Bash.
 - Several computers on one account: mail is sealed to the computer its thread
   is routed to, and only that computer runs it. A computer without a key gets
   relay-key storage so it can still run its threads. Re-pairing creates a new key. Queued mail sealed to a key that no paired

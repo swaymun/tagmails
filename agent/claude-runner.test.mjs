@@ -162,6 +162,9 @@ function run(prompt) {
   const [ownerAuto, participantAuto] = fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).slice(-2).map((call) => call.args);
   assert.ok(ownerAuto.includes('auto') && !ownerAuto.includes('--restricted') && !ownerAuto.includes('--tools'));
   assert.ok(participantAuto.includes('auto') && participantAuto.includes('--restricted'));
+  // Owner auto turns run without --restricted, so the device-secret deny rules are their file boundary.
+  const { deviceSecretSettings } = await import('./claude-runner.mjs');
+  assert.equal(ownerAuto[ownerAuto.indexOf('--settings') + 1], deviceSecretSettings());
   assert.equal((await runClaim(claim('job-2', 'Continue.'))).runtime, 'claude-cli-write');
   const resumedWrite = fs.readFileSync(path.join(workspace, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).at(-1);
   assert.ok(resumedWrite.args.includes('33333333-3333-4333-8333-333333333333'));
@@ -224,4 +227,33 @@ test('owner allow rules name each MCP server and the tagmails CLI', async () => 
   assert.deepEqual(mcpAllowRules('No MCP servers configured.'), []);
   // Without connectors the owner can still change TagMails settings by email.
   assert.deepEqual(ownerAllowRules('No MCP servers configured.'), ['--allowedTools', 'Bash(tagmails status)', 'Bash(tagmails set:*)']);
+});
+
+test('Claude runs cannot read the device token or sealing key, while other config stays readable', async (t) => {
+  const { deviceSecretSettings } = await import('./claude-runner.mjs');
+  const { spawnSync } = await import('node:child_process');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tagmails-claude-deny-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const env = { TAGMAILS_CONFIG_DIR: path.join(root, 'config'), TAGMAILS_DEVICE_KEY_FILE: path.join(root, 'elsewhere', 'device-key') };
+  const secrets = [path.join(root, 'config', 'device-token'), path.join(root, 'config', 'device-key'), env.TAGMAILS_DEVICE_KEY_FILE];
+  const settings = deviceSecretSettings(env);
+  assert.deepEqual(JSON.parse(settings).permissions.deny, secrets.flatMap((file) => [`Read(/${file})`, `Edit(/${file})`]));
+  // The real CLI, when installed. dontAsk with cat and Read pre-allowed keeps
+  // the auto classifier out of it, so only the deny rules decide.
+  const workspace = path.join(root, 'workspace');
+  for (const dir of ['config', 'elsewhere', 'workspace']) fs.mkdirSync(path.join(root, dir));
+  for (const file of secrets) fs.writeFileSync(file, 'tm_dev_secret\n');
+  const config = path.join(root, 'config', 'config.json');
+  fs.writeFileSync(config, 'readable_config\n');
+  const files = [config, ...secrets];
+  const run = spawnSync('claude', ['--print', '--output-format', 'stream-json', '--verbose', '--model', 'claude-sonnet-5-5',
+    '--permission-mode', 'dontAsk', '--allowedTools', 'Bash(cat:*)', 'Read', '--settings', settings, '--max-budget-usd', '1',
+    `Permission test on dummy files. For each path below run \`cat <path>\` with Bash, then use the Read tool on it. Do every call even if some fail.\n${files.join('\n')}`],
+  { cwd: workspace, encoding: 'utf8', timeout: 240_000, env: { ...process.env, DISABLE_TELEMETRY: '1' } });
+  if (run.error?.code === 'ENOENT') return t.skip('claude is not installed');
+  const results = run.stdout.split('\n').filter(Boolean).map(JSON.parse).filter((event) => event.type === 'user')
+    .flatMap((event) => event.message.content ?? []).filter((item) => item.type === 'tool_result').map((item) => JSON.stringify(item.content));
+  assert.ok(results.length >= files.length * 2, `${run.stderr}\n${results.join('\n')}`);
+  assert.ok(results.some((text) => text.includes('readable_config')), results.join('\n'));
+  assert.ok(!results.some((text) => text.includes('tm_dev_secret')), results.join('\n'));
 });

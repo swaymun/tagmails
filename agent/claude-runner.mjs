@@ -8,6 +8,7 @@ import { readStore, updateStore, sessionKey } from './session-store.mjs';
 import { stageAgentAttachments } from './agent-attachments.mjs';
 import { formatAgentAnswer } from './answer-result.mjs';
 import { CONNECTED_APPS, ownerInstructions, ownerToolsFor, TAGMAILS_EMAIL, tagmailsConfigDir } from './email-context.mjs';
+import { deviceSecretFiles } from './codex-profile.mjs';
 import { keepClaim, steerPrompt, terminate, whileHoldingClaim } from './claim-renew.mjs';
 import { addRunEvent, claudeRunEvents, finishRunTranscript, runTranscript } from './run-transcript.mjs';
 
@@ -149,6 +150,15 @@ export function ownerAllowRules(listing) {
   return ['--allowedTools', ...mcpAllowRules(listing), 'Bash(tagmails status)', 'Bash(tagmails set:*)'];
 }
 
+// This computer's TagMails credentials (device token, sealing key) are denied
+// to every run. Claude Code applies these rules to its file tools and to the
+// shell commands it recognises as reads (cat, head, grep...); a script that
+// opens the file itself (python, node) is outside them. `//` marks an absolute path.
+export function deviceSecretSettings(env = process.env) {
+  const rules = deviceSecretFiles(env).flatMap((file) => [`Read(/${file})`, `Edit(/${file})`]);
+  return JSON.stringify({ permissions: { deny: rules } });
+}
+
 function ownerMcpListing() {
   try {
     return execFileSync(process.env.TAGMAILS_CLAUDE_BIN || 'claude', ['mcp', 'list'],
@@ -175,6 +185,7 @@ async function runClaude(claim, workspace, sessionId, staged, write) {
     // pre-approved outside read-only mode, except tools that trash or delete.
     ...(owner ? [...(mode.write || selectedMode() === 'manual' ? ownerAllowRules(ownerMcpListing()) : []),
       '--disallowedTools', 'mcp__*__trash*', 'mcp__*__delete*'] : ['--disallowedTools', 'mcp__*']),
+    '--settings', deviceSecretSettings(),
     '--permission-mode', mode.permission,
     '--permission-prompts', 'none', '--model', claim.model.id, '--effort', EFFORTS[claim.model.effort],
     '--system-prompt', owner ? `${SYSTEM_PROMPTS[selectedMode()].replace(/(Never|Do not)[^.]*(web|external actions)[^.]*\./, '')} The owner's connected apps (Google Drive, Gmail, Calendar and others) may be used when their email asks.`.replace(/\s+/g, ' ').trim() : SYSTEM_PROMPTS[selectedMode()],
