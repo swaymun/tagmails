@@ -174,7 +174,7 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.match(welcome[0].text, /tagmails doctor/);
   assert.match(welcome[0].html, /Turn on reactions/);
   // It asks for a balance up front, since unfunded emails wait.
-  assert.match(welcome[0].text, /First, add a balance\..*Each reply is \$0\.05, so \$10 covers about 200 replies/);
+  assert.match(welcome[0].text, /First, add a balance\..*Each email you send to TagMails costs \$0\.05, so \$10 covers about 200 emails/);
   // The computer names itself: a name can't carry a header break, or turn into a link in the welcome.
   assert.equal(welcomeEmail({ env, ownerEmail: 'o@gmail.com', deviceName: '[Verify your account](https://evil.test)' }).html.includes('href="https://evil.test'), false);
   // The computer's sealing key comes with the pairing (0.2.24+).

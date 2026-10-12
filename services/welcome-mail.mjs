@@ -16,8 +16,8 @@ export function welcomeEmail({ env, ownerEmail, deviceName: rawName, siteOrigin 
     `Thanks for choosing TagMails! **${deviceName}** is connected. From now on, email this address from ${ownerEmail} and your agent on that computer will do the work and reply right here, in the same thread.`,
     '',
     siteOrigin
-      ? `**First, add a balance.** Emails wait until your balance covers them. Each reply is ${price}, so $10 covers about ${replies.toLocaleString('en-US')} replies. [Top up your balance](${siteOrigin}/#billing)`
-      : `**First, add a balance.** Emails wait until your balance covers them. Each reply is ${price}.`,
+      ? `**First, add a balance.** Emails wait until your balance covers them. Each email you send to TagMails costs ${price}, so $10 covers about ${replies.toLocaleString('en-US')} emails. [Top up your balance](${siteOrigin}/#billing)`
+      : `**First, add a balance.** Emails wait until your balance covers them. Each email you send to TagMails costs ${price}.`,
     '',
     '**Try it now:** reply to this email with something you\'d like done, for example "What changed in my projects this week?"',
     '',
