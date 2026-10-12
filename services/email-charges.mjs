@@ -74,7 +74,7 @@ export async function fundPendingTestEmails(env) {
         (SELECT 1 FROM participants p WHERE p.thread_id = t.id
           AND p.email = m.sender_email AND p.revoked_at IS NULL))
       -- Only accounts that can pay now; ten that can't must not starve one that can.
-      AND (SELECT COALESCE(SUM(amount_cents), 0) * 1000 FROM credit_ledger WHERE account_id = t.account_id)
+      AND a.active = 1 AND (SELECT COALESCE(SUM(amount_cents), 0) * 1000 FROM credit_ledger WHERE account_id = t.account_id)
         - (SELECT COALESCE(SUM(amount_millicents), 0) FROM test_email_charges
            WHERE account_id = t.account_id AND state != 'released') >= ?
     ORDER BY t.account_id LIMIT 10`).bind(emailPriceMillicents(env)).all();

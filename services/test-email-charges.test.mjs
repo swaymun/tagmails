@@ -88,6 +88,9 @@ test('scheduled funding reaches a paying account behind ten accounts that cannot
       .run(`a${index}`, `google-a${index}`, `broke${index}@gmail.com`, `broke${index}@tagmails.test`);
     await deliver(env, `broke-${index}`, `broke${index}@gmail.com`, { agentAddress: `broke${index}@tagmails.test` });
   }
+  // Five of them do have money but were deactivated; they can't be funded either.
+  for (let index = 0; index < 5; index += 1) credit(sqlite, `a${index}`, 5, `inactive-${index}`);
+  sqlite.prepare("UPDATE accounts SET active = 0 WHERE id IN ('a0', 'a1', 'a2', 'a3', 'a4')").run();
   await deliver(env, 'paying', 'owner@gmail.com');
   credit(sqlite, 'account-1', 5, 'late');
   await fundPendingTestEmails(env);
