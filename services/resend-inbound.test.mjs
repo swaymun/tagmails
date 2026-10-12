@@ -113,8 +113,8 @@ test('a signed sent event carries the job tag and provider identifiers', async (
     jobId, providerEmailId: id, messageId: '<sent@resend.dev>', from: agent,
     to: ['owner@gmail.com'], cc: [], subject: 'Re: Shared review',
   } });
-  await assert.rejects(inspectResendInbound({ ...options(item), ...event,
-    rawPayload: event.rawPayload + ' ' }));
+  assert.deepEqual(await inspectResendInbound({ ...options(item), ...event,
+    rawPayload: event.rawPayload + ' ' }), { unauthorized: true });
 });
 
 test('a signed delivery event identifies one recipient without treating it as a new email', async () => {
@@ -131,8 +131,8 @@ test('a signed delivery event identifies one recipient without treating it as a 
     subject: 'Re: Shared review', status: 'bounced', eventAt: createdAt,
     eventId: 'msg_synthetic_event_1',
   } });
-  await assert.rejects(inspectResendInbound({ ...options(item), ...event,
-    rawPayload: event.rawPayload + ' ' }));
+  assert.deepEqual(await inspectResendInbound({ ...options(item), ...event,
+    rawPayload: event.rawPayload + ' ' }), { unauthorized: true });
 });
 
 test('an agent only in Bcc is ignored: owner mail sent to someone else could be re-sent to it', async () => {
@@ -192,7 +192,8 @@ test('a Received-header recipient alone cannot route mail to an agent', async ()
 
 test('Resend intake rejects tampering, mismatched retrieval, failed authentication, and unsafe raw URLs', async () => {
   const item = fixture();
-  await assert.rejects(inspectResendInbound({ ...options(item), rawPayload: item.rawPayload + ' ' }));
+  assert.deepEqual(await inspectResendInbound({ ...options(item), rawPayload: item.rawPayload + ' ' }), { unauthorized: true });
+  assert.deepEqual(await inspectResendInbound({ ...options(item), headers: {} }), { unauthorized: true });
   await assert.rejects(inspectResendInbound({ ...options(item), getReceivedEmail: async () => ({ ...item.email, message_id: '<different@example.test>' }) }), /does not match/);
   await assert.rejects(inspectResendInbound({ ...options(item), getReceivedEmail: async () => ({ ...item.email, authentication: { dmarc: 'fail' } }) }), /DMARC/);
   for (const url of [

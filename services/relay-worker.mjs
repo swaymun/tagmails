@@ -185,6 +185,7 @@ export async function handleInbound(request, env, { inspect = inspectResendInbou
     resolveAgentAddress: (candidates) => resolveAgentAddress(env.DB, candidates),
     getReceivedEmail, fetchRaw, resolveTxt,
   });
+  if (message.unauthorized) return Response.json({ error: 'Invalid webhook signature' }, { status: 401 });
   if (message.ignored) return Response.json({ accepted: false });
   // Mail arrives through Cloudflare Email Routing, which checks the sender's
   // DKIM alignment and signed To/Cc itself. Resend's received-mail verdict is

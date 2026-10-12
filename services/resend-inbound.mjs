@@ -48,15 +48,18 @@ async function boundedRaw(response) {
 export async function inspectResendInbound({ rawPayload, headers, webhookSecret, apiKey, agentAddress, resolveAgentAddress, getReceivedEmail, fetchRaw = fetch, resolveTxt }) {
   if (!webhookSecret || !apiKey || typeof getReceivedEmail !== 'function') throw new Error('Resend inbound verification is not configured');
   const verifier = new Resend(apiKey);
-  const event = verifier.webhooks.verify({
-    payload: rawPayload,
-    headers: {
-      id: header(headers, 'svix-id'),
-      timestamp: header(headers, 'svix-timestamp'),
-      signature: header(headers, 'svix-signature'),
-    },
-    webhookSecret,
-  });
+  let event;
+  try {
+    event = verifier.webhooks.verify({
+      payload: rawPayload,
+      headers: {
+        id: header(headers, 'svix-id'),
+        timestamp: header(headers, 'svix-timestamp'),
+        signature: header(headers, 'svix-signature'),
+      },
+      webhookSecret,
+    });
+  } catch { return { unauthorized: true }; }
   if (event?.type === 'email.sent') {
     const data = event.data;
     const jobId = data?.tags?.tagmails_job;
