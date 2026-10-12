@@ -2,7 +2,7 @@ import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { accountFor, sameOrigin, siteCors, siteOriginFor, siteOwnerFor, verifyGoogleCredential } from './account-auth.mjs';
 import { billingLive, reservePendingTestEmails, testBillingEnabled, testWalletSnapshot } from './email-charges.mjs';
 
-export const TOP_UP_CENTS = 1000;
+const TOP_UP_CENTS = 1000;
 const MAX_WEBHOOK_BYTES = 128_000;
 const UUID = /^[0-9a-f-]{36}$/i;
 
@@ -66,7 +66,7 @@ async function createCheckout(request, env, account, stripeFetch, site = false) 
 
 // Creates a $10 Stripe Checkout Session for the account and returns its URL.
 // Money moves only when the owner pays on Stripe and the webhook arrives.
-export async function startCheckout(env, account, { successUrl, cancelUrl }, stripeFetch = fetch) {
+async function startCheckout(env, account, { successUrl, cancelUrl }, stripeFetch = fetch) {
   const id = randomUUID();
   await env.DB.prepare('INSERT INTO billing_checkouts (id, account_id, amount_cents) VALUES (?, ?, ?)')
     .bind(id, account.id, TOP_UP_CENTS).run();

@@ -213,18 +213,23 @@ async function pair(request, env, sendEmail) {
       AND account_id IN (SELECT id FROM accounts WHERE active = 1) AND ${ISSUER_VALID('pairing_codes')}
     RETURNING account_id`).bind(hash(body.code)).first();
   if (!claimed) return json({ error: 'Pairing code expired or already used' }, 409);
+  const deviceId = await registerDevice(env, claimed.account_id,
+    { tokenHash: hash(body.token), name: body.name.trim(), publicKey: body.publicKey ?? null }, sendEmail);
+  return json({ paired: true, deviceId }, 201);
+}
+
+// Adds a paired computer by a pairing code or an approved link (device-link.mjs).
+export async function registerDevice(env, accountId, { tokenHash, name, publicKey }, sendEmail) {
   const deviceId = randomUUID();
   // A computer from 0.2.24 on sends the public half of its sealing key; mail
   // for it is then stored sealed to that key (services/device-sealing.mjs).
-  const publicKey = body.publicKey ?? null;
   await env.DB.prepare(`INSERT INTO devices (id, account_id, token_hash, name, public_key, key_id, key_registered_at)
     VALUES (?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END)`)
-    .bind(deviceId, claimed.account_id, hash(body.token), body.name.trim(), publicKey,
-      publicKey && await keyIdFor(publicKey), publicKey).run();
+    .bind(deviceId, accountId, tokenHash, name, publicKey, publicKey && await keyIdFor(publicKey), publicKey).run();
   // The welcome email is the owner's first test and their help sheet.
   // Sent through Cloudflare Email Sending; a Resend-only relay skips it.
-  await sendWelcomeEmail(env, claimed.account_id, body.name.trim(), sendEmail ?? (env.EMAIL ? senders(env).sendEmail : null));
-  return json({ paired: true, deviceId }, 201);
+  await sendWelcomeEmail(env, accountId, name, sendEmail ?? (env.EMAIL ? senders(env).sendEmail : null));
+  return deviceId;
 }
 
 export function siteCors(request, env) {
@@ -249,27 +254,25 @@ export async function siteOwnerFor(request, env, verifyIdentity = verifyGoogleCr
 }
 
 // Codes an account may create per hour. Each is a row, and a signed-in
-// session (or MCP token) could otherwise create them without limit.
+// session could otherwise create them without limit.
 export const PAIRING_CODES_PER_HOUR = 20;
 
 // A pairing code is good only while the sign-in that made it is.
 const ISSUER_VALID = (code) => `(${code}.session_hash IS NULL OR EXISTS (SELECT 1 FROM sessions s
-    WHERE s.token_hash = ${code}.session_hash AND s.revoked_at IS NULL AND s.expires_at > CURRENT_TIMESTAMP))
-  AND (${code}.mcp_grant_id IS NULL OR EXISTS (SELECT 1 FROM mcp_grants g
-    WHERE g.id = ${code}.mcp_grant_id AND g.revoked_at IS NULL))`;
+    WHERE s.token_hash = ${code}.session_hash AND s.revoked_at IS NULL AND s.expires_at > CURRENT_TIMESTAMP))`;
 
 // A fresh 10-minute code, or null once the account hit its hourly limit or
-// the issuing sign-in (`sessionToken`, or MCP `grantId`) ended meanwhile.
-export async function createPairingCode(env, accountId, { sessionToken = null, grantId = null } = {}) {
+// the issuing sign-in (`sessionToken`) ended meanwhile.
+export async function createPairingCode(env, accountId, { sessionToken = null } = {}) {
   await env.DB.prepare("DELETE FROM pairing_codes WHERE account_id = ? AND created_at < datetime('now', '-1 day')").bind(accountId).run();
   const code = `tm_pair_${randomBytes(20).toString('base64url')}`;
   // One statement counts and inserts, so concurrent requests can't all pass the check.
-  const inserted = await env.DB.prepare(`INSERT INTO pairing_codes (code_hash, account_id, expires_at, session_hash, mcp_grant_id)
-    SELECT ?1, ?2, datetime('now', '+10 minutes'), issuer.session_hash, issuer.mcp_grant_id
-    FROM (SELECT ?4 AS session_hash, ?5 AS mcp_grant_id) issuer
+  const inserted = await env.DB.prepare(`INSERT INTO pairing_codes (code_hash, account_id, expires_at, session_hash)
+    SELECT ?1, ?2, datetime('now', '+10 minutes'), issuer.session_hash
+    FROM (SELECT ?4 AS session_hash) issuer
     WHERE (SELECT COUNT(*) FROM pairing_codes WHERE account_id = ?2 AND created_at > datetime('now', '-1 hour')) < ?3
       AND ${ISSUER_VALID('issuer')}`)
-    .bind(hash(code), accountId, PAIRING_CODES_PER_HOUR, sessionToken ? hash(sessionToken) : null, grantId).run();
+    .bind(hash(code), accountId, PAIRING_CODES_PER_HOUR, sessionToken ? hash(sessionToken) : null).run();
   if (!(inserted.meta?.changes ?? inserted.changes)) return null;
   return { code, expiresInSeconds: 600 };
 }

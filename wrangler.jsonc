@@ -17,7 +17,7 @@
   "env": {
     "dev": {
       "name": "tagmails-relay-dev",
-      // tagmails.com/mcp, /oauth/* and /.well-known/oauth-* also route here. Those zone
+      // tagmails.com/connect and /skill.md also route here. Those zone
       // routes are managed outside this file (CI's token can't edit routes, and a
       // deploy without "routes" leaves them alone); see AGENTS.md.
       "workers_dev": true,

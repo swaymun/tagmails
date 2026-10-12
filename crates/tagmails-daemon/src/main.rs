@@ -579,18 +579,7 @@ fn pair_relay(base: &str, code: &str, path: &Path, name: &str, public_key: Optio
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
-    let mut secret = [0u8; 32];
-    SystemRandom::new()
-        .fill(&mut secret)
-        .map_err(|_| "Could not generate a device token")?;
-    let token = format!("tm_dev_{}", URL_SAFE_NO_PAD.encode(secret));
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    let mut file = options.open(path)?;
-    file.write_all(format!("{token}\n").as_bytes())?;
-    file.sync_all()?;
+    let token = create_token_file(path)?;
     let sent = client
         .post(format!("{}/api/device/pair", base.trim_end_matches('/')))
         .json(&match public_key {
@@ -629,6 +618,138 @@ fn pair_relay(base: &str, code: &str, path: &Path, name: &str, public_key: Optio
         }
     }
     Ok(())
+}
+
+/// A new device token, written owner-only before the relay ever sees it so an
+/// interrupted pairing can be confirmed or resumed.
+fn create_token_file(path: &Path) -> Result<String, Box<dyn Error>> {
+    let mut secret = [0u8; 32];
+    SystemRandom::new()
+        .fill(&mut secret)
+        .map_err(|_| "Could not generate a device token")?;
+    let token = format!("tm_dev_{}", URL_SAFE_NO_PAD.encode(secret));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path)?;
+    file.write_all(format!("{token}\n").as_bytes())?;
+    file.sync_all()?;
+    Ok(token)
+}
+
+/// The token file's token, if there is a valid owner-only one.
+fn existing_token(path: &Path) -> Result<Option<String>, Box<dyn Error>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if !metadata.file_type().is_file() {
+                return Err("Existing device token path is not a regular file".into());
+            }
+            #[cfg(unix)]
+            if metadata.permissions().mode() & 0o077 != 0 {
+                return Err("Existing device token file must be owner-only".into());
+            }
+            let token = fs::read_to_string(path)?.trim().to_owned();
+            if !valid_device_token(&token) {
+                return Err("Existing device token file is invalid".into());
+            }
+            Ok(Some(token))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Pairing by link (services/device-link.mjs): register a new token, show
+/// where the owner approves it, and wait for the approval unless `wait` is
+/// false. A rerun with the same token file picks the link up again. Returns
+/// whether this computer is now paired.
+fn link_relay(base: &str, path: &Path, name: &str, public_key: Option<&str>, wait: bool) -> Result<bool, Box<dyn Error>> {
+    validate_relay_base(base)?;
+    if !path.is_absolute() {
+        return Err("Device token file must be an absolute path".into());
+    }
+    if name.trim().is_empty() || name.len() > 80 {
+        return Err("Device name must be 1-80 characters".into());
+    }
+    let client = Client::builder().timeout(Duration::from_secs(10)).build()?;
+    let endpoint = format!("{}/api/device/link", base.trim_end_matches('/'));
+    let status = |token: &str| -> Result<(u16, Value), Box<dyn Error>> {
+        let response = client.get(&endpoint).bearer_auth(token).send()?;
+        let code = response.status().as_u16();
+        Ok((code, response.json::<Value>().unwrap_or(Value::Null)))
+    };
+    let token = match existing_token(path)? {
+        Some(token) => {
+            if device_is_paired(&client, base, &token)? {
+                println!("This computer is paired. Token saved at {}.", path.display());
+                return Ok(true);
+            }
+            match status(&token)? {
+                (200, body) if body["state"] == "pending" => token,
+                (200, _) => return Err("This computer was approved but its token is no longer active (it may have been disconnected). Move the device token file aside and run `tagmails pair` again.".into()),
+                (404 | 410, _) => {
+                    // The relay has no live link or device for this token: start over.
+                    fs::remove_file(path)?;
+                    return link_relay(base, path, name, public_key, wait);
+                }
+                (code, _) => return Err(format!("Could not check the pairing link (relay returned {code}); the token file was kept. Try again.").into()),
+            }
+        }
+        None => {
+            let token = create_token_file(path)?;
+            let mut body = json!({"token": token, "name": name.trim()});
+            if let Some(key) = public_key {
+                body["publicKey"] = json!(key);
+            }
+            let started = client.post(&endpoint).json(&body).send();
+            match started {
+                Ok(response) if response.status().is_success() => token,
+                Ok(response) => {
+                    fs::remove_file(path)?;
+                    let code = response.status();
+                    let reason = response.json::<Value>().ok().and_then(|body| body["error"].as_str().map(str::to_owned));
+                    return Err(format!("The relay refused the pairing link ({code}{}); token file removed.", reason.map(|text| format!(": {text}")).unwrap_or_default()).into());
+                }
+                Err(error) => {
+                    fs::remove_file(path)?;
+                    return Err(format!("Could not reach the relay ({error}); token file removed. Try again.").into());
+                }
+            }
+        }
+    };
+    let (_, pending) = status(&token)?;
+    let (Some(code), Some(url)) = (pending["code"].as_str(), pending["url"].as_str()) else {
+        return Err("The relay returned an invalid pairing link".into());
+    };
+    println!("To connect this computer, open {url} and enter the code {code}");
+    println!("Then continue with the Google account whose emails it should run. The code works for 10 minutes.");
+    if !wait {
+        println!("After approving, run `tagmails pair` again to finish.");
+        return Ok(false);
+    }
+    println!("Waiting for approval…");
+    let deadline = std::time::Instant::now() + Duration::from_secs(11 * 60);
+    while std::time::Instant::now() < deadline {
+        thread::sleep(Duration::from_secs(3));
+        match status(&token) {
+            Ok((200, body)) if body["state"] == "approved" => {
+                if device_is_paired(&client, base, &token)? {
+                    println!("Device paired. Token saved at {}.", path.display());
+                    return Ok(true);
+                }
+                return Err("The link was approved but the relay does not accept this computer's token. Move the device token file aside and run `tagmails pair` again.".into());
+            }
+            Ok((200, _)) => {}
+            Ok((404 | 410, _)) => {
+                fs::remove_file(path)?;
+                return Err("The code expired before it was approved. Run `tagmails pair` again for a new one.".into());
+            }
+            // A dropped request or a relay hiccup: keep waiting until the deadline.
+            Ok(_) | Err(_) => {}
+        }
+    }
+    Err("Still waiting for approval. Run `tagmails pair` again to keep waiting.".into())
 }
 
 /// Codex runs with the machine's access setting; Claude Code with its own
@@ -1581,6 +1702,48 @@ mod tests {
     }
 
     #[test]
+    fn link_pairing_prints_the_code_then_resumes_and_finishes_after_approval() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let pending = r#"{"state":"pending","code":"BCDF-GHJK","url":"https://tagmails.com/connect"}"#;
+        // `pair --no-wait`, then `pair`: the rerun finds the token waiting and polls until approved.
+        let script: Vec<(&str, &str, u16, String)> = vec![
+            ("POST", "/api/device/link", 201, r#"{"code":"BCDF-GHJK"}"#.into()),
+            ("GET", "/api/device/link", 200, pending.into()),
+            ("GET", "/api/device/status", 401, "{}".into()),
+            ("GET", "/api/device/link", 200, pending.into()),
+            ("GET", "/api/device/link", 200, pending.into()),
+            ("GET", "/api/device/link", 200, r#"{"state":"approved"}"#.into()),
+            ("GET", "/api/device/status", 200, r#"{"paired":true}"#.into()),
+        ];
+        let server = thread::spawn(move || {
+            for (method, path, status, body) in script {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut bytes = [0u8; 4096];
+                let length = stream.read(&mut bytes).unwrap();
+                let request = String::from_utf8_lossy(&bytes[..length]).to_string();
+                assert!(request.starts_with(&format!("{method} {path} ")), "expected {method} {path}, got {request}");
+                if method == "GET" {
+                    assert!(request.to_lowercase().contains("authorization: bearer tm_dev_"));
+                } else {
+                    assert!(request.contains("\"name\":\"Studio Mac\""));
+                }
+                let response = format!("HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let file = env::temp_dir().join(format!("tagmails-link-test-{nonce}"));
+        assert!(!link_relay(&base, &file, "Studio Mac", None, false).unwrap());
+        let token = fs::read_to_string(&file).unwrap();
+        assert!(valid_device_token(token.trim()));
+        assert!(link_relay(&base, &file, "Studio Mac", None, true).unwrap());
+        assert_eq!(fs::read_to_string(&file).unwrap(), token, "the resumed link keeps its token");
+        server.join().unwrap();
+        fs::remove_file(&file).unwrap();
+    }
+
+    #[test]
     fn relay_unknown_model_requests_clarification_without_running_an_agent() {
         let result = relay_result(
             &json!({"model":{"error":"Use Codex, Claude, or Luna."}}),
@@ -1845,7 +2008,10 @@ fn run_lab() -> Result<(), Box<dyn Error>> {
 const HELP: &str = "TagMails: email your coding agent.
 
 Usage:
-  tagmails pair <code> [--name NAME] [--relay URL]   Connect this machine to your account
+  tagmails pair [--no-wait] [--name NAME] [--relay URL]
+                                                   Connect this machine: prints a link and a
+                                                   code to approve after Google sign-in
+  tagmails pair <code> [--name NAME] [--relay URL]   Or connect with a code from the site
   tagmails start [--access read|write|full] [--workspace PATH | --projects]
                  [--claude-permission manual|accept-edits|auto|bypass]
                  [--routing-context full|files]
@@ -1876,7 +2042,7 @@ when you ask by email); permissions and folders change only with `tagmails start
 terminal. --instructions are standing instructions every one of your emails follows
 (for example where to put files too large for email); a reply says when they change.
 
-Pairing codes come from your relay's site (https://tagmails.com for the hosted service). By default TagMails picks one of
+`tagmails pair` with no code prints a link to approve it (https://tagmails.com/connect for the hosted service). By default TagMails picks one of
 your recent Codex or Claude project folders for each new email (--projects). Use
 --workspace to pin every email to one folder instead. To pick the folder, TagMails
 shares each project's name, README excerpt, top-level files and, with the default
@@ -2117,11 +2283,8 @@ fn service_binary() -> Result<PathBuf, Box<dyn Error>> {
 }
 
 fn command_pair(args: &[String]) -> Result<(), Box<dyn Error>> {
-    let code = args
-        .iter()
-        .skip(1)
-        .find(|arg| arg.starts_with("tm_pair_"))
-        .ok_or("Pass the pairing code from the setup page: tagmails pair tm_pair_…")?;
+    // A code from the site pairs at once; without one, pair by link.
+    let code = args.iter().skip(1).find(|arg| arg.starts_with("tm_pair_"));
     let mut config = read_config()?;
     let relay = option(args, "--relay")?.unwrap_or_else(|| configured_relay(&config));
     let name = option(args, "--name")?.unwrap_or_else(default_device_name);
@@ -2138,7 +2301,15 @@ fn command_pair(args: &[String]) -> Result<(), Box<dyn Error>> {
             }
         }
     };
-    pair_relay(&relay, code, &paths::token_file(), &name, public_key.as_deref())?;
+    match code {
+        Some(code) => pair_relay(&relay, code, &paths::token_file(), &name, public_key.as_deref())?,
+        None => {
+            let wait = !args.iter().any(|arg| arg == "--no-wait");
+            if !link_relay(&relay, &paths::token_file(), &name, public_key.as_deref(), wait)? {
+                return Ok(());
+            }
+        }
+    }
     config["relay"] = json!(relay);
     config["deviceName"] = json!(name);
     save_config(&config)?;

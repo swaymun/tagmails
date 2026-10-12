@@ -60,7 +60,7 @@ The script prints these with your values filled in.
    tagmails start --projects
    tagmails status
    ```
-   Or add `<origin>/mcp` as a remote MCP server in Claude Code, Codex, Claude or ChatGPT, sign in with the same Gmail and ask it to pair this machine; its `pair` tool returns these commands with `--relay` filled in. See [mcp.md](mcp.md).
+   Or run `tagmails pair --relay <origin>` with no code: it prints `<origin>/connect` and a code to approve after signing in. `<origin>/skill.md` is the same setup as a skill for Codex or Claude Code ("Read <origin>/skill.md and set up TagMails").
 3. From your Gmail, email the agent address shown on the account page. `npx wrangler tail --config wrangler.selfhost.jsonc` shows the mail arrive, `tagmails logs` shows the claim, and the reply lands in the same thread with a `/runs/<id>` link only you can open.
 
 ## Configuration reference

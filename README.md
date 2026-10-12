@@ -8,9 +8,9 @@ Email your coding agent: TagMails hands each email to Codex or Claude Code on yo
 2. Click **Copy setup prompt** and paste it into Codex or Claude Code on the Mac or Linux machine that should do the work. It installs `tagmails`, pairs the machine, starts it, and saves where your large files should go.
 3. Email your agent address from that Gmail account. Reply in the thread to continue.
 
-**Or connect via MCP**, without the website: add `https://tagmails.com/mcp` as a remote MCP server and sign in with Google when asked. In Claude Code: `claude mcp add --transport http tagmails https://tagmails.com/mcp`, then `/mcp` to sign in. In Codex: `codex mcp add tagmails --url https://tagmails.com/mcp`, then `codex mcp login tagmails`. In Claude or ChatGPT: **Add custom connector** with the same URL. Then ask your agent to "set up TagMails on this computer". See [docs/mcp.md](docs/mcp.md).
+**Or skip the website:** tell Codex or Claude Code on that machine "Read https://tagmails.com/skill.md and set up TagMails". It asks which agent and default model to use, runs `tagmails pair`, and shows you a link and a code; you approve them at tagmails.com/connect with Google (your first sign-in creates the account).
 
-By hand instead: `brew install swaymun/tagmails/tagmails` (or `curl -fsSL https://tagmails.com/install.sh | sh`, Node.js 20.16+), then `tagmails pair tm_pair_…` and `tagmails start --projects`.
+By hand instead: `brew install swaymun/tagmails/tagmails` (or `curl -fsSL https://tagmails.com/install.sh | sh`, Node.js 20.16+), then `tagmails pair` (approve the printed code at the link) and `tagmails start --projects`.
 
 `tagmails doctor` checks the setup and prints a fix for each problem. `tagmails status`, `logs`, `stop`, `open <thread-id>` and `uninstall` cover the rest; see `tagmails --help`.
 
