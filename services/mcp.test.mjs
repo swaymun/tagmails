@@ -163,10 +163,14 @@ test('the token endpoint binds tokens to /mcp, allows OAuth 2.1 requests without
   assert.equal(issued.status, 200, 'redirect_uri may be omitted');
   const counts = new Map();
   env.AUTH_RATE_LIMIT = { async limit({ key }) { counts.set(key, (counts.get(key) ?? 0) + 1); return { success: counts.get(key) <= 1 }; } };
-  const refresh = () => oauth(env, '/oauth/token', form({ grant_type: 'refresh_token', client_id: client.client_id,
-    refresh_token: `tm_mcr_${'z'.repeat(43)}` }));
-  assert.equal((await refresh()).status, 400);
-  assert.equal((await refresh()).status, 429);
+  const refresh = (token) => oauth(env, '/oauth/token', form({ grant_type: 'refresh_token', client_id: client.client_id,
+    refresh_token: token }), OWNER);
+  let current = (await issued.json()).refresh_token;
+  for (let index = 0; index < 5; index += 1) await refresh(`tm_mcr_${'z'.repeat(43)}`);
+  const rotated = await refresh(current);
+  assert.equal(rotated.status, 200, 'bogus tokens do not spend the connection quota');
+  current = (await rotated.json()).refresh_token;
+  assert.equal((await refresh(current)).status, 429, 'refreshes are limited per connection');
 });
 
 test('the MCP endpoint refuses unexpected browser origins', async () => {

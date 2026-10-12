@@ -306,8 +306,13 @@ async function exchangeCode(env, params) {
   if (row.client_id !== params.get('client_id') || (redirectUri !== null && redirectUri !== row.redirect_uri) ||
       !VERIFIER.test(verifier ?? '') ||
       createHash('sha256').update(verifier).digest('base64url') !== row.code_challenge) {
-    await env.DB.prepare('UPDATE mcp_auth_codes SET used_at = CURRENT_TIMESTAMP WHERE code_hash = ? AND used_at IS NULL')
+    const burned = await env.DB.prepare('UPDATE mcp_auth_codes SET used_at = CURRENT_TIMESTAMP WHERE code_hash = ? AND used_at IS NULL')
       .bind(codeHash).run();
+    if (!(burned.meta?.changes ?? burned.changes)) {
+      // A valid exchange won the race: this is a replay, so end its grant.
+      const spent = await env.DB.prepare('SELECT grant_id FROM mcp_auth_codes WHERE code_hash = ?').bind(codeHash).first();
+      if (spent?.grant_id) await revokeGrant(env, spent.grant_id);
+    }
     return null;
   }
   // The grant is created and the code spent in one transaction, so a racing
@@ -360,10 +365,12 @@ async function tokenRequest(request, env) {
   }
   // Tokens are only for this relay's MCP endpoint (RFC 8707).
   if (!resourceMatches(request, params.get('resource'))) return oauthError('invalid_target', 'Unknown resource.');
-  // Each registered client gets a bounded number of token requests; hosted
-  // clients share IP addresses, so the client, not the IP, is the key.
-  if (await rateLimitedKey(env, 'AUTH_RATE_LIMIT', `token:${String(params.get('client_id')).slice(0, 40)}`)) {
-    return tooManyRequests(OPEN_CORS);
+  // Each connection gets a bounded number of refreshes. Only a holder of one
+  // of its refresh tokens can spend that quota; hosted clients share IPs.
+  if (grantType === 'refresh_token' && REFRESH_TOKEN.test(params.get('refresh_token') ?? '')) {
+    const owner = await env.DB.prepare("SELECT grant_id FROM mcp_tokens WHERE token_hash = ? AND kind = 'refresh'")
+      .bind(hash(params.get('refresh_token'))).first();
+    if (owner && await rateLimitedKey(env, 'AUTH_RATE_LIMIT', `refresh:${owner.grant_id}`)) return tooManyRequests(OPEN_CORS);
   }
   const response = grantType === 'authorization_code' ? await exchangeCode(env, params) : await refreshTokens(env, params);
   if (response) return response;

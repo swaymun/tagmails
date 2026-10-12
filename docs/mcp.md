@@ -31,4 +31,4 @@ The client opens a TagMails page that asks you to sign in with Google: the same 
 - Every token is bound to one account; tools read and change only that account's rows.
 - Tokens are issued only for `<relay>/mcp` (a different `resource` gets `invalid_target`). A tool the connection's scope doesn't cover returns 403 with `insufficient_scope`.
 - `/mcp` refuses browser `Origin`s other than the relay, the Site, claude.ai, chatgpt.com, localhost and `MCP_ALLOWED_ORIGINS`; requests without an Origin are fine.
-- Limits: bad tokens and sign-in attempts share `AUTH_RATE_LIMIT` per IP, token requests share it per client, and signed-in calls share `PUBLIC_RATE_LIMIT` per account.
+- Limits: bad tokens and sign-in attempts share `AUTH_RATE_LIMIT` per IP, refreshes share it per connection, and signed-in calls share `PUBLIC_RATE_LIMIT` per account.
