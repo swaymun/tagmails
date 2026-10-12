@@ -384,8 +384,9 @@ async function complete(env, device, body) {
     statements.push(env.DB.prepare(`INSERT OR IGNORE INTO status_reactions (job_id, status)
       SELECT j.id, ? FROM jobs j JOIN messages m ON m.id = j.message_id
       WHERE j.id = ? AND j.device_id = ? AND j.lease_id = ? AND j.result_hash = ?
-        AND j.state = ? AND m.sender_email LIKE '%@gmail.com'`)
-      .bind(reactionStatus, body.jobId, device.id, body.leaseId, resultHash, state));
+        AND j.state = ? AND m.sender_email LIKE '%@gmail.com'
+        AND (SELECT status_reactions FROM accounts WHERE id = ?) = 1`)
+      .bind(reactionStatus, body.jobId, device.id, body.leaseId, resultHash, state, device.account_id));
   }
   // Follow-ups the run never took become ordinary queued jobs behind it.
   statements.push(env.DB.prepare(`UPDATE jobs SET state = 'queued', steer_state = NULL
@@ -430,6 +431,10 @@ export async function handleDeviceRequest(request, env) {
       limits_json = ? WHERE id = ? AND account_id = ? AND revoked_at IS NULL`)
       .bind(JSON.stringify(models), defaults ? JSON.stringify(defaults) : null, limits ? JSON.stringify(limits) : null,
         device.id, device.account_id).run();
+    // The computer carries the owner's reaction choice (`tagmails set --reactions on|off`); older daemons send none.
+    if (typeof body?.reactions === 'boolean') {
+      await env.DB.prepare('UPDATE accounts SET status_reactions = ? WHERE id = ?').bind(body.reactions ? 1 : 0, device.account_id).run();
+    }
     return json({ saved: true, count: models.length });
   }
   if (url.pathname === '/api/device/projects') {

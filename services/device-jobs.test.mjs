@@ -141,7 +141,17 @@ test('a Gmail owner receives one ordered status reaction per durable task stage'
   const { env, sqlite } = bindings();
   env.STATUS_REACTIONS_ENABLED = 'true';
   const paired = device(sqlite);
-  await inbound(env, 'status-turn');
+  // Reactions are off until the owner turns them on from their computer.
+  await inbound(env, 'quiet-turn');
+  assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM status_reactions').get().n, 0);
+  const quiet = envelope((await call(env, paired.token, 'claim')).body);
+  await call(env, paired.token, 'complete', { jobId: quiet.jobId, leaseId: quiet.leaseId,
+    result: { runtime: 'codex-app-server-readonly', state: 'completed', summary: 'Done.' } });
+  assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM status_reactions').get().n, 0);
+  const models = [{ id: 'gpt-6-sol', name: 'GPT-6 Sol', supportedReasoningEfforts: [{ reasoningEffort: 'medium' }], serviceTiers: [] }];
+  assert.equal((await call(env, paired.token, 'models', { models, reactions: true })).status, 200);
+  assert.equal(sqlite.prepare("SELECT status_reactions FROM accounts WHERE id = 'account-1'").get().status_reactions, 1);
+  await inbound(env, 'status-turn', 'Summarize this second thing.');
   const signedJob = envelope((await call(env, paired.token, 'claim')).body);
   const lease = { jobId: signedJob.jobId, leaseId: signedJob.leaseId };
   assert.equal((await call(env, paired.token, 'started', { ...lease, leaseId: 'wrong' })).status, 409);

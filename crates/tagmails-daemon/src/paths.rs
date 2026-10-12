@@ -62,6 +62,11 @@ pub fn email_defaults_file() -> PathBuf {
     email_settings_dir().join("defaults.json")
 }
 
+/// "on" or "off": whether the relay sends Gmail status reactions (off unless set).
+pub fn email_reactions_file() -> PathBuf {
+    email_settings_dir().join("reactions")
+}
+
 /// The owner's standing instructions, added to every owner run's prompt.
 pub fn email_instructions_file() -> PathBuf {
     email_settings_dir().join("instructions.md")

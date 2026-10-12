@@ -338,8 +338,10 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
   statements.push(env.DB.prepare('INSERT INTO jobs (id, thread_id, message_id, state, model_json, result_key, workspace_json, steer_of, steer_state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
     .bind(jobId, newThreadId, id, threadUnavailable ? 'failed' : steerOf ? 'completed' : 'queued', model && JSON.stringify(model), resultKey, workspaceJson,
       steerOf, steerOf ? 'pending' : null));
-  if (!threadUnavailable && !model?.error && env.STATUS_REACTIONS_ENABLED === 'true' &&  message.from.endsWith('@gmail.com')) {
-    statements.push(env.DB.prepare("INSERT INTO status_reactions (job_id, status) VALUES (?, 'received')").bind(jobId));
+  if (!threadUnavailable && !model?.error && env.STATUS_REACTIONS_ENABLED === 'true' && message.from.endsWith('@gmail.com')) {
+    // Reactions are opt-in per account (off by default).
+    statements.push(env.DB.prepare(`INSERT INTO status_reactions (job_id, status)
+      SELECT ?, 'received' WHERE (SELECT status_reactions FROM accounts WHERE id = ?) = 1`).bind(jobId, account.id));
   }
   if (threadUnavailable) statements.push(env.DB.prepare('INSERT INTO outbox (job_id) VALUES (?)').bind(jobId));
   try {

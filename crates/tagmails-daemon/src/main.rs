@@ -241,6 +241,9 @@ fn publish_model_catalog(
     });
     // Defaults set with `tagmails start` or `tagmails set` (--model/--effort/--speed).
     // A default saved on the website overrides them.
+    if let Some(on) = reactions_choice() {
+        catalog["reactions"] = json!(on);
+    }
     let defaults = effective_defaults(&load_config());
     if defaults.is_object() {
         catalog["defaults"] = defaults;
@@ -1014,7 +1017,8 @@ fn run_relay(settings: &Settings, once: bool, reload: bool) -> Result<(), Box<dy
     }
     let mut settings = settings.clone();
     let mut seen_config = load_config();
-    let mut seen_defaults = effective_defaults(&seen_config);
+    // Model defaults and the reactions choice ride the model-catalog publish.
+    let mut seen_defaults = (effective_defaults(&seen_config), reactions_choice());
     let mut next_model_probe = Instant::now();
     let mut next_project_probe = Instant::now();
     let push = (!once).then(|| push::Push::start(&settings.relay, &settings.token));
@@ -1028,7 +1032,7 @@ fn run_relay(settings: &Settings, once: bool, reload: bool) -> Result<(), Box<dy
     loop {
         if reload && !once {
             let config = load_config();
-            let defaults = effective_defaults(&config);
+            let defaults = (effective_defaults(&config), reactions_choice());
             if defaults != seen_defaults {
                 next_model_probe = Instant::now();
                 seen_defaults = defaults;
@@ -1194,6 +1198,13 @@ mod tests {
         assert_eq!(instructions_change_note(&after, &after), None);
         assert!(set_email_defaults(&args(&["set", "--instructions", &"x".repeat(MAX_INSTRUCTIONS + 1)])).is_err());
         set_email_defaults(&args(&["set", "--clear-instructions"])).unwrap();
+        // Status reactions are off unless the owner turns them on.
+        assert_eq!(reactions_choice(), None);
+        assert!(set_email_defaults(&args(&["set", "--reactions", "maybe"])).is_err());
+        set_email_defaults(&args(&["set", "--reactions", "on"])).unwrap();
+        assert_eq!(reactions_choice(), Some(true));
+        set_email_defaults(&args(&["set", "--reactions", "off"])).unwrap();
+        assert_eq!(reactions_choice(), Some(false));
         assert_eq!(owner_instructions(), None);
         assert!(instructions_change_note(&after, &None).unwrap().contains("cleared"));
         let mut result = json!({"checks": (0..12).map(|index| index.to_string()).collect::<Vec<_>>()});
@@ -1561,7 +1572,7 @@ Usage:
                  [--clear-defaults]
                                                    Save settings and run in the background
   tagmails set [--model ID] [--effort LEVEL] [--speed standard|fast] [--clear-defaults]
-               [--instructions TEXT] [--clear-instructions]
+               [--instructions TEXT] [--clear-instructions] [--reactions on|off]
                                                    Change model defaults or your standing
                                                    instructions without a restart
   tagmails status                                  Show settings, connection and service state
@@ -1853,7 +1864,7 @@ fn set_email_defaults(args: &[String]) -> Result<String, Box<dyn Error>> {
     let mut values = args.iter().skip(1);
     while let Some(arg) = values.next() {
         match arg.as_str() {
-            "--model" | "--effort" | "--speed" | "--instructions" => {
+            "--model" | "--effort" | "--speed" | "--instructions" | "--reactions" => {
                 values.next();
             }
             "--clear-defaults" | "--clear-instructions" => {}
@@ -1864,6 +1875,9 @@ fn set_email_defaults(args: &[String]) -> Result<String, Box<dyn Error>> {
         }
     }
     let mut messages = Vec::new();
+    if let Some(value) = option(args, "--reactions")? {
+        messages.push(set_reactions(&value)?);
+    }
     if let Some(text) = option(args, "--instructions")? {
         messages.push(set_instructions(Some(&text))?);
     } else if args.iter().any(|arg| arg == "--clear-instructions") {
@@ -1872,7 +1886,7 @@ fn set_email_defaults(args: &[String]) -> Result<String, Box<dyn Error>> {
     let model_flags = ["--model", "--effort", "--speed", "--clear-defaults"];
     if !args.iter().any(|arg| model_flags.contains(&arg.as_str())) {
         return if messages.is_empty() {
-            Err("Pass --model, --effort, --speed, --clear-defaults, --instructions or --clear-instructions.".into())
+            Err("Pass --model, --effort, --speed, --clear-defaults, --instructions, --clear-instructions or --reactions on|off.".into())
         } else {
             Ok(messages.join(" "))
         };
@@ -1911,6 +1925,25 @@ fn push_check(result: &mut Value, check: String) {
         checks.truncate(11);
         checks.push(json!(check));
     }
+}
+
+/// Whether the relay sends Gmail status reactions (👀 received, ✅ done):
+/// Some(true/false) once the owner chose, None to leave the relay's default (off).
+fn reactions_choice() -> Option<bool> {
+    match fs::read_to_string(paths::email_reactions_file()).ok()?.trim() {
+        "on" => Some(true),
+        "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn set_reactions(value: &str) -> Result<String, Box<dyn Error>> {
+    if !["on", "off"].contains(&value) {
+        return Err("--reactions must be on or off".into());
+    }
+    create_private_dir(&paths::email_settings_dir())?;
+    write_private_file(&paths::email_reactions_file(), format!("{value}\n").as_bytes())?;
+    Ok(format!("Gmail status reactions are {value}. The service picks this up before its next email."))
 }
 
 /// Longest standing instructions an owner can set; they ride in every prompt.
@@ -2015,6 +2048,7 @@ fn command_status() -> Result<(), Box<dyn Error>> {
     if let Some(problem) = codex_sandbox_problem(config["access"].as_str().unwrap_or(DEFAULT_ACCESS)) {
         println!("  Warning     {problem}");
     }
+    println!("  Reactions   {}", if reactions_choice() == Some(true) { "on (Gmail 👀 and ✅)" } else { "off" });
     if let Some(text) = owner_instructions() {
         println!("  Instructions {} characters ({})", text.trim().chars().count(), paths::email_instructions_file().display());
     }
