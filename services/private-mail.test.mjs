@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash, createSign, generateKeyPairSync, randomBytes } from 'node:crypto';
+import { createHash, createHmac, createSign, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { bindings } from './bindings-fixture.mjs';
 import { encryptedBucket, openText, protectedEnv, sealText } from './storage-crypto.mjs';
@@ -7,7 +7,12 @@ import { _test, verifyDkim } from './dkim.mjs';
 import { keyRecord, signed } from './dkim-fixture.mjs';
 import { completeOneModelClarification, handleEmail } from './relay-worker.mjs';
 import { sendWithCloudflare } from './cloudflare-mail.mjs';
-import { sendNextOutbox } from './outbox.mjs';
+import { purgeSettledOutboundBodies, sendNextOutbox, tendSealedReplies } from './outbox.mjs';
+import { handleDeviceRequest } from './device-jobs.mjs';
+import { readStoredResult } from './device-sealing.mjs';
+import { decryptBytes } from './storage-crypto.mjs';
+import { base64url, generateDeviceKey, isDeviceSealed, openForDevice } from '../agent/device-seal.mjs';
+import { openAttachment, openClaim, sendPendingReplies } from '../agent/device-key.mjs';
 
 const KEY = randomBytes(32).toString('base64');
 
@@ -290,4 +295,203 @@ test('replies go only to the verified sender and the owner-approved people on th
   assert.deepEqual(await send({ id: 'bob-1', from: 'bob@partner.example', cc: 'owner@gmail.com, carol@partner.example',
     replyTo: 'mallory@evil.example', inReplyTo: '<owner-1@sim.test>' }), { to: ['bob@partner.example'], cc: ['owner@gmail.com'], replyTo: undefined });
   assert.deepEqual(sqlite.prepare('SELECT email FROM participants').all().map((row) => row.email), ['bob@partner.example']);
+});
+
+// --- Mail sealed to the owner's computer --------------------------------------
+
+// Words that appear only in the email, its attachment, the agent's answer and
+// its file. None may be readable in D1 or R2, even with the relay's STORAGE_KEY.
+const SECRETS = ['Falcon', 'ZEBRA', 'OKAPI', 'GIRAFFE', 'HERON', 'IBIS'];
+
+async function sealedRelay() {
+  const { env: rawEnv, sqlite, objects } = bindings();
+  rawEnv.STORAGE_KEY = KEY;
+  const sent = [];
+  rawEnv.EMAIL = { send: async (message) => { sent.push(message); return { messageId: `<cf-${sent.length}@wonder.test>` }; } };
+  const env = protectedEnv(rawEnv);
+  const keys = domainKeys('gmail.com');
+  const deviceKey = await generateDeviceKey();
+  const token = `tm_dev_${randomBytes(32).toString('base64url')}`;
+  sqlite.prepare('INSERT INTO devices (id, account_id, token_hash) VALUES (?, ?, ?)')
+    .run('device-1', 'account-1', createHash('sha256').update(token).digest('hex'));
+  const device = async (pathname, init = {}, as = token) => handleDeviceRequest(new Request(`https://relay.test${pathname}`, {
+    ...init, headers: { 'Content-Type': 'application/json', ...init.headers, Authorization: `Bearer ${as}` } }), env);
+  const post = async (pathname, body, as) => (await device(pathname, { method: 'POST', body: JSON.stringify(body) }, as)).json();
+  assert.equal((await post('/api/device/key', { publicKey: deviceKey.publicKey })).saved, true);
+  let sequence = 0;
+  const email = async ({ inReplyTo, body = 'Secret body ZEBRA: summarize the attached notes.' } = {}) => {
+    const messageId = `<sealed-${sequence += 1}@gmail.com>`;
+    const headers = [['From', 'Owner <owner@gmail.com>'], ['To', 'agent@wonder.test'],
+      ['Subject', `${inReplyTo ? 'Re: ' : ''}Quarterly Falcon plan`], ['Message-ID', messageId],
+      ...(inReplyTo ? [['In-Reply-To', inReplyTo], ['References', inReplyTo]] : []),
+      ['MIME-Version', '1.0'], ['Content-Type', 'multipart/mixed; boundary="b1"']];
+    const raw = [...headers.map(([name, value]) => `${name}: ${value}`), '',
+      '--b1', 'Content-Type: text/plain; charset=utf-8', '', body,
+      '--b1', 'Content-Type: text/plain; name="notes.txt"', 'Content-Disposition: attachment; filename="notes.txt"', '',
+      'Attachment OKAPI notes', '--b1--', ''].join('\r\n');
+    const mime = signed(raw, { domain: 'gmail.com', privateKey: keys.privateKey('gmail.com'), names: headers.map(([name]) => name.toLowerCase()) });
+    const response = await (await handleEmail(emailMessage(mime, 'agent@wonder.test'), env, { resolveTxt: keys.resolveTxt, fetchModel: fetch })).json();
+    assert.deepEqual(response, { accepted: true, duplicate: false });
+    return messageId;
+  };
+  const claim = async (as) => {
+    const response = await post('/api/device/claim', {}, as);
+    if (!response.claimed) return response;
+    const bytes = Buffer.from(response.payload, 'base64url');
+    assert.equal(createHmac('sha256', as ?? token).update(bytes).digest('base64url'), response.signature);
+    return { ...response, claim: JSON.parse(bytes) };
+  };
+  const leaks = () => {
+    const found = [];
+    for (const [key, bytes] of objects) {
+      for (const text of [bytes.toString('latin1'), bytes.toString('utf8')]) {
+        for (const secret of SECRETS) if (text.includes(secret)) found.push(`R2 ${key}: ${secret}`);
+      }
+    }
+    for (const { name } of sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()) {
+      const rows = JSON.stringify(sqlite.prepare(`SELECT * FROM ${name}`).all());
+      for (const secret of SECRETS) if (rows.includes(secret)) found.push(`D1 ${name}: ${secret}`);
+    }
+    return found;
+  };
+  return { env, rawEnv, sqlite, objects, sent, deviceKey, token, device, post, email, claim, leaks };
+}
+
+const SESSION = '0199a3b4-5c6d-7e8f-9a0b-1c2d3e4f5a6b';
+const completion = (claim, extra = {}) => ({
+  jobId: claim.jobId, leaseId: claim.leaseId, subject: claim.request.subject,
+  result: { runtime: 'codex-app-server-write', state: 'completed', summary: 'Summary HERON', answer: 'Answer GIRAFFE',
+    transcript: { version: 1, truncated: false, events: [{ kind: 'assistant', text: 'Answer GIRAFFE' }] },
+    session: { harness: 'codex', id: SESSION } },
+  files: [{ name: 'out.txt', mimeType: 'text/plain', content: Buffer.from('File IBIS').toString('base64') }],
+  ...extra,
+});
+
+test('a full round trip for a computer with a sealing key leaves no readable mail in D1 or R2', async () => {
+  const relay = await sealedRelay();
+  const messageId = await relay.email();
+  // The relay kept no raw MIME, only objects sealed to the device.
+  assert.deepEqual([...relay.objects.keys()].sort(), ['inbound/account-1/' + relay.sqlite.prepare('SELECT provider_email_id AS id FROM messages').get().id + '.sealed',
+    'inbound/account-1/' + relay.sqlite.prepare('SELECT provider_email_id AS id FROM messages').get().id + '.sealed.a0'].sort());
+  assert.match(relay.sqlite.prepare('SELECT subject FROM threads').get().subject, /^dev:v1:/);
+
+  // A computer without that key can't claim it.
+  const oldToken = `tm_dev_${randomBytes(32).toString('base64url')}`;
+  relay.sqlite.prepare('INSERT INTO devices (id, account_id, token_hash) VALUES (?, ?, ?)')
+    .run('device-old', 'account-1', createHash('sha256').update(oldToken).digest('hex'));
+  assert.equal((await relay.claim(oldToken)).claimed, false);
+
+  // The keyed computer claims it and opens the request locally.
+  const { claim } = await relay.claim();
+  assert.equal(claim.sealed, true);
+  assert.equal(claim.request.body, undefined, 'the relay sends no plaintext body');
+  const opened = await openClaim(claim, relay.deviceKey);
+  assert.equal(opened.request.subject, 'Quarterly Falcon plan');
+  assert.match(opened.request.body, /Secret body ZEBRA/);
+  assert.equal(opened.request.fromOwner, true);
+  const attachment = await relay.device(opened.request.attachments[0].path);
+  assert.equal((await openAttachment(Buffer.from(await attachment.arrayBuffer()), relay.deviceKey)).toString().trim(), 'Attachment OKAPI notes');
+
+  // Completion carries the subject and files; the reply goes out from memory.
+  const done = await relay.post('/api/device/complete', completion(opened));
+  assert.deepEqual(done, { completed: true, duplicate: false, reply: 'sent' });
+  const [reply] = relay.sent;
+  assert.equal(reply.subject, 'Re: Quarterly Falcon plan');
+  assert.equal(reply.headers['In-Reply-To'], messageId);
+  assert.match(reply.text, /Answer GIRAFFE/);
+  assert.equal(Buffer.from(reply.attachments[0].content, 'base64').toString(), 'File IBIS');
+  // A retried completion doesn't send twice.
+  assert.equal((await relay.post('/api/device/complete', completion(opened))).reply, 'none');
+  assert.equal(relay.sent.length, 1);
+
+  // Nothing readable is left: not in D1, not in R2, not with the relay's STORAGE_KEY.
+  assert.deepEqual(relay.leaks(), []);
+  for (const [key, bytes] of relay.objects) {
+    assert.ok(isDeviceSealed(bytes), key);
+    const relayView = Buffer.from(await decryptBytes(relay.rawEnv, bytes)).toString('latin1');
+    for (const secret of SECRETS) assert.ok(!relayView.includes(secret), `${key} opens with STORAGE_KEY`);
+    await assert.rejects(openForDevice(await generateDeviceKey(), bytes, 'result'));
+  }
+  // Only the device key opens the stored result; the site sees metadata.
+  const { result_key: resultKey, result_meta_json: meta } = relay.sqlite.prepare('SELECT result_key, result_meta_json FROM jobs').get();
+  assert.match(new TextDecoder().decode(await openForDevice(relay.deviceKey, relay.objects.get(resultKey), 'result')), /GIRAFFE/);
+  assert.deepEqual(await readStoredResult(relay.env, resultKey), { sealed: true });
+  assert.deepEqual(JSON.parse(meta), { state: 'completed', runtime: 'codex-app-server-write', session: { harness: 'codex', id: SESSION } });
+});
+
+test('a reply that must wait is held sealed to the computer, which alone can release it', async () => {
+  const relay = await sealedRelay();
+  const first = await relay.email();
+  let { claim } = await relay.claim();
+  await relay.post('/api/device/complete', completion(await openClaim(claim, relay.deviceKey)));
+  // The first reply's send outcome is unknown, so the second must wait behind it.
+  relay.sqlite.prepare("UPDATE outbox SET state = 'uncertain'").run();
+  await relay.email({ inReplyTo: first, body: 'Second ZEBRA request.' });
+  ({ claim } = await relay.claim());
+  const opened = await openClaim(claim, relay.deviceKey);
+  assert.equal((await relay.post('/api/device/complete', completion(opened))).reply, 'held');
+  const held = relay.objects.get(`outbound/account-1/${opened.jobId}.json`);
+  assert.ok(isDeviceSealed(held));
+  assert.deepEqual(relay.leaks(), []);
+  assert.equal((await relay.claim()).pendingSends, undefined, 'not its turn yet');
+
+  // The relay can't make the computer open anything but a held reply for its own job.
+  const requestBlob = base64url(relay.objects.get(relay.sqlite.prepare('SELECT object_key FROM messages ORDER BY rowid DESC').get().object_key));
+  const posted = [];
+  const fake = async (pathname, init) => {
+    if (init?.method === 'POST') { posted.push(pathname); return new Response('{}'); }
+    return Response.json({ replies: [{ jobId: opened.jobId, sealed: requestBlob }, { jobId: randomUUID(), sealed: base64url(held) }] });
+  };
+  assert.equal(await sendPendingReplies(relay.deviceKey, { request: fake }), 0);
+  assert.deepEqual(posted, []);
+
+  // Once the earlier reply settles, the computer is told and sends the held one.
+  relay.sqlite.prepare("UPDATE outbox SET state = 'sent' WHERE state = 'uncertain'").run();
+  assert.equal((await relay.claim()).pendingSends, true);
+  const request = (pathname, init = {}) => relay.device(pathname, init);
+  assert.equal(await sendPendingReplies(relay.deviceKey, { request }), 1);
+  assert.equal(relay.sent.length, 2);
+  assert.equal(relay.sent[1].subject, 'Re: Quarterly Falcon plan');
+  assert.match(relay.sent[1].text, /Answer GIRAFFE/);
+  await purgeSettledOutboundBodies(relay.env);
+  assert.equal(relay.objects.has(`outbound/account-1/${opened.jobId}.json`), false);
+  assert.deepEqual(relay.leaks(), []);
+});
+
+test('sealed mail gets the relay\'s own question at intake, and the computer sees the unrun request and follow-ups', async () => {
+  const relay = await sealedRelay();
+  // An unknown model gets the relay's question right away; the subject isn't stored, so it can't wait.
+  const first = await relay.email({ body: 'Model: Luna please review ZEBRA' });
+  assert.equal(relay.sent.length, 1);
+  assert.equal(relay.sent[0].subject, 'Re: Quarterly Falcon plan');
+  assert.equal(relay.sqlite.prepare('SELECT state FROM outbox').get().state, 'sent');
+  assert.deepEqual(relay.leaks(), []);
+
+  // The answer runs with the earlier request, opened on the computer.
+  const second = await relay.email({ inReplyTo: first, body: 'Use my default model instead.' });
+  const { claim } = await relay.claim();
+  const opened = await openClaim(claim, relay.deviceKey);
+  assert.match(opened.request.body, /^Earlier in this thread, owner@gmail.com wrote \(the relay replied without running an agent\):\nModel: Luna please review ZEBRA\n\nThe current message:\nUse my default model instead\./);
+
+  // A follow-up waiting to steer this run reaches the computer sealed.
+  await relay.email({ inReplyTo: second, body: 'Also mention ZEBRA twice.' });
+  relay.sqlite.prepare(`UPDATE jobs SET state = 'completed', steer_of = ?, steer_state = 'pending'
+    WHERE id = (SELECT id FROM jobs ORDER BY rowid DESC LIMIT 1)`).run(opened.jobId);
+  const renewed = await relay.post('/api/device/renew', { jobId: opened.jobId, leaseId: opened.leaseId });
+  assert.equal(renewed.steers.length, 1);
+  assert.equal(renewed.steers[0].text, undefined);
+  const { openSteer } = await import('../agent/device-key.mjs');
+  assert.equal((await openSteer(renewed.steers[0], relay.deviceKey)).text, 'Also mention ZEBRA twice.');
+  assert.deepEqual(relay.leaks(), []);
+});
+
+test('mail sealed to a key no paired computer holds fails instead of waiting forever', async () => {
+  const relay = await sealedRelay();
+  await relay.email();
+  relay.sqlite.prepare("UPDATE devices SET revoked_at = CURRENT_TIMESTAMP").run();
+  await tendSealedReplies(relay.env);
+  assert.equal(relay.sqlite.prepare('SELECT state FROM jobs').get().state, 'queued', 'not before 15 minutes');
+  relay.sqlite.prepare("UPDATE jobs SET created_at = datetime('now', '-1 hour')").run();
+  await tendSealedReplies(relay.env);
+  assert.equal(relay.sqlite.prepare('SELECT state FROM jobs').get().state, 'failed');
 });

@@ -5,13 +5,88 @@ customers to send TagMails requests through it. The development Worker permits
 Google sign-in only for `PILOT_OWNER_EMAIL` unless `PUBLIC_SIGNUP_ENABLED=true` is
 deliberately configured. The production configuration has no public signup flag.
 
+## What the TagMails operator can and cannot see
+
+This applies to mail for a computer on TagMails 0.2.24 or later. At `tagmails
+pair` (or the first `tagmails start` of an older pairing) the computer creates an
+X25519 key in its config folder (`device-key`, mode 0600) and registers only the
+public half. The relay seals what it stores to that key
+(`agent/device-seal.mjs`: ephemeral X25519, HKDF-SHA256, AES-256-GCM, with a
+purpose label bound into each blob). Only the computer can open it.
+
+**Sealed to your computer.** The operator, or anyone with the Cloudflare
+account, `STORAGE_KEY` and the D1/R2 data, can't read these:
+
+- The email: subject, body and attachments. The raw MIME is not stored; a
+  parsed copy and one object per attachment are sealed instead.
+- Thread subjects.
+- The agent's result: answer, summary, details, checks, transcript and usage.
+- Files the agent attaches. They travel with the completion request and are
+  never stored.
+- A reply that has to wait for an earlier one in its thread. It is held sealed
+  to the computer, which opens it and hands it back when its turn comes. The
+  computer opens only such replies (a separate label), only for the job they
+  name, and only within 7 days of sealing. So the relay can't use it to read
+  other stored mail.
+- Earlier requests the relay answered itself, and follow-ups sent during a
+  run, as they are passed to the computer.
+
+**Read in memory, never stored.**
+
+- Each incoming email, to check DKIM, the sender and the recipients, choose a
+  model and project, and seal it.
+- The routing call to Jev (`api.typesafe.ai`). For a new email it sends the
+  subject and the first 4,000 characters of the new text. For a follow-up
+  during a run, it sends the follow-up and the text it quotes. For an answer to
+  "which project?", it sends the subject, the question and the answer.
+- The agent's result and files during the completion request, to render and
+  send the reply. The relay's own replies are rendered the same way at intake.
+- The reply itself then passes through the mail provider (Cloudflare Email
+  Sending; see the provider notes below).
+
+**Readable metadata.** The operator can read:
+
+- Sender, recipient, participant and agent addresses.
+- Message-IDs and References, kept for reply threading.
+- Timestamps, job states, attempts, delivery status and billing records.
+- The selected model and effort, and the chosen project folder (name and path).
+- The run's outcome, runtime and Codex/Claude session id. These power the
+  status pages and "Open in Codex/Claude" links.
+- Each computer's model list and project list (folder names and paths).
+  Routing needs these while the computer is offline.
+- Replies the relay writes itself: the "which project?" and model questions,
+  and "this thread's computer was revoked".
+- Outbound reply metadata: from, to, cc, attachment names and types, and a
+  salted SHA-256 of the subject (to match provider events).
+
+The website and run pages show status and metadata only for sealed runs. The
+content stays on the computer, in the Codex or Claude session.
+
+**Limits.**
+
+- The relay processes plaintext. Whoever controls the Worker's code can change
+  it to log or keep mail that arrives afterwards. Sealing protects what is
+  stored, not mail in flight. Only sender-side encryption or a user-owned
+  mailbox would change that.
+- The private key sits next to the device token. An agent run with owner access
+  can read that folder, as it can read the token.
+- Several computers on one account: a new thread is sealed to the newest
+  computer with a key, and only that computer runs it. A thread pinned to a
+  computer without a key keeps relay-key storage so that computer can still run
+  it. Re-pairing creates a new key. Queued mail sealed to a key that no paired
+  computer still holds fails after 15 minutes without a reply; the run page
+  shows the failure.
+- Computers older than 0.2.24, and anything stored before a computer
+  registered its key, keep `STORAGE_KEY` sealing. The operator can open those
+  until retention deletes them.
+
 ## Why the gate exists
 
 Resend's team dashboard displays received email bodies and attachments. Resend
 retains email and log data for 30 days on Free, Pro, and Scale plans. The
-TagMails relay separately keeps content in R2, where a Cloudflare account
-administrator can read it (sealed with the Worker's `STORAGE_KEY`, which the
-operator controls). Scheduled cleanup (`services/inbound-retention.mjs`) applies
+TagMails relay separately keeps content in R2 and D1. For a computer with a
+sealing key it is sealed to that key (above). Otherwise it is sealed with the
+Worker's `STORAGE_KEY`, which the operator controls. Scheduled cleanup (`services/inbound-retention.mjs`) applies
 one rule per kind of content:
 
 - **Raw inbound mail** (MIME and attachments) is deleted 7 days after its job
@@ -25,15 +100,17 @@ one rule per kind of content:
   answer.
 - **Run output files** expire 7 days after upload.
 - **Outbound reply bodies** are removed once the send settles; replies with an
-  uncertain send outcome keep theirs for recovery.
+  uncertain send outcome keep theirs for recovery. Replies for sealed mail keep
+  no body at all, except a reply held sealed while it waits its turn.
 
 D1 has no job finish time, so a settled reply's last update stands in for it,
 and the job's arrival time when there is no settled reply. Results stored by
 an earlier run of a job whose lease was replaced are not tracked in D1 and are
 not yet deleted. D1 keeps metadata indefinitely for threading and billing:
 thread subjects (sealed), sender and recipient addresses, message IDs,
-timestamps, models and project folders. These properties do not meet a
-promise that the TagMails operator cannot browse customer messages. A shorter TagMails R2 retention period does
+timestamps, models and project folders. For relay-key mail these properties
+do not meet a promise that the TagMails operator cannot browse customer
+messages; sealed mail is covered above. A shorter TagMails R2 retention period does
 not shorten Resend's copy.
 
 Sources: [Resend inbound visibility](https://resend.com/blog/inbound-emails),
@@ -57,11 +134,10 @@ Sources: [Resend inbound visibility](https://resend.com/blog/inbound-emails),
    is enabled and otherwise exposes sent HTML, text, attachments, and raw MIME
    for about seven days. Confirm delivery, reply threading, bounce handling,
    Gmail reactions, and provider access before migration.
-3. Stop storing plaintext customer MIME and results in operator-readable R2.
-   Encrypt them to a key held only by the paired device, or use a user-owned
-   mailbox and keep message content on that device. Move Jev classification to
-   the device if the relay must not see task text. Confirm offline queueing,
-   pairing recovery, and transcript access under that design.
+3. Done for computers on 0.2.24+: stored mail and results are sealed to a key
+   held only by the paired computer (see the first section). Still open: move
+   Jev classification to the device if the relay must not see task text, and
+   retire relay-key storage once no older computers remain.
 4. Recheck all vendor dashboards, logs, backups, and administrator access with
    real test messages. Publish a precise privacy statement before customer
    signup. A service that controls ordinary SMTP intake can still inspect

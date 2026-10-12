@@ -296,15 +296,17 @@ export function runReceiptPage(run) {
   const listCost = run.result?.reportedListCostUsd;
   const list = (items) => `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${escapeHtml(run.subject)} · TagMails run</title>${ICON_LINKS}<style nonce="${nonce}">
+<title>${escapeHtml(run.subject ?? 'Email')} · TagMails run</title>${ICON_LINKS}<style nonce="${nonce}">
 :root{font:16px/1.55 system-ui,sans-serif;color:#242424;background:#f7f4ed}body{margin:0}main{max-width:720px;margin:7vh auto;padding:0 24px 80px}
 a{color:#255d53}a:focus-visible{outline:3px solid #b98432;outline-offset:3px}.eyebrow{letter-spacing:.12em;text-transform:uppercase;font-size:.72rem;font-weight:700;color:#57776f}
 h1{font-size:clamp(2rem,6vw,3.25rem);line-height:1.1;margin:.35em 0}h2{font-size:1.05rem;margin:28px 0 8px}p{margin:8px 0 16px}.card{background:#fff;border:1px solid #ddd9cf;border-radius:14px;padding:24px;margin:24px 0}
 .status{display:inline-block;background:#e5eee8;color:#225440;border-radius:30px;padding:4px 11px;font-size:.8rem;font-weight:700}.muted{color:#62625c}.meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 24px;margin-top:24px;font-size:.9rem}
 .meta strong{display:block;color:#242424}.meta span{overflow-wrap:anywhere}li{margin:6px 0}.event{border-top:1px solid #e5e2db;padding:14px 0}.event:first-child{border-top:0}.event strong{display:block;font-size:.8rem;color:#526960;text-transform:uppercase;letter-spacing:.07em}.event p{white-space:pre-wrap;overflow-wrap:anywhere;margin:5px 0 0}.event.tool{color:#555;background:#f7f7f4;padding:12px;border-radius:8px;margin:8px 0}@media(max-width:520px){.meta{grid-template-columns:1fr}}
 </style></head><body><main><p class="eyebrow">tagmails. / run receipt</p><a href="/account">Account</a>
-<h1>${escapeHtml(run.subject)}</h1><span class="status">${title}</span>
-<section class="card"><h2>Outcome</h2><p>${escapeHtml(run.result?.summary ?? (run.state === 'failed'
+<h1>${escapeHtml(run.subject ?? 'Email')}</h1><span class="status">${title}</span>
+<section class="card"><h2>Outcome</h2><p>${escapeHtml(run.result?.summary ?? (run.sealed
+    ? 'The email, reply and transcript are sealed to your computer, so TagMails can\'t show them. Open the session on that computer.'
+    : run.state === 'failed'
     ? 'This run stopped before an agent result was saved. If it may have edited files, inspect the workspace.'
     : 'The agent has not submitted a result yet.'))}</p>
 ${run.delivery_state === 'uncertain' ? '<p class="muted">Email delivery needs review. This reply will not be sent again automatically.</p>' : ''}
@@ -321,7 +323,7 @@ ${run.selectedModel ? `<span><strong>Model route</strong>${escapeHtml(run.select
 <span><strong>Attempts</strong>${escapeHtml(run.attempts)}</span><span><strong>Provider send</strong>${escapeHtml(run.delivery_state ?? 'Not queued')}</span></div></section>
 ${run.artifacts?.length ? `<section class="card"><h2>Files</h2><ul>${run.artifacts.map((file) => `<li><a href="/runs/${escapeHtml(run.id)}/artifacts/${escapeHtml(file.id)}">${escapeHtml(file.name)}</a> (${escapeHtml((file.byte_size / 1_000_000).toFixed(1))} MB)</li>`).join('')}</ul><p class="muted">Files expire seven days after upload.</p></section>` : ''}
 <section class="card"><h2>Run transcript</h2>
-${transcript ? transcript.events.map((event) => `<div class="event ${event.kind === 'tool' ? 'tool' : ''}"><strong>${escapeHtml(event.kind === 'request' ? 'Email request' : event.kind === 'tool' ? 'Tool step' : event.kind === 'reasoning' ? 'Reasoning summary' : event.phase === 'commentary' ? 'Agent update' : event.phase === 'final_answer' ? 'Agent answer' : 'Agent')}</strong><p>${escapeHtml(event.text)}</p></div>`).join('') : '<p class="muted">A transcript was not recorded for this run.</p>'}
+${run.sealed ? '<p class="muted">The transcript stays on your computer.</p>' : transcript ? transcript.events.map((event) => `<div class="event ${event.kind === 'tool' ? 'tool' : ''}"><strong>${escapeHtml(event.kind === 'request' ? 'Email request' : event.kind === 'tool' ? 'Tool step' : event.kind === 'reasoning' ? 'Reasoning summary' : event.phase === 'commentary' ? 'Agent update' : event.phase === 'final_answer' ? 'Agent answer' : 'Agent')}</strong><p>${escapeHtml(event.text)}</p></div>`).join('') : '<p class="muted">A transcript was not recorded for this run.</p>'}
 ${transcript?.truncated ? '<p class="muted">Long content and later steps were shortened to fit this receipt.</p>' : ''}
 <p class="muted">Model-provided reasoning summaries may appear. Private reasoning, setup prompts, and raw tool output are excluded.</p></section>
 </main></body></html>`;

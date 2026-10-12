@@ -10,6 +10,9 @@ import { renderResult } from '../apps/mock-inbox/mail.mjs';
 import { ATTACHABLE_BYTES, releaseFailedPrimaryTestEmail, releaseTestEmail, settleTestEmail, testBillingEnabled, testWalletSnapshot } from './email-charges.mjs';
 import { selectedModelStatus } from './model-route.mjs';
 import { artifactForDownload, EMAIL_SAFE_FILE, selectedRunArtifacts } from './run-artifacts.mjs';
+import { base64url } from '../agent/device-seal.mjs';
+import { newestKeyedDevice, payloadHash, sealHeldReply, subjectHash } from './device-sealing.mjs';
+import { notifyDevices } from './device-push.mjs';
 
 // Gmail rejects whole messages (552 5.7.0) for archives and executables, so
 // only documents, media and text ride along; anything else becomes a link.
@@ -68,6 +71,12 @@ async function saveOutboundMessage(env, jobId, threadId, providerEmailId, messag
   if (saved?.message_id !== messageId) throw new Error('Outbound Message-ID conflicts with the provider record');
 }
 
+// Replies for sealed mail keep only a salted hash of their subject.
+async function subjectMatches(env, jobId, payload, subject) {
+  if (typeof payload.subjectHash === 'string') return payload.subjectHash === subjectHash(jobId, subject);
+  return await openText(env, payload.subject) === subject;
+}
+
 export async function reconcileSentEvent(env, event) {
   const row = await env.DB.prepare(`SELECT o.state, o.payload_json, o.provider_email_id, j.thread_id
     FROM outbox o JOIN jobs j ON j.id = o.job_id WHERE o.job_id = ?`)
@@ -77,7 +86,7 @@ export async function reconcileSentEvent(env, event) {
   try { payload = JSON.parse(row.payload_json); }
   catch { return { accepted: false }; }
   if (payload.tags?.some(({ name, value }) => name === 'tagmails_job' && value === event.jobId) !== true ||
-      payload.from !== event.from || await openText(env, payload.subject) !== event.subject ||
+      payload.from !== event.from || !await subjectMatches(env, event.jobId, payload, event.subject) ||
       !matchesSentAudience(payload, event) || !MESSAGE_ID.test(event.messageId ?? '') ||
       (row.provider_email_id && row.provider_email_id !== event.providerEmailId)) return { accepted: false };
   if (row.state === 'sent') {
@@ -106,7 +115,7 @@ export async function recordDeliveryOutcome(env, event) {
   try { payload = JSON.parse(row.payload_json); }
   catch { return { accepted: false }; }
   if (payload.tags?.some(({ name, value }) => name === 'tagmails_job' && value === event.jobId) !== true ||
-      payload.from !== event.from || await openText(env, payload.subject) !== event.subject ||
+      payload.from !== event.from || !await subjectMatches(env, event.jobId, payload, event.subject) ||
       !Array.isArray(payload.to) ||
       ![...payload.to, ...(payload.cc ?? [])].includes(event.recipient)) return { accepted: false };
   await env.DB.prepare(`INSERT INTO delivery_recipients
@@ -146,7 +155,7 @@ export async function reconcileOneUnknownOutbox(env, {
   for (const summary of page.data.data) {
     if (checked >= 10) break;
     try {
-      if (payload.from !== providerMailbox(summary.from) || await openText(env, payload.subject) !== summary.subject ||
+      if (payload.from !== providerMailbox(summary.from) || !await subjectMatches(env, row.job_id, payload, summary.subject) ||
           !sameRecipients(payload.to, providerRecipients(summary.to)) ||
           !sameRecipients(payload.cc ?? [], providerRecipients(summary.cc))) continue;
     } catch { continue; }
@@ -169,30 +178,46 @@ export async function reconcileOneUnknownOutbox(env, {
   return { state: 'uncertain', jobId: row.job_id };
 }
 
-async function prepare(env, row) {
-  const inbound = await env.DB.prepare(`SELECT m.object_key, m.message_id, m.sender_email,
+// Renders the reply for an outbox row. Relay-key mail is read back from
+// storage. Mail sealed to a computer can't be: `material` ({ result, subject,
+// files }) then carries what the relay holds in memory right now (a device's
+// completion, or a reply the relay wrote at intake), and nothing of it is stored.
+async function prepare(env, row, material = null) {
+  const inbound = await env.DB.prepare(`SELECT m.object_key, m.message_id, m.sender_email, m.seal_key_id, m.headers_json,
       t.subject, a.owner_email, a.agent_email, COALESCE(m.agent_email, a.agent_email) AS received_agent_email, j.model_json, j.workspace_json
     FROM jobs j JOIN messages m ON m.id = j.message_id
     JOIN threads t ON t.id = j.thread_id JOIN accounts a ON a.id = t.account_id
     WHERE j.id = ? LIMIT 1`).bind(row.job_id).first();
-  if (!inbound || !row.result_key) throw new InvalidOutboxSource('Outbox job has no complete source');
-  const raw = await env.MAIL.get(inbound.object_key);
-  const saved = await env.MAIL.get(row.result_key);
-  if (!raw || !saved) throw new InvalidOutboxSource('Outbox source is missing from mail storage');
-  const rawBytes = await raw.arrayBuffer();
+  if (!inbound || (!row.result_key && !material)) throw new InvalidOutboxSource('Outbox job has no complete source');
   let request;
-  try {
-    request = await parseInbound(rawBytes, inbound.received_agent_email, {
-      verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false,
-    });
-  } catch { throw new InvalidOutboxSource('Stored inbound MIME cannot be parsed'); }
-  if (request.messageId !== inbound.message_id || request.from !== inbound.sender_email) {
-    throw new InvalidOutboxSource('Outbox source no longer matches the verified inbound message');
-  }
-  const resultBytes = await saved.arrayBuffer();
   let result;
-  try { result = JSON.parse(new TextDecoder().decode(resultBytes)); }
-  catch { throw new InvalidOutboxSource('Stored result cannot be parsed'); }
+  if (material) {
+    let headers;
+    try { headers = JSON.parse(inbound.headers_json ?? 'null'); } catch { headers = null; }
+    if (!headers || !Array.isArray(headers.to) || !Array.isArray(headers.cc) || !Array.isArray(headers.parentIds)) {
+      throw new InvalidOutboxSource('Sealed inbound mail has no threading headers');
+    }
+    request = { messageId: inbound.message_id, from: inbound.sender_email, to: headers.to, cc: headers.cc, parentIds: headers.parentIds };
+    result = material.result;
+    if (!result || typeof result !== 'object') throw new InvalidOutboxSource('Reply material has no result');
+  } else {
+    if (inbound.seal_key_id) throw new InvalidOutboxSource('Sealed mail needs its computer to send the reply');
+    const raw = await env.MAIL.get(inbound.object_key);
+    const saved = await env.MAIL.get(row.result_key);
+    if (!raw || !saved) throw new InvalidOutboxSource('Outbox source is missing from mail storage');
+    const rawBytes = await raw.arrayBuffer();
+    try {
+      request = await parseInbound(rawBytes, inbound.received_agent_email, {
+        verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false,
+      });
+    } catch { throw new InvalidOutboxSource('Stored inbound MIME cannot be parsed'); }
+    if (request.messageId !== inbound.message_id || request.from !== inbound.sender_email) {
+      throw new InvalidOutboxSource('Outbox source no longer matches the verified inbound message');
+    }
+    const resultBytes = await saved.arrayBuffer();
+    try { result = JSON.parse(new TextDecoder().decode(resultBytes)); }
+    catch { throw new InvalidOutboxSource('Stored result cannot be parsed'); }
+  }
   const owner = inbound.owner_email.toLowerCase();
   const agent = inbound.agent_email.toLowerCase();
   if (request.from !== owner) {
@@ -247,9 +272,17 @@ async function prepare(env, row) {
   let projectName = null;
   try { projectName = JSON.parse(inbound.workspace_json ?? 'null')?.name ?? null; } catch { /* Older jobs have no folder. */ }
   const attachments = [];
-  const files = ownerOnly && result.state === 'completed'
+  // Files sent with a sealed completion arrive in memory; others were uploaded during the run.
+  const inline = material ? (ownerOnly && result.state === 'completed' ? material.files ?? [] : []) : null;
+  const files = inline ? [] : ownerOnly && result.state === 'completed'
     ? await selectedRunArtifacts(env, row.account_id, row.job_id, result.artifactIds) : [];
   let attachedBytes = 0;
+  for (const file of inline ?? []) {
+    const size = Buffer.byteLength(file.content, 'base64');
+    if (attachedBytes + size > ATTACHABLE_BYTES || !EMAIL_SAFE_FILE.test(file.name ?? '')) continue;
+    attachments.push({ filename: file.name, contentType: file.mimeType, content: file.content });
+    attachedBytes += size;
+  }
   for (const file of files) {
     if (attachedBytes + file.byte_size > ATTACHABLE_BYTES || !EMAIL_SAFE_FILE.test(file.name ?? '')) continue;
     const source = await artifactForDownload(env, row.account_id, row.job_id, file.id);
@@ -268,7 +301,7 @@ async function prepare(env, row) {
   // TagMails doesn't host files: whatever didn't fit in this email is named so
   // the owner can ask the agent to put it in their own storage.
   const attachedNames = new Set(attachments.map((file) => file.filename));
-  const leftOut = [...files.filter((file) => !attachedNames.has(file.name)).map((file) => file.name),
+  const leftOut = [...[...files, ...inline ?? []].filter((file) => !attachedNames.has(file.name)).map((file) => file.name),
     ...(ownerOnly && Array.isArray(result.unsentFiles) ? result.unsentFiles.map((file) => file.name) : [])];
   const notices = [
     ...(leftOut.length ? [`Not sent: ${leftOut.join(', ')}. Email fits 3.5 MB of files; ask the agent to put larger ones in your own storage, such as Google Drive.`] : []),
@@ -318,8 +351,8 @@ async function prepare(env, row) {
         ? 'This reply is the agent\'s report. Verify local file changes before relying on them.'
       : null,
   });
-  inbound.subject = await openText(env, inbound.subject);
-  if (/[\r\n]/.test(inbound.subject)) throw new InvalidOutboxSource('Outbox subject contains a line break');
+  inbound.subject = material ? material.subject : await openText(env, inbound.subject);
+  if (typeof inbound.subject !== 'string' || /[\r\n]/.test(inbound.subject)) throw new InvalidOutboxSource('Outbox subject is missing or contains a line break');
   return {
     from: testSender ?? agent, ...(testSender ? { replyTo: agent } : {}),
     to, ...(cc.length ? { cc } : {}),
@@ -388,12 +421,12 @@ export async function purgeSettledOutboundBodies(env) {
     let payload;
     try { payload = JSON.parse(row.payload_json); }
     catch { continue; }
-    if (typeof payload.subject !== 'string' || typeof payload.from !== 'string' ||
-        !Array.isArray(payload.to) || !Array.isArray(payload.tags)) continue;
+    if ((typeof payload.subject !== 'string' && typeof payload.subjectHash !== 'string') ||
+        typeof payload.from !== 'string' || !Array.isArray(payload.to) || !Array.isArray(payload.tags)) continue;
     const compact = {
       from: payload.from, to: payload.to,
       ...(Array.isArray(payload.cc) ? { cc: payload.cc } : {}),
-      subject: payload.subject,
+      ...(typeof payload.subjectHash === 'string' ? { subjectHash: payload.subjectHash } : { subject: payload.subject }),
       tags: payload.tags,
     };
     try {
@@ -407,89 +440,83 @@ export async function purgeSettledOutboundBodies(env) {
   return purged;
 }
 
-export async function sendNextOutbox(env, {
-  // Cloudflare Email Sending when the EMAIL binding exists; Resend otherwise.
-  // Saved payloads keep the bare address for sender checks; mail shows a display name.
-  sendEmail = env.EMAIL ? (payload) => sendWithCloudflare(env, payload)
-    : (payload, options) => new Resend(env.RESEND_API_KEY).emails.send(
-      { ...payload, from: `${senderName(payload)} <${payload.from}>` }, options),
-  // Cloudflare returns the sent message's ID directly; Resend needs a lookup.
-  getSentEmail = env.EMAIL ? async (id) => ({ data: { id, message_id: cloudflareMessageId(id) } })
-    : (id) => new Resend(env.RESEND_API_KEY).emails.get(id),
-} = {}) {
-  if (!env.DB || !env.MAIL || (!env.RESEND_API_KEY && !env.EMAIL)) throw new Error('Outbound bindings are incomplete');
-  // Scheduled invocations cannot run beyond 15 minutes. A send still marked
-  // in progress after 20 minutes might already have reached the provider.
-  const stale = await env.DB.prepare(`UPDATE outbox SET state = 'uncertain', updated_at = CURRENT_TIMESTAMP
-    WHERE job_id = (SELECT job_id FROM outbox WHERE state = 'sending'
-      AND updated_at <= datetime('now', '-20 minutes') ORDER BY updated_at, job_id LIMIT 1)
-    AND state = 'sending' RETURNING job_id`).bind().first();
-  if (stale) {
-    console.error('Outbox send needs reconciliation after interrupted Worker', stale.job_id);
-    return { state: 'uncertain', jobId: stale.job_id };
-  }
-  const accepted = await env.DB.prepare(`SELECT o.job_id, o.provider_email_id, j.thread_id
-    FROM outbox o JOIN jobs j ON j.id = o.job_id
-    JOIN threads t ON t.id = j.thread_id JOIN accounts a ON a.id = t.account_id
-    WHERE o.state = 'accepted' AND a.active = 1
-      AND (o.updated_at <= datetime('now', '-1 minute') OR EXISTS (
-        SELECT 1 FROM messages m WHERE m.thread_id = j.thread_id
-          AND m.provider_email_id = o.provider_email_id AND m.direction = 'outbound'))
-    ORDER BY o.updated_at, o.job_id LIMIT 1`).bind().first();
-  if (accepted) return finalize(env, accepted, getSentEmail);
+// Default senders: Cloudflare Email Sending when the EMAIL binding exists;
+// Resend otherwise. Saved payloads keep the bare address for sender checks;
+// mail shows a display name. Cloudflare returns the sent message's ID
+// directly; Resend needs a lookup.
+function senders(env, { sendEmail, getSentEmail } = {}) {
+  return {
+    sendEmail: sendEmail ?? (env.EMAIL ? (payload) => sendWithCloudflare(env, payload)
+      : (payload, options) => new Resend(env.RESEND_API_KEY).emails.send(
+        { ...payload, from: `${senderName(payload)} <${payload.from}>` }, options)),
+    getSentEmail: getSentEmail ?? (env.EMAIL ? async (id) => ({ data: { id, message_id: cloudflareMessageId(id) } })
+      : (id) => new Resend(env.RESEND_API_KEY).emails.get(id)),
+  };
+}
 
-  const row = await env.DB.prepare(`SELECT o.job_id, j.thread_id, j.result_key, t.account_id, a.agent_email
+const QUEUED_ROW = `SELECT o.job_id, o.payload_json, j.thread_id, j.result_key, t.account_id, a.agent_email, m.seal_key_id
     FROM outbox o JOIN jobs j ON j.id = o.job_id JOIN threads t ON t.id = j.thread_id
-    JOIN accounts a ON a.id = t.account_id
-    WHERE o.state = 'queued' AND a.active = 1
-      AND NOT EXISTS (SELECT 1 FROM jobs earlier
+    JOIN accounts a ON a.id = t.account_id JOIN messages m ON m.id = j.message_id
+    WHERE o.state = 'queued' AND a.active = 1`;
+// Replies in one thread go out in order: none while an earlier one is in flight.
+const IN_ORDER = `NOT EXISTS (SELECT 1 FROM jobs earlier
         JOIN outbox prior ON prior.job_id = earlier.id
         WHERE earlier.thread_id = j.thread_id AND earlier.rowid < j.rowid
-          AND prior.state IN ('queued', 'sending', 'uncertain', 'accepted'))
-    ORDER BY j.created_at, j.rowid LIMIT 1`).bind().first();
-  if (!row) return { state: 'idle' };
-  let payload;
-  try { payload = await prepare(env, row); }
+          AND prior.state IN ('queued', 'sending', 'uncertain', 'accepted'))`;
+
+async function blockRow(env, jobId) {
+  const blocked = await env.DB.prepare("UPDATE outbox SET state = 'blocked', updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'queued' RETURNING job_id")
+    .bind(jobId).first();
+  if (!blocked) return { state: 'contended' };
+  await releaseTestEmail(env, jobId);
+  return { state: 'blocked', jobId };
+}
+
+async function rendered(env, row, material) {
+  try { return { payload: await prepare(env, row, material) }; }
   catch (error) {
     if (!(error instanceof InvalidOutboxSource)) throw error;
-    const blocked = await env.DB.prepare("UPDATE outbox SET state = 'blocked', updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'queued' RETURNING job_id")
-      .bind(row.job_id).first();
-    if (!blocked) return { state: 'contended' };
-    await releaseTestEmail(env, row.job_id);
     console.error('Outbox source needs operator review', row.job_id, error.message);
-    return { state: 'blocked', jobId: row.job_id };
+    return { payload: null };
   }
-  if (!payload) {
-    await env.DB.prepare("UPDATE outbox SET state = 'blocked', updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'queued'")
-      .bind(row.job_id).run();
-    await releaseTestEmail(env, row.job_id);
-    return { state: 'blocked', jobId: row.job_id };
-  }
+}
+
+// Sends a rendered reply. A relay-key reply keeps an encrypted copy in R2
+// until the send settles; a reply for sealed mail keeps nothing but routing
+// metadata and a salted subject hash (a held reply's sealed copy is removed
+// once the send settles).
+async function sendPrepared(env, row, payload, { sendEmail, getSentEmail }, { sealed = false, held = false } = {}) {
   if (payload.from !== (testSenderFor(env, row.agent_email) ?? row.agent_email.toLowerCase())) {
     throw new Error('Outbox sender does not match its account');
   }
-  // D1 keeps only routing metadata; the body and attachments live in the
-  // encrypted R2 copy below until the send settles.
   const { html: _html, text: _text, attachments, ...metadata } = payload;
-  const savedPayload = { ...metadata, subject: await sealText(env, payload.subject), bodyStored: true,
-    ...(attachments ? { attachments: attachments.map(({ filename, contentType }) => ({ filename, contentType })) } : {}) };
+  const files = attachments ? { attachments: attachments.map(({ filename, contentType }) => ({ filename, contentType })) } : {};
+  const savedPayload = sealed
+    ? { ...metadata, subject: undefined, subjectHash: subjectHash(row.job_id, payload.subject), ...(held ? { bodyStored: true } : {}), ...files }
+    : { ...metadata, subject: await sealText(env, payload.subject), bodyStored: true, ...files };
   const claimed = await env.DB.prepare(`UPDATE outbox SET state = 'sending', payload_json = ?, updated_at = CURRENT_TIMESTAMP
     WHERE job_id = ? AND state = 'queued' RETURNING job_id`).bind(JSON.stringify(savedPayload), row.job_id).first();
   if (!claimed) return { state: 'contended' };
   const objectKey = `outbound/${row.account_id}/${row.job_id}.json`;
-  try {
-    await env.MAIL.put(objectKey, JSON.stringify(payload), { httpMetadata: { contentType: 'application/json' } });
-  } catch (error) {
-    await env.DB.prepare("UPDATE outbox SET state = 'queued', payload_json = NULL WHERE job_id = ? AND state = 'sending'")
-      .bind(row.job_id).run();
-    throw error;
+  if (!sealed) {
+    // D1 keeps only routing metadata; the body and attachments live in the
+    // encrypted R2 copy until the send settles.
+    try {
+      await env.MAIL.put(objectKey, JSON.stringify(payload), { httpMetadata: { contentType: 'application/json' } });
+    } catch (error) {
+      await env.DB.prepare("UPDATE outbox SET state = 'queued', payload_json = NULL WHERE job_id = ? AND state = 'sending'")
+        .bind(row.job_id).run();
+      throw error;
+    }
   }
   if (!await recipientsStillAuthorized(env, row.thread_id, payload)) {
     await env.DB.prepare("UPDATE outbox SET state = 'blocked', payload_json = NULL, updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'sending'")
       .bind(row.job_id).run();
     await releaseTestEmail(env, row.job_id);
-    try { await env.MAIL.delete(objectKey); }
-    catch (error) { console.error('Blocked outbox payload deletion is delayed', error); }
+    if (!sealed || held) {
+      try { await env.MAIL.delete(objectKey); }
+      catch (error) { console.error('Blocked outbox payload deletion is delayed', error); }
+    }
     return { state: 'blocked', jobId: row.job_id };
   }
   let sent;
@@ -514,4 +541,120 @@ export async function sendNextOutbox(env, {
     throw new Error('Outbox provider acceptance conflicts with stored state');
   }
   return finalize(env, { ...row, provider_email_id: sent.data.id }, getSentEmail);
+}
+
+export async function sendNextOutbox(env, options = {}) {
+  const { sendEmail, getSentEmail } = senders(env, options);
+  if (!env.DB || !env.MAIL || (!env.RESEND_API_KEY && !env.EMAIL)) throw new Error('Outbound bindings are incomplete');
+  // Scheduled invocations cannot run beyond 15 minutes. A send still marked
+  // in progress after 20 minutes might already have reached the provider.
+  const stale = await env.DB.prepare(`UPDATE outbox SET state = 'uncertain', updated_at = CURRENT_TIMESTAMP
+    WHERE job_id = (SELECT job_id FROM outbox WHERE state = 'sending'
+      AND updated_at <= datetime('now', '-20 minutes') ORDER BY updated_at, job_id LIMIT 1)
+    AND state = 'sending' RETURNING job_id`).bind().first();
+  if (stale) {
+    console.error('Outbox send needs reconciliation after interrupted Worker', stale.job_id);
+    return { state: 'uncertain', jobId: stale.job_id };
+  }
+  const accepted = await env.DB.prepare(`SELECT o.job_id, o.provider_email_id, j.thread_id
+    FROM outbox o JOIN jobs j ON j.id = o.job_id
+    JOIN threads t ON t.id = j.thread_id JOIN accounts a ON a.id = t.account_id
+    WHERE o.state = 'accepted' AND a.active = 1
+      AND (o.updated_at <= datetime('now', '-1 minute') OR EXISTS (
+        SELECT 1 FROM messages m WHERE m.thread_id = j.thread_id
+          AND m.provider_email_id = o.provider_email_id AND m.direction = 'outbound'))
+    ORDER BY o.updated_at, o.job_id LIMIT 1`).bind().first();
+  if (accepted) return finalize(env, accepted, getSentEmail);
+
+  // Replies for sealed mail are sent from memory (deliverReply) or by their
+  // computer (sendHeldReply), never from here.
+  const row = await env.DB.prepare(`${QUEUED_ROW} AND m.seal_key_id IS NULL AND ${IN_ORDER}
+    ORDER BY j.created_at, j.rowid LIMIT 1`).bind().first();
+  if (!row) return { state: 'idle' };
+  const { payload } = await rendered(env, row, null);
+  if (!payload) return blockRow(env, row.job_id);
+  return sendPrepared(env, row, payload, { sendEmail, getSentEmail });
+}
+
+// Sends the reply for a sealed job while its plaintext is in memory: right
+// after its computer completed it, or right after the relay wrote its own
+// answer at intake. If an earlier reply in the thread is still in flight, the
+// rendered reply is held sealed to the computer, which sends it back later.
+export async function deliverReply(env, jobId, material, options = {}) {
+  const row = await env.DB.prepare(`${QUEUED_ROW} AND o.job_id = ? LIMIT 1`).bind(jobId).first();
+  if (!row) return { state: 'none' };
+  if (row.payload_json) return { state: 'held', jobId };
+  const { payload } = await rendered(env, row, material);
+  if (!payload) return blockRow(env, jobId);
+  const waiting = await env.DB.prepare(`SELECT 1 AS waiting FROM jobs j WHERE j.id = ? AND NOT ${IN_ORDER}`).bind(jobId).first();
+  if (!waiting) return sendPrepared(env, row, payload, senders(env, options), { sealed: true });
+  const device = await newestKeyedDevice(env.DB, row.account_id, row.seal_key_id) ?? await newestKeyedDevice(env.DB, row.account_id);
+  if (!device) {
+    console.error('Sealed reply has no computer to hold it', jobId);
+    return blockRow(env, jobId);
+  }
+  await env.MAIL.put(`outbound/${row.account_id}/${jobId}.json`, await sealHeldReply(device.publicKey, jobId, payload),
+    { httpMetadata: { contentType: 'application/octet-stream' } });
+  const { html: _html, text: _text, attachments: _attachments, ...metadata } = payload;
+  const saved = { ...metadata, subject: undefined, subjectHash: subjectHash(jobId, payload.subject), bodyStored: true,
+    heldFor: device.keyId, payloadHash: payloadHash(payload) };
+  const updated = await env.DB.prepare(`UPDATE outbox SET payload_json = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE job_id = ? AND state = 'queued' AND payload_json IS NULL RETURNING job_id`).bind(JSON.stringify(saved), jobId).first();
+  return updated ? { state: 'held', jobId } : { state: 'contended' };
+}
+
+const HELD_FOR = `json_extract(o.payload_json, '$.heldFor')`;
+
+// Held replies whose turn has come, for the computer that holds their key.
+export async function heldReplies(env, device, limit = 3, withBlobs = true) {
+  if (!device.key_id) return [];
+  const rows = await env.DB.prepare(`${QUEUED_ROW} AND t.account_id = ? AND ${HELD_FOR} = ? AND ${IN_ORDER}
+    ORDER BY j.created_at, j.rowid LIMIT ${limit}`).bind(device.account_id, device.key_id).all();
+  const replies = [];
+  for (const row of rows.results ?? rows) {
+    if (!withBlobs) { replies.push({ jobId: row.job_id }); continue; }
+    const object = await env.MAIL.get(`outbound/${row.account_id}/${row.job_id}.json`);
+    if (object) replies.push({ jobId: row.job_id, sealed: base64url(new Uint8Array(await object.arrayBuffer())) });
+  }
+  return replies;
+}
+
+// The computer opened a held reply and posts it back; the relay checks it is
+// exactly what it rendered and sends it.
+export async function sendHeldReply(env, device, jobId, payload, options = {}) {
+  const row = await env.DB.prepare(`${QUEUED_ROW} AND o.job_id = ? AND t.account_id = ? AND ${HELD_FOR} = ? LIMIT 1`)
+    .bind(jobId, device.account_id, device.key_id ?? '').first();
+  if (!row) return { state: 'none' };
+  let held;
+  try { held = JSON.parse(row.payload_json); } catch { return { state: 'none' }; }
+  if (payloadHash(payload) !== held.payloadHash) return { state: 'mismatch' };
+  const waiting = await env.DB.prepare(`SELECT 1 AS waiting FROM jobs j WHERE j.id = ? AND NOT ${IN_ORDER}`).bind(jobId).first();
+  if (waiting) return { state: 'waiting' };
+  return sendPrepared(env, row, payload, senders(env, options), { sealed: true, held: true });
+}
+
+// Wakes computers that hold a reply whose turn has come. Sealed replies that
+// were never rendered (the Worker stopped between storing a completion and
+// sending) can't be recovered by the relay; they are blocked after 15 minutes.
+export async function tendSealedReplies(env) {
+  const stranded = await env.DB.prepare(`SELECT o.job_id FROM outbox o JOIN jobs j ON j.id = o.job_id
+    JOIN messages m ON m.id = j.message_id
+    WHERE o.state = 'queued' AND o.payload_json IS NULL AND m.seal_key_id IS NOT NULL
+      AND o.updated_at <= datetime('now', '-15 minutes') LIMIT 10`).bind().all();
+  for (const row of stranded.results ?? stranded) {
+    console.error('Sealed reply was never rendered', row.job_id);
+    await blockRow(env, row.job_id);
+  }
+  // Same for the relay's own question to sealed mail, which is answered at
+  // intake, and for mail sealed to a key no paired computer holds any more
+  // (the computer was re-paired or revoked): nobody can open or answer it.
+  await env.DB.prepare(`UPDATE jobs SET state = 'failed' WHERE state = 'queued'
+    AND created_at <= datetime('now', '-15 minutes')
+    AND message_id IN (SELECT m.id FROM messages m WHERE m.seal_key_id IS NOT NULL
+      AND (json_type(jobs.model_json, '$.error') = 'text' OR NOT EXISTS (SELECT 1 FROM devices d
+        WHERE d.key_id = m.seal_key_id AND d.revoked_at IS NULL)))`).bind().run();
+  const waiting = await env.DB.prepare(`SELECT DISTINCT t.account_id FROM outbox o JOIN jobs j ON j.id = o.job_id
+    JOIN threads t ON t.id = j.thread_id
+    WHERE o.state = 'queued' AND ${HELD_FOR} IS NOT NULL AND ${IN_ORDER} LIMIT 20`).bind().all();
+  for (const row of waiting.results ?? waiting) await notifyDevices(env, row.account_id);
 }

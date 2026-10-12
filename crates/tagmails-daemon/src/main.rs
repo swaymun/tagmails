@@ -1,4 +1,4 @@
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use base64::{engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD}, Engine};
 use reqwest::blocking::Client;
 use ring::hmac;
 use ring::rand::{SecureRandom, SystemRandom};
@@ -150,7 +150,8 @@ fn agent_result(
     if let Some(token_file) = relay_token_file {
         command
             .env("TAGMAILS_RELAY_URL", base)
-            .env("TAGMAILS_DEVICE_TOKEN_FILE", token_file);
+            .env("TAGMAILS_DEVICE_TOKEN_FILE", token_file)
+            .env("TAGMAILS_DEVICE_KEY_FILE", paths::device_key_file());
     }
     let mut child = command
         .env("TAGMAILS_RUNTIME", runtime)
@@ -218,6 +219,53 @@ fn lease_still_held(client: &Client, base: &str, token: &str, job_id: &str, leas
             true
         }
     }
+}
+
+/// Runs the sealing-key helper (agent/device-key.mjs). The private key stays
+/// in its file; only the helper reads it.
+fn device_key(args: &[&str], input: Option<&[u8]>, relay: Option<&str>) -> Result<Vec<u8>, Box<dyn Error>> {
+    let mut command = Command::new("node");
+    command
+        .arg(paths::adapters_dir()?.join("device-key.mjs"))
+        .args(args)
+        .env("TAGMAILS_DEVICE_KEY_FILE", paths::device_key_file());
+    if let Some(base) = relay {
+        let token_file = env::var("TAGMAILS_DEVICE_TOKEN_FILE").map(PathBuf::from).unwrap_or_else(|_| paths::token_file());
+        command.env("TAGMAILS_RELAY_URL", base).env("TAGMAILS_DEVICE_TOKEN_FILE", token_file);
+    }
+    let mut child = command
+        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    if let Some(bytes) = input {
+        child.stdin.take().ok_or("Device key helper stdin unavailable")?.write_all(bytes)?;
+    }
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned().into());
+    }
+    Ok(output.stdout)
+}
+
+/// Creates this machine's sealing key if needed (`generate` replaces it) and
+/// returns its public half.
+fn device_public_key(command: &str) -> Result<String, Box<dyn Error>> {
+    create_private_dir(&paths::config_dir())?;
+    let file = paths::device_key_file();
+    let output: Value = serde_json::from_slice(&device_key(&[command, &file.display().to_string()], None, None)?)?;
+    output["publicKey"].as_str().map(str::to_owned).ok_or_else(|| "Device key helper returned no public key".into())
+}
+
+/// Registers this machine's public key so the relay stores its mail sealed.
+/// A machine paired before 0.2.24 gets a key here on its first start.
+fn register_device_key(client: &Client, settings: &Settings) -> Result<(), Box<dyn Error>> {
+    let public_key = device_public_key("ensure")?;
+    let response = relay_post(client, &settings.relay, "/api/device/key", &settings.token, json!({"publicKey": public_key}))?;
+    if response["saved"] != true {
+        return Err("Relay did not save the device key".into());
+    }
+    Ok(())
 }
 
 fn run_adapter_json(
@@ -485,7 +533,7 @@ fn device_is_paired(client: &Client, base: &str, token: &str) -> Result<bool, Bo
     Ok(true)
 }
 
-fn pair_relay(base: &str, code: &str, path: &Path, name: &str) -> Result<(), Box<dyn Error>> {
+fn pair_relay(base: &str, code: &str, path: &Path, name: &str, public_key: Option<&str>) -> Result<(), Box<dyn Error>> {
     validate_relay_base(base)?;
     if !code.starts_with("tm_pair_")
         || code.len() != 35
@@ -543,7 +591,10 @@ fn pair_relay(base: &str, code: &str, path: &Path, name: &str) -> Result<(), Box
     file.sync_all()?;
     let sent = client
         .post(format!("{}/api/device/pair", base.trim_end_matches('/')))
-        .json(&json!({"code":code,"token":token,"name":name.trim()}))
+        .json(&match public_key {
+            Some(key) => json!({"code":code,"token":token,"name":name.trim(),"publicKey":key}),
+            None => json!({"code":code,"token":token,"name":name.trim()}),
+        })
         .send();
     let (rejected, reason) = match sent {
         Ok(response) => {
@@ -817,10 +868,34 @@ fn relay_iteration(client: &Client, settings: &Settings) -> Result<bool, Box<dyn
 fn claim_next(client: &Client, settings: &Settings, busy: &[String]) -> Result<Option<Value>, Box<dyn Error>> {
     let token = settings.token.as_str();
     let response = relay_post(client, &settings.relay, "/api/device/claim", token, json!({"busyFolders": busy}))?;
+    if response["pendingSends"] == true {
+        // Replies the relay held sealed to this machine; it opens and returns them.
+        match device_key(&["send-pending"], None, Some(&settings.relay)) {
+            Ok(_) => println!("Sent held replies."),
+            Err(error) => eprintln!("Held replies could not be sent: {error}"),
+        }
+    }
     if response["claimed"] != true {
         return Ok(None);
     }
-    Ok(Some(verified_claim(&response, token)?))
+    let claim = verified_claim(&response, token)?;
+    if claim["sealed"] != true {
+        return Ok(Some(claim));
+    }
+    // The request is sealed to this machine's key; open it locally.
+    match device_key(&["open-claim"], Some(claim.to_string().as_bytes()), None)
+        .and_then(|bytes| Ok(serde_json::from_slice::<Value>(&bytes)?))
+    {
+        Ok(opened) => Ok(Some(opened)),
+        Err(error) => {
+            eprintln!("Sealed email could not be opened: {error}");
+            let result = json!({"runtime":"tagmails-router","state":"failed","summary":"This computer could not open the sealed email. If it was paired again, ask the sender to resend it."});
+            relay_post(client, &settings.relay, "/api/device/complete", token, json!({
+                "jobId": claim["jobId"], "leaseId": claim["leaseId"], "result": result, "subject": "", "files": [],
+            }))?;
+            Ok(None)
+        }
+    }
 }
 
 /// The project folder a claim will run in, if the relay chose one.
@@ -875,19 +950,26 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
             result
         }
     };
+    // Sealed mail: files ride along with the completion so the relay never stores them.
+    let sealed = claim["sealed"] == true;
+    let mut inline_files: Vec<Value> = Vec::new();
     if result["state"] == "completed" && wants_answer_file(&claim) {
-        upload_file(
-            client,
-            base,
-            token,
-            &job_id,
-            &lease_id,
-            &lease_id,
-            "answer.txt",
-            "text/plain",
-            answer_file(&result),
-        )?;
-        result["artifactIds"] = json!([lease_id]);
+        if sealed {
+            inline_files.push(json!({"name":"answer.txt","mimeType":"text/plain","content":STANDARD.encode(answer_file(&result))}));
+        } else {
+            upload_file(
+                client,
+                base,
+                token,
+                &job_id,
+                &lease_id,
+                &lease_id,
+                "answer.txt",
+                "text/plain",
+                answer_file(&result),
+            )?;
+            result["artifactIds"] = json!([lease_id]);
+        }
     } else if result["state"] == "completed" {
         if let Ok(workspace) = &workspace {
             // Files the owner asked for (TagMails-File:) must arrive; files the
@@ -930,6 +1012,9 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
                         unsent.push(json!({"name": filename, "reason": reason}));
                         if required { Err(format!("not sent ({reason})").into()) } else { Ok(()) }
                     }
+                    (Ok((file, size)), _) if sealed => read_capped(&file, size).map(|bytes| {
+                        inline_files.push(json!({"name": filename, "mimeType": mime_type, "content": STANDARD.encode(bytes)}));
+                    }),
                     (Ok((file, size)), _) => {
                         let id = upload_id(&lease_id, ids.len());
                         read_capped(&file, size)
@@ -946,6 +1031,7 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
                         result["checks"] = json!(["No file was uploaded. Local edits from this turn may remain."]);
                         ids.clear();
                         unsent.clear();
+                        inline_files.clear();
                         break;
                     }
                     Err(error) => {
@@ -968,13 +1054,21 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
     if let Some(object) = result.as_object_mut() {
         object.remove("attach");
     }
-    let completion = relay_post(
-        client,
-        base,
-        "/api/device/complete",
-        token,
-        json!({"jobId":job_id,"leaseId":lease_id,"result":result}),
-    )?;
+    let mut body = json!({"jobId":job_id,"leaseId":lease_id,"result":result});
+    if sealed {
+        // The relay sends the reply from this request; it can't read the stored mail.
+        body["subject"] = claim["request"]["subject"].clone();
+        body["files"] = json!(inline_files);
+    }
+    let bytes = body.to_string().len() as u64;
+    let completion: Value = client
+        .post(format!("{}/api/device/complete", base.trim_end_matches('/')))
+        .timeout(Duration::from_secs(30 + bytes / 250_000))
+        .bearer_auth(token)
+        .json(&body)
+        .send()?
+        .error_for_status()?
+        .json()?;
     if completion["completed"] != true {
         return Err("Relay did not acknowledge the completion".into());
     }
@@ -1037,6 +1131,9 @@ fn run_relay(settings: &Settings, once: bool, reload: bool) -> Result<(), Box<dy
         // A pinned machine must not keep receiving project choices from an
         // earlier routing session.
         clear_published_projects(&client, settings);
+    }
+    if let Err(error) = register_device_key(&client, settings) {
+        eprintln!("Sealing key unavailable; this machine's mail keeps relay-key storage: {error}");
     }
     let mut settings = settings.clone();
     let mut seen_config = read_config()?;
@@ -1368,10 +1465,10 @@ mod tests {
             .as_nanos();
         let file = env::temp_dir().join(format!("tagmails-pair-test-{nonce}"));
         let code = format!("tm_pair_{}", "a".repeat(27));
-        assert!(pair_relay(&base, &code, &file, "Mac").is_ok());
+        assert!(pair_relay(&base, &code, &file, "Mac", None).is_ok());
         let original = fs::read_to_string(&file).unwrap();
         assert!(valid_device_token(original.trim()));
-        assert!(pair_relay(&base, &code, &file, "Mac").is_ok());
+        assert!(pair_relay(&base, &code, &file, "Mac", None).is_ok());
         assert_eq!(fs::read_to_string(&file).unwrap(), original);
         server.join().unwrap();
         fs::remove_file(&file).unwrap();
@@ -1904,7 +2001,19 @@ fn command_pair(args: &[String]) -> Result<(), Box<dyn Error>> {
     let relay = option(args, "--relay")?.unwrap_or_else(|| configured_relay(&config));
     let name = option(args, "--name")?.unwrap_or_else(default_device_name);
     create_private_dir(&paths::config_dir())?;
-    pair_relay(&relay, code, &paths::token_file(), &name)?;
+    // A new pairing gets a new sealing key; an existing token keeps its key.
+    let public_key = if paths::token_file().exists() {
+        None
+    } else {
+        match device_public_key("generate") {
+            Ok(key) => Some(key),
+            Err(error) => {
+                eprintln!("Could not create a sealing key ({error}); mail for this machine will use relay-key storage until `tagmails start` creates one.");
+                None
+            }
+        }
+    };
+    pair_relay(&relay, code, &paths::token_file(), &name, public_key.as_deref())?;
     config["relay"] = json!(relay);
     config["deviceName"] = json!(name);
     save_config(&config)?;
@@ -2280,7 +2389,7 @@ fn legacy_relay(args: &[String]) -> Result<(), Box<dyn Error>> {
     if let Some(index) = args.iter().position(|arg| arg == "--pair") {
         let code = args.get(index + 1).ok_or("Pass a pairing code after --pair")?;
         let name = env::var("TAGMAILS_DEVICE_NAME").unwrap_or_else(|_| "Mac".into());
-        return pair_relay(&base, code, &token_file, &name);
+        return pair_relay(&base, code, &token_file, &name, None);
     }
     let once = args.iter().any(|arg| arg == "--once");
     if once == args.iter().any(|arg| arg == "--watch") {

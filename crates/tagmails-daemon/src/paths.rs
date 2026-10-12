@@ -76,6 +76,12 @@ pub fn token_file() -> PathBuf {
     config_dir().join("device-token")
 }
 
+/// This machine's sealing key (private half; 0600). Mail the relay stores for
+/// this machine is sealed to its public half.
+pub fn device_key_file() -> PathBuf {
+    config_dir().join("device-key")
+}
+
 pub fn projects_file() -> PathBuf {
     data_dir().join("projects.json")
 }

@@ -5,6 +5,8 @@ import http from 'node:http';
 import os from 'node:os';
 import test from 'node:test';
 import { stageAgentAttachments } from './agent-attachments.mjs';
+import { ensureDeviceKey } from './device-key.mjs';
+import { sealForDevice } from './device-seal.mjs';
 
 test('local lab attachments are fetched into bounded temporary files', async (t) => {
   const bytes = Buffer.from('A small attached note.');
@@ -49,6 +51,9 @@ test('relay attachments use the device token and reject redirects and mismatched
   const tokenFile = `${scratch}/device-token`;
   await fs.writeFile(tokenFile, token, { mode: 0o600 });
   const bytes = Buffer.from('private input');
+  // Mail sealed to this computer arrives sealed and opens with its key file.
+  const keyFile = `${scratch}/device-key`;
+  const sealed = Buffer.from(await sealForDevice((await ensureDeviceKey(keyFile)).publicKey, bytes, 'attachment'));
   let downloads = 0;
   const server = http.createServer((request, response) => {
     downloads += 1;
@@ -56,16 +61,20 @@ test('relay attachments use the device token and reject redirects and mismatched
     if (request.url === '/api/device/attachment?jobId=job&leaseId=lease&index=0') {
       return response.writeHead(200, { 'content-type': 'application/octet-stream' }).end(bytes);
     }
+    if (request.url === '/api/device/attachment?jobId=job&leaseId=lease&index=1') {
+      return response.writeHead(200, { 'content-type': 'application/octet-stream' }).end(sealed);
+    }
     return response.writeHead(302, { location: 'https://example.com/leak' }).end();
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => server.close());
-  const old = { relay: process.env.TAGMAILS_RELAY_URL, token: process.env.TAGMAILS_DEVICE_TOKEN_FILE };
+  const old = { relay: process.env.TAGMAILS_RELAY_URL, token: process.env.TAGMAILS_DEVICE_TOKEN_FILE, key: process.env.TAGMAILS_DEVICE_KEY_FILE };
   process.env.TAGMAILS_RELAY_URL = `http://127.0.0.1:${server.address().port}`;
   process.env.TAGMAILS_DEVICE_TOKEN_FILE = tokenFile;
+  process.env.TAGMAILS_DEVICE_KEY_FILE = keyFile;
   t.after(() => {
     for (const [key, value] of Object.entries({ TAGMAILS_RELAY_URL: old.relay,
-      TAGMAILS_DEVICE_TOKEN_FILE: old.token })) {
+      TAGMAILS_DEVICE_TOKEN_FILE: old.token, TAGMAILS_DEVICE_KEY_FILE: old.key })) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
@@ -76,6 +85,12 @@ test('relay attachments use the device token and reject redirects and mismatched
   try { assert.deepEqual(await fs.readFile(`${staged.directory}/attachment-1.txt`), bytes); }
   finally { await staged.cleanup(); }
   assert.equal(downloads, 1);
+  const sealedAttachment = { ...attachment, sealed: true, path: '/api/device/attachment?jobId=job&leaseId=lease&index=1' };
+  const opened = await stageAgentAttachments([sealedAttachment], scratch);
+  try { assert.deepEqual(await fs.readFile(`${opened.directory}/attachment-1.txt`), bytes); }
+  finally { await opened.cleanup(); }
+  // A claim that says sealed never takes unsealed bytes.
+  await assert.rejects(stageAgentAttachments([{ ...attachment, sealed: true }], scratch));
   await assert.rejects(stageAgentAttachments([{ ...attachment, size: 1 }], scratch), /does not match/);
   await assert.rejects(stageAgentAttachments([{ ...attachment,
     path: '/api/device/attachment?jobId=redirect' }], scratch), /download failed/);

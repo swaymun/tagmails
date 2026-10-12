@@ -6,6 +6,8 @@ import { ARTIFACT_ID, EMAIL_SAFE_FILE, selectedRunArtifacts, uploadRunArtifact }
 import { catalogFromDevice, deviceDefaults, deviceLimits } from './model-catalog.mjs';
 import { cleanProjectCatalog } from './project-route.mjs';
 import { sealText } from './storage-crypto.mjs';
+import { attachmentKey, registerDeviceKey, resultMeta, sealedObject, sealedObjectText, storeSealedResult } from './device-sealing.mjs';
+import { deliverReply, heldReplies, sendHeldReply } from './outbox.mjs';
 import { currentText } from './jev-route.mjs';
 import { openDevicePush } from './device-push.mjs';
 import { rateLimited, tooManyRequests } from './rate-limit.mjs';
@@ -19,6 +21,10 @@ export const MAX_ATTEMPTS = 3;
 // A full answer (32k characters) plus its transcript (48 events) is up to
 // ~170 KB of UTF-8 when the text is CJK or emoji; 64 KB refused real replies.
 const MAX_RESULT_BYTES = 256_000;
+// A computer with a sealing key sends its reply's files with the completion
+// (base64), and posts held replies back whole, so the relay stores neither.
+const MAX_SEALED_BODY_BYTES = 6_000_000;
+const MIME_TYPE = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/i;
 // The full answer for the reply email; summary/details stay as a short preview.
 const MAX_ANSWER_CHARS = 32_000;
 
@@ -28,15 +34,15 @@ function digest(value) { return createHash('sha256').update(value).digest('hex')
 async function deviceFor(request, env) {
   const token = request.headers.get('authorization')?.match(/^Bearer (\S+)$/)?.[1];
   if (!TOKEN.test(token ?? '')) return null;
-  const device = await env.DB.prepare(`SELECT d.id, d.account_id FROM devices d
+  const device = await env.DB.prepare(`SELECT d.id, d.account_id, d.key_id, d.public_key FROM devices d
     JOIN accounts a ON a.id = d.account_id
     WHERE d.token_hash = ? AND d.revoked_at IS NULL AND a.active = 1 LIMIT 1`)
     .bind(digest(token)).first();
   return device ? { ...device, token } : null;
 }
 
-async function boundedJson(request) {
-  if (Number(request.headers.get('content-length') || 0) > MAX_RESULT_BYTES) throw new Error('Body too large');
+async function boundedJson(request, limit = MAX_RESULT_BYTES) {
+  if (Number(request.headers.get('content-length') || 0) > limit) throw new Error('Body too large');
   const reader = request.body?.getReader();
   if (!reader) throw new Error('Missing JSON body');
   const chunks = [];
@@ -46,7 +52,7 @@ async function boundedJson(request) {
       const { value, done } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > MAX_RESULT_BYTES) { await reader.cancel(); throw new Error('Body too large'); }
+      if (size > limit) { await reader.cancel(); throw new Error('Body too large'); }
       chunks.push(value);
     }
   } finally { reader.releaseLock(); }
@@ -84,6 +90,7 @@ async function claim(env, device, busy = []) {
       SELECT 1 FROM participants p WHERE p.thread_id = t.id AND p.email = m.sender_email AND p.revoked_at IS NULL))
     AND NOT EXISTS (SELECT 1 FROM jobs earlier WHERE earlier.thread_id = j.thread_id
       AND earlier.state IN ('queued', 'running') AND earlier.rowid < j.rowid)
+    AND (m.seal_key_id IS NULL OR m.seal_key_id = ?)
     AND (json_extract(j.workspace_json, '$.kind') IS NOT 'project'
       OR json_extract(j.workspace_json, '$.path') NOT IN (SELECT value FROM json_each(?)))`;
   // Pin the thread before claiming its first job. A second Mac cannot claim a
@@ -93,7 +100,7 @@ async function claim(env, device, busy = []) {
     JOIN messages m ON m.id = j.message_id JOIN accounts a ON a.id = t.account_id
     WHERE t.account_id = ? AND t.device_id IS NULL AND ${eligible}
     ORDER BY j.created_at, j.rowid LIMIT 1
-  ) AND device_id IS NULL`).bind(device.id, device.account_id, JSON.stringify(busy)).run();
+  ) AND device_id IS NULL`).bind(device.id, device.account_id, device.key_id ?? '', JSON.stringify(busy)).run();
   const row = await env.DB.prepare(`UPDATE jobs SET
     state = 'running', device_id = ?, lease_id = ?,
     lease_until = datetime('now', '+${LEASE_SECONDS} seconds'), attempts = attempts + 1
@@ -103,42 +110,60 @@ async function claim(env, device, busy = []) {
       WHERE t.account_id = ? AND t.device_id = ? AND ${eligible}
       ORDER BY j.created_at, j.rowid LIMIT 1
     ) RETURNING id, thread_id, message_id, lease_until, model_json, workspace_json`)
-    .bind(device.id, leaseId, device.account_id, device.id, JSON.stringify(busy)).first();
-  if (!row) return json({ claimed: false });
+    .bind(device.id, leaseId, device.account_id, device.id, device.key_id ?? '', JSON.stringify(busy)).first();
+  if (!row) return json({ claimed: false, ...await heldNotice(env, device) });
   // Files an expired lease uploaded can never be sent; let the cleanup delete them
   // so retries don't pile up storage.
   await env.DB.prepare(`UPDATE run_artifacts SET expires_at = CURRENT_TIMESTAMP
     WHERE job_id = ? AND lease_id != ?`).bind(row.id, leaseId).run();
-  const message = await env.DB.prepare(`SELECT m.object_key, m.message_id, m.agent_email, t.subject
+  const message = await env.DB.prepare(`SELECT m.object_key, m.message_id, m.agent_email, m.sender_email, m.seal_key_id, t.subject
     FROM messages m JOIN threads t ON t.id = m.thread_id
     WHERE m.id = ? AND m.account_id = ? LIMIT 1`).bind(row.message_id, device.account_id).first();
   if (!message) throw new Error('Claimed job has no inbound message');
-  const object = await env.MAIL.get(message.object_key);
-  if (!object) throw new Error('Claimed job has no stored MIME');
   const account = await env.DB.prepare('SELECT agent_email, owner_email, default_model FROM accounts WHERE id = ?').bind(device.account_id).first();
-  const parsed = await parseInbound(await object.arrayBuffer(), message.agent_email ?? account.agent_email, {
-    verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false,
-  });
-  if (parsed.messageId !== message.message_id) throw new Error('Stored MIME no longer matches the claimed job');
   const workspace = row.workspace_json ? JSON.parse(row.workspace_json) : null;
-  const earlier = await unrunEarlierRequests(env, device, row, message.agent_email ?? account.agent_email);
-  const body = earlier.length ? `${earlier.map((item) =>
-    `Earlier in this thread, ${item.from} wrote (the relay replied without running an agent):\n${item.text}`).join('\n\n')}\n\nThe current message:\n${parsed.body}` : parsed.body;
-  const envelope = {
+  const common = {
     jobId: row.id, threadId: row.thread_id, leaseId, leaseUntil: row.lease_until,
-    model: row.model_json ? JSON.parse(row.model_json) : chooseModel(parsed.body, account.default_model),
     ...(workspace?.kind === 'project' ? { workspace: { kind: 'project', path: workspace.path } }
       : workspace?.kind === 'scratch' ? { workspace: { kind: 'scratch' } } : {}),
-    request: { from: parsed.from, fromOwner: parsed.from === account.owner_email,
-      subject: parsed.subject, body,
-      attachments: parsed.attachments.map((attachment, index) => ({
-        ...attachment, path: `/api/device/attachment?jobId=${row.id}&leaseId=${leaseId}&index=${index}`,
-      })) },
   };
+  let envelope;
+  if (message.seal_key_id) {
+    // Sealed to this computer: it opens the request (agent/device-key.mjs
+    // openClaim) and builds the prompt itself. The relay can't read it.
+    const sealed = await sealedObjectText(env, message.object_key);
+    if (!sealed) throw new Error('Claimed job has no sealed request');
+    const model = row.model_json ? JSON.parse(row.model_json) : chooseModel('', account.default_model);
+    envelope = { ...common, sealed: true, model,
+      request: { from: message.sender_email, fromOwner: message.sender_email === account.owner_email, sealed,
+        earlier: await unrunEarlierRequests(env, device, row, message.agent_email ?? account.agent_email, true) } };
+  } else {
+    const object = await env.MAIL.get(message.object_key);
+    if (!object) throw new Error('Claimed job has no stored MIME');
+    const parsed = await parseInbound(await object.arrayBuffer(), message.agent_email ?? account.agent_email, {
+      verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false,
+    });
+    if (parsed.messageId !== message.message_id) throw new Error('Stored MIME no longer matches the claimed job');
+    const earlier = await unrunEarlierRequests(env, device, row, message.agent_email ?? account.agent_email, false);
+    const body = earlier.length ? `${earlier.map((item) =>
+      `Earlier in this thread, ${item.from} wrote (the relay replied without running an agent):\n${item.text}`).join('\n\n')}\n\nThe current message:\n${parsed.body}` : parsed.body;
+    envelope = { ...common,
+      model: row.model_json ? JSON.parse(row.model_json) : chooseModel(parsed.body, account.default_model),
+      request: { from: parsed.from, fromOwner: parsed.from === account.owner_email,
+        subject: parsed.subject, body,
+        attachments: parsed.attachments.map((attachment, index) => ({
+          ...attachment, path: `/api/device/attachment?jobId=${row.id}&leaseId=${leaseId}&index=${index}`,
+        })) } };
+  }
   const bytes = Buffer.from(JSON.stringify(envelope));
   const payload = bytes.toString('base64url');
   const signature = createHmac('sha256', device.token).update(bytes).digest('base64url');
-  return json({ claimed: true, payload, signature });
+  return json({ claimed: true, payload, signature, ...await heldNotice(env, device) });
+}
+
+// Tells a computer it holds replies waiting to be sent (agent/device-key.mjs send-pending).
+async function heldNotice(env, device) {
+  return device.key_id && (await heldReplies(env, device, 1, false)).length ? { pendingSends: true } : {};
 }
 
 // A turn the relay answered itself ("which project?", an unavailable model)
@@ -157,14 +182,21 @@ const EARLIER_REQUESTS = `SELECT j.id FROM jobs j JOIN messages m ON m.id = j.me
     AND m.sender_email = (SELECT cm.sender_email FROM jobs cj JOIN messages cm ON cm.id = cj.message_id WHERE cj.id = ?1)
   ORDER BY j.created_at DESC, j.rowid DESC LIMIT 3`;
 
-async function unrunEarlierRequests(env, device, row, agentEmail) {
-  const { results = [] } = await env.DB.prepare(`SELECT m.object_key, m.message_id, m.sender_email FROM jobs j
+// For a sealed claim, earlier sealed requests go to the computer as they are
+// ({ from, sealed }); relay-key ones are read here ({ from, text }).
+async function unrunEarlierRequests(env, device, row, agentEmail, sealedClaim) {
+  const { results = [] } = await env.DB.prepare(`SELECT m.object_key, m.message_id, m.sender_email, m.seal_key_id FROM jobs j
     JOIN messages m ON m.id = j.message_id JOIN threads t ON t.id = j.thread_id
     WHERE j.id IN (${EARLIER_REQUESTS}) AND t.account_id = ?2
     ORDER BY j.created_at DESC, j.rowid DESC`)
     .bind(row.id, device.account_id).all();
   const earlier = [];
   for (const item of results.reverse()) {
+    if (item.seal_key_id) {
+      const sealed = sealedClaim && item.seal_key_id === device.key_id ? await sealedObjectText(env, item.object_key) : null;
+      if (sealed) earlier.push({ from: item.sender_email, sealed });
+      continue;
+    }
     const object = await env.MAIL.get(item.object_key);
     if (!object) continue;
     try {
@@ -186,7 +218,7 @@ async function attachment(request, env, device, url) {
       !/^[0-9a-f-]{36}$/i.test(leaseId ?? '') || !/^[0-4]$/.test(index ?? '')) {
     return json({ error: 'Invalid attachment request' }, 400);
   }
-  const message = await env.DB.prepare(`SELECT m.object_key, m.message_id, COALESCE(m.agent_email, a.agent_email) AS agent_email
+  const message = await env.DB.prepare(`SELECT m.object_key, m.message_id, m.seal_key_id, COALESCE(m.agent_email, a.agent_email) AS agent_email
     FROM jobs j JOIN threads t ON t.id = j.thread_id
     JOIN messages m ON m.id = j.message_id
     JOIN accounts a ON a.id = t.account_id
@@ -195,6 +227,16 @@ async function attachment(request, env, device, url) {
       AND t.account_id = ? LIMIT 1`)
     .bind(jobId, device.id, leaseId, device.account_id).first();
   if (!message) return json({ error: 'Lease expired or replaced' }, 409);
+  if (message.seal_key_id) {
+    // Sealed to the claiming computer, which opens it.
+    const sealed = await sealedObject(env, attachmentKey(message.object_key, Number(index)));
+    if (!sealed) return json({ error: 'Attachment not found' }, 404);
+    return new Response(sealed, { headers: {
+      'Content-Type': 'application/octet-stream', 'Content-Length': String(sealed.length),
+      'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-TagMails-Sealed': 'device',
+      'Content-Security-Policy': "default-src 'none'",
+    } });
+  }
   const object = await env.MAIL.get(message.object_key);
   if (!object) throw new Error('Claimed job has no stored MIME');
   const parsed = await parseInbound(await object.arrayBuffer(), message.agent_email, {
@@ -225,7 +267,7 @@ async function renew(env, device, body) {
 // with /api/device/steered; until then it stays pending and is re-offered.
 // Only the run's own sender may steer it (see steerTarget in relay-worker.mjs).
 async function pendingSteers(env, device, jobId) {
-  const { results = [] } = await env.DB.prepare(`SELECT s.id, m.object_key, m.message_id, m.agent_email FROM jobs s
+  const { results = [] } = await env.DB.prepare(`SELECT s.id, m.object_key, m.message_id, m.agent_email, m.sender_email, m.seal_key_id FROM jobs s
     JOIN messages m ON m.id = s.message_id
     JOIN jobs r ON r.id = s.steer_of JOIN messages rm ON rm.id = r.message_id
     WHERE s.steer_of = ? AND s.steer_state = 'pending' AND m.sender_email = rm.sender_email
@@ -233,6 +275,12 @@ async function pendingSteers(env, device, jobId) {
   const steers = [];
   for (const item of results) {
     try {
+      if (item.seal_key_id) {
+        // The computer opens it (agent/claim-renew.mjs); another key's follow-up waits and queues.
+        const sealed = item.seal_key_id === device.key_id ? await sealedObjectText(env, item.object_key) : null;
+        if (sealed) steers.push({ id: item.id, from: item.sender_email, sealed });
+        continue;
+      }
       const object = await env.MAIL.get(item.object_key);
       if (!object) continue;
       const parsed = await parseInbound(await object.arrayBuffer(), item.agent_email, {
@@ -373,21 +421,58 @@ async function fileRoute(env, device, body) {
   return json({ route: 'none', reason: 'too-large' });
 }
 
+// Files a sealed completion carries for the reply: [{ name, mimeType, content (base64) }].
+function inlineFiles(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 5) return null;
+  const files = [];
+  for (const file of value) {
+    if (typeof file?.name !== 'string' || !file.name || file.name.length > 120 || /[\\/\x00-\x1f\x7f]/.test(file.name) ||
+        !EMAIL_SAFE_FILE.test(file.name) || typeof file.mimeType !== 'string' || !MIME_TYPE.test(file.mimeType) ||
+        typeof file.content !== 'string' || !file.content || Buffer.from(file.content, 'base64').toString('base64') !== file.content) return null;
+    files.push({ name: file.name, mimeType: file.mimeType.toLowerCase(), content: file.content });
+  }
+  return files;
+}
+
+// Sends the reply for a sealed job from what the computer just posted; the
+// relay keeps only the sealed result. A failure here leaves the reply queued
+// for the computer's retry of this completion.
+async function sendSealedReply(env, jobId, body, files) {
+  try {
+    return (await deliverReply(env, jobId, { result: body.result, subject: body.subject, files })).state;
+  } catch (error) {
+    console.error('Sealed reply send is delayed', jobId, error instanceof Error ? error.message : 'Unknown error');
+    return 'delayed';
+  }
+}
+
 async function complete(env, device, body) {
   if (typeof body.jobId !== 'string' || typeof body.leaseId !== 'string' || !validResult(body.result)) {
     return json({ error: 'Invalid completion' }, 400);
   }
   const serialized = JSON.stringify(body.result);
   const resultHash = digest(serialized);
-  const current = await env.DB.prepare(`SELECT j.state, j.lease_id, j.result_hash,
+  const current = await env.DB.prepare(`SELECT j.state, j.lease_id, j.result_hash, m.seal_key_id,
     (j.lease_until > CURRENT_TIMESTAMP) AS lease_valid
-    FROM jobs j JOIN threads t ON t.id = j.thread_id
+    FROM jobs j JOIN threads t ON t.id = j.thread_id JOIN messages m ON m.id = j.message_id
     WHERE j.id = ? AND j.device_id = ? AND t.account_id = ? LIMIT 1`)
     .bind(body.jobId, device.id, device.account_id).first();
   if (!current) return json({ error: 'Job not found' }, 404);
+  // Mail sealed to this computer: the reply's subject and files come with the
+  // completion, since the relay can't read the stored mail.
+  const sealed = Boolean(current.seal_key_id) && current.seal_key_id === device.key_id;
+  if (current.seal_key_id && !sealed) return json({ error: 'This job is sealed to another key' }, 409);
+  const files = sealed ? inlineFiles(body.files) : [];
+  if (sealed && (files === null || typeof body.subject !== 'string' || body.subject.length > 998 || /[\r\n]/.test(body.subject) ||
+      body.result.artifactIds?.length)) {
+    return json({ error: 'Invalid sealed completion' }, 400);
+  }
   if (['completed', 'failed'].includes(current.state)) {
-    return current.lease_id === body.leaseId && current.result_hash === resultHash
-      ? json({ completed: true, duplicate: true }) : json({ error: 'Job already finished' }, 409);
+    if (current.lease_id !== body.leaseId || current.result_hash !== resultHash) return json({ error: 'Job already finished' }, 409);
+    // A retried completion whose reply never went out (the Worker stopped
+    // after storing it) sends it now.
+    return json({ completed: true, duplicate: true, ...(sealed ? { reply: await sendSealedReply(env, body.jobId, body, files) } : {}) });
   }
   if (current.state !== 'running' || current.lease_id !== body.leaseId || !current.lease_valid) {
     return json({ error: 'Lease expired or replaced' }, 409);
@@ -398,16 +483,17 @@ async function complete(env, device, body) {
     if (files.length !== body.result.artifactIds.length) return json({ error: 'Unknown or expired artifact' }, 400);
   }
   const key = `results/${device.account_id}/${body.jobId}/${body.leaseId}.json`;
-  await env.MAIL.put(key, serialized, { httpMetadata: { contentType: 'application/json' } });
+  if (sealed) await storeSealedResult(env, device.public_key, key, body.result);
+  else await env.MAIL.put(key, serialized, { httpMetadata: { contentType: 'application/json' } });
   const state = body.result.state === 'failed' ? 'failed' : 'completed';
   const reactionStatus = body.result.state === 'completed' ? 'completed'
     : body.result.state === 'failed' ? 'failed' : null;
   // Completion and its one outbound reply commit together. A replaced lease
   // cannot enqueue mail even if it uploaded a result object first.
   const statements = [
-    env.DB.prepare(`UPDATE jobs SET state = ?, result_key = ?, result_hash = ?, lease_until = NULL
+    env.DB.prepare(`UPDATE jobs SET state = ?, result_key = ?, result_hash = ?, result_meta_json = ?, lease_until = NULL
       WHERE id = ? AND device_id = ? AND lease_id = ? AND state = 'running'
-        AND lease_until > CURRENT_TIMESTAMP`).bind(state, key, resultHash, body.jobId, device.id, body.leaseId),
+        AND lease_until > CURRENT_TIMESTAMP`).bind(state, key, resultHash, resultMeta(body.result), body.jobId, device.id, body.leaseId),
     env.DB.prepare(`INSERT INTO outbox (job_id) SELECT id FROM jobs
       WHERE id = ? AND device_id = ? AND lease_id = ? AND result_hash = ? AND state = ?`)
       .bind(body.jobId, device.id, body.leaseId, resultHash, state),
@@ -436,14 +522,15 @@ async function complete(env, device, body) {
       AND EXISTS (SELECT 1 FROM jobs WHERE id = ? AND lease_id = ? AND result_hash = ? AND state IN ('completed', 'failed'))`)
     .bind(body.jobId, body.jobId, body.leaseId, resultHash));
   const updated = await env.DB.batch(statements);
-  return (updated[1].meta?.changes ?? updated[1].changes) === 1
-    ? json({ completed: true, duplicate: false }) : json({ error: 'Lease expired or replaced' }, 409);
+  if ((updated[1].meta?.changes ?? updated[1].changes) !== 1) return json({ error: 'Lease expired or replaced' }, 409);
+  return json({ completed: true, duplicate: false, ...(sealed ? { reply: await sendSealedReply(env, body.jobId, body, files) } : {}) });
 }
 
 export async function handleDeviceRequest(request, env) {
   const url = new URL(request.url);
   if (!((request.method === 'GET' && ['/api/device/attachment', '/api/device/status', '/api/device/push'].includes(url.pathname)) ||
-    (request.method === 'POST' && ['/api/device/claim', '/api/device/renew', '/api/device/steered', '/api/device/started', '/api/device/complete', '/api/device/artifacts', '/api/device/models', '/api/device/projects', '/api/device/file-route'].includes(url.pathname)))) {
+    (request.method === 'GET' && url.pathname === '/api/device/pending-sends') ||
+    (request.method === 'POST' && ['/api/device/claim', '/api/device/renew', '/api/device/steered', '/api/device/started', '/api/device/complete', '/api/device/artifacts', '/api/device/models', '/api/device/projects', '/api/device/file-route', '/api/device/key', '/api/device/send'].includes(url.pathname)))) {
     return new Response('Not found', { status: 404 });
   }
   if (url.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(url.hostname)) return json({ error: 'HTTPS required' }, 403);
@@ -459,9 +546,24 @@ export async function handleDeviceRequest(request, env) {
   if (url.pathname === '/api/device/attachment') return attachment(request, env, device, url);
   if (url.pathname === '/api/device/claim') return claim(env, device, await busyFolders(request));
   if (url.pathname === '/api/device/artifacts') return uploadRunArtifact(request, env, device);
+  if (url.pathname === '/api/device/pending-sends') return json({ replies: await heldReplies(env, device) });
   let body;
-  try { body = await boundedJson(request); }
+  const large = device.key_id && ['/api/device/complete', '/api/device/send'].includes(url.pathname);
+  try { body = await boundedJson(request, large ? MAX_SEALED_BODY_BYTES : MAX_RESULT_BYTES); }
   catch { return json({ error: 'Invalid or oversized JSON body' }, 400); }
+  if (url.pathname === '/api/device/key') {
+    // The public half of this computer's sealing key; new mail for it is
+    // stored sealed to it. Re-registering the same key changes nothing.
+    const keyId = await registerDeviceKey(env.DB, device, body?.publicKey);
+    return keyId ? json({ saved: true, keyId }) : json({ error: 'Invalid public key' }, 400);
+  }
+  if (url.pathname === '/api/device/send') {
+    if (!ARTIFACT_ID.test(body?.jobId ?? '') || !body?.payload || typeof body.payload !== 'object') return json({ error: 'Invalid reply' }, 400);
+    const sent = await sendHeldReply(env, device, body.jobId, body.payload);
+    return sent.state === 'mismatch' ? json({ error: 'Reply does not match the held copy' }, 409)
+      : sent.state === 'none' ? json({ error: 'No held reply' }, 404)
+        : json({ state: sent.state }, sent.state === 'waiting' ? 409 : 200);
+  }
   if (url.pathname === '/api/device/file-route') return fileRoute(env, device, body);
   if (url.pathname === '/api/device/models') {
     let models;

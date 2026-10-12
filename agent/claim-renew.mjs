@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { openSteer, readDeviceKey } from './device-key.mjs';
 
 export async function renewClaim(claim) {
   let url = `${(process.env.TAGMAILS_LAB_URL || 'http://127.0.0.1:4177').replace(/\/+$/, '')}/api/renew`;
@@ -19,7 +20,14 @@ export async function renewClaim(claim) {
   if ([401, 403, 409].includes(response.status)) throw Object.assign(new Error('Claim lease is gone'), { leaseGone: true });
   const result = response.ok ? await response.json() : null;
   if (!result?.renewed) throw new Error('Claim renewal failed');
-  return { steers: Array.isArray(result.steers) ? result.steers : [] };
+  const steers = Array.isArray(result.steers) ? result.steers : [];
+  // Follow-ups to sealed mail arrive sealed to this computer; one that won't open is left pending.
+  const key = steers.some((steer) => typeof steer?.sealed === 'string') ? await readDeviceKey() : null;
+  const opened = [];
+  for (const steer of steers) {
+    try { opened.push(key ? await openSteer(steer, key) : steer); } catch { /* Re-offered on the next renewal. */ }
+  }
+  return { steers: opened };
 }
 
 // Tell the relay whether a follow-up reached the running agent. An undelivered

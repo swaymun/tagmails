@@ -1,4 +1,4 @@
-// Mail content retention. D1 rows (messages, jobs, outbox) stay for threading
+// Mail content retention (relay-sealed or sealed to the owner's computer alike). D1 rows (messages, jobs, outbox) stay for threading
 // and billing; the content objects in R2 expire:
 // - raw inbound MIME, 7 days after its job finished (or after it arrived when
 //   no job ran), whether or not a reply was sent;
@@ -7,6 +7,8 @@
 // finish time when there is one; otherwise the job's creation time stands in,
 // which is exact for relay-answered, steer and refused jobs.
 // Each scheduled run handles a bounded batch so it stays within Worker limits.
+import { attachmentKey } from './device-sealing.mjs';
+
 export const RAW_MAIL_DAYS = 7;
 export const RESULT_DAYS = 30;
 const BATCH = 25;
@@ -24,7 +26,7 @@ function holds(days) {
 }
 
 export async function deleteExpiredInboundMime(env) {
-  const found = await env.DB.prepare(`SELECT m.id, m.object_key FROM messages m
+  const found = await env.DB.prepare(`SELECT m.id, m.object_key, m.seal_key_id FROM messages m
     WHERE m.direction = 'inbound' AND m.raw_deleted_at IS NULL
       AND m.created_at <= datetime('now', '-${RAW_MAIL_DAYS} days')
       AND NOT EXISTS (SELECT 1 FROM jobs j LEFT JOIN outbox o ON o.job_id = j.id
@@ -33,6 +35,8 @@ export async function deleteExpiredInboundMime(env) {
   for (const row of found.results ?? found) {
     try {
       await env.MAIL.delete(row.object_key);
+      // Sealed mail is kept as a request object plus one object per attachment.
+      if (row.seal_key_id) for (let index = 0; index < 5; index += 1) await env.MAIL.delete(attachmentKey(row.object_key, index));
       // A "which project?" job keeps the sealed request text for routing the
       // sender's answer; it is a copy of this mail, so it goes too.
       await env.DB.batch([

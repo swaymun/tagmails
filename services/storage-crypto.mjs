@@ -2,8 +2,12 @@
 // person wrote or an agent answered (raw mail, results, files, reply payloads,
 // subjects) is sealed with AES-256-GCM under STORAGE_KEY, a Worker secret.
 // Nobody browsing R2 or D1 sees plaintext; reading it requires the secret.
+// Content for a computer with a sealing key is sealed to that key instead
+// (services/device-sealing.mjs); it passes through here unchanged and the
+// relay can't open it.
 
 import { createHash } from 'node:crypto';
+import { isDeviceSealed, isDeviceSealedText } from '../agent/device-seal.mjs';
 
 const MAGIC = new TextEncoder().encode('TMENC1');
 // Large files are sealed as a stream of 1 MiB AES-GCM records so neither the
@@ -157,6 +161,8 @@ export function encryptedBucket(env, bucket) {
         if (typeof FixedLengthStream === 'function') body = body.pipeThrough(new FixedLengthStream(sealedLength));
         return bucket.put(key, body, { ...rest, customMetadata: { ...rest.customMetadata, sealed: 'stream-v1' } });
       }
+      // Already sealed to a device: a relay-key layer would add nothing.
+      if (!isStream(value) && isDeviceSealed(value)) return bucket.put(key, value, options);
       return bucket.put(key, await encryptBytes(env, value), options);
     },
     async get(key, options) {
@@ -204,7 +210,9 @@ export async function sealText(env, value) {
   return TEXT_PREFIX + base64(await encryptBytes(env, String(value)));
 }
 
+// Text sealed to a device reads as null: only that computer can open it.
 export async function openText(env, value) {
+  if (isDeviceSealedText(value)) return null;
   if (typeof value !== 'string' || !value.startsWith(TEXT_PREFIX)) return value;
   const bytes = Uint8Array.from(atob(value.slice(TEXT_PREFIX.length)), (char) => char.charCodeAt(0));
   return new TextDecoder().decode(await decryptBytes(env, bytes));

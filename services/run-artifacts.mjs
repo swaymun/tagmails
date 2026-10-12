@@ -64,10 +64,13 @@ async function repeatedUpload(env, device, info, id, sha256, byteSize) {
     expiresInDays: 7, duplicate: true }, 200);
 }
 
+// Files for sealed mail travel with the completion instead (device-jobs.mjs),
+// so the relay never stores them.
 async function activeLease(env, device, jobId, leaseId) {
   return env.DB.prepare(`SELECT j.id FROM jobs j JOIN threads t ON t.id = j.thread_id
+    JOIN messages m ON m.id = j.message_id
     WHERE j.id = ? AND j.lease_id = ? AND j.device_id = ? AND t.account_id = ?
-      AND j.state = 'running' AND j.lease_until > CURRENT_TIMESTAMP LIMIT 1`)
+      AND j.state = 'running' AND j.lease_until > CURRENT_TIMESTAMP AND m.seal_key_id IS NULL LIMIT 1`)
     .bind(jobId, leaseId, device.id, device.account_id).first();
 }
 

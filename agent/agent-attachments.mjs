@@ -4,12 +4,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { openAttachment, readDeviceKey } from './device-key.mjs';
 
 const MAX_ATTACHMENTS = 5;
 const MAX_ONE = 2 * 1024 * 1024;
 const MAX_TOTAL = 3 * 1024 * 1024;
 const RELAY_MAX_ONE = 24_000_000;
 const RELAY_MAX_TOTAL = 25_000_000;
+// A sealed attachment carries its key header and authentication tag.
+const SEAL_OVERHEAD = 1024;
 const PDF_PAGES = 12;
 const PDF_TEXT = 20_000;
 const STANDARD_FONTS = fileURLToPath(new URL('../../standard_fonts/', import.meta.resolve('pdfjs-dist/legacy/build/pdf.mjs')));
@@ -97,12 +100,14 @@ async function attachmentBytes(attachment, relay) {
   let length = 0;
   for await (const chunk of response.body) {
     length += chunk.byteLength;
-    if (length > (relay ? RELAY_MAX_ONE : MAX_ONE)) {
+    if (length > (relay ? RELAY_MAX_ONE + (attachment.sealed ? SEAL_OVERHEAD : 0) : MAX_ONE)) {
       throw new Error('Attachment is too large');
     }
     chunks.push(chunk);
   }
-  return Buffer.concat(chunks);
+  // Mail the relay keeps sealed to this computer opens only here.
+  return relay && attachment.sealed ? openAttachment(Buffer.concat(chunks), await readDeviceKey())
+    : Buffer.concat(chunks);
 }
 
 export async function stageAgentAttachments(attachments = [], baseDirectory = os.tmpdir()) {

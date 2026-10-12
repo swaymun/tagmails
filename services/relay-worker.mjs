@@ -9,7 +9,9 @@ import { knownAgentAddresses } from './agent-addresses.mjs';
 import { failOneAbandonedJob, handleDeviceRequest } from './device-jobs.mjs';
 import { notifyDevices } from './device-push.mjs';
 export { DevicePush } from './device-push.mjs';
-import { purgeSettledOutboundBodies, reconcileOneUnknownOutbox, reconcileSentEvent, recordDeliveryOutcome, sendNextOutbox } from './outbox.mjs';
+import { deliverReply, purgeSettledOutboundBodies, reconcileOneUnknownOutbox, reconcileSentEvent, recordDeliveryOutcome, sendNextOutbox,
+  tendSealedReplies } from './outbox.mjs';
+import { sealedSubject, sealTarget, storeSealedRequest } from './device-sealing.mjs';
 import { handleAccountRequest } from './account-auth.mjs';
 import { accountPage } from './account-page.mjs';
 import { handleTestWalletRequest, reconcileDueRefunds } from './billing-wallet.mjs';
@@ -91,7 +93,10 @@ function visibleGuests(message, owner, agentAddresses) {
   return guests;
 }
 
-export async function completeOneModelClarification(env) {
+// Answers a job whose model (or project) couldn't be chosen with the relay's
+// own question. Sealed mail is answered at intake, while its subject is still
+// in memory (`jobId` and `subject`); the scheduled sweep takes the rest.
+export async function completeOneModelClarification(env, { jobId = null, subject = null } = {}) {
   const row = await env.DB.prepare(`SELECT j.id, t.account_id,
       json_extract(j.model_json, '$.error') AS error
     FROM jobs j JOIN threads t ON t.id = j.thread_id
@@ -99,10 +104,11 @@ export async function completeOneModelClarification(env) {
     JOIN messages m ON m.id = j.message_id
     WHERE j.state = 'queued' AND a.active = 1
       AND json_type(j.model_json, '$.error') = 'text'
+      AND (CASE WHEN ? IS NULL THEN m.seal_key_id IS NULL ELSE j.id = ? END)
       AND (m.sender_email = a.owner_email OR EXISTS (
         SELECT 1 FROM participants p WHERE p.thread_id = t.id
           AND p.email = m.sender_email AND p.revoked_at IS NULL))
-    ORDER BY j.created_at, j.rowid LIMIT 1`).bind().first();
+    ORDER BY j.created_at, j.rowid LIMIT 1`).bind(jobId, jobId).first();
   if (!row) return false;
   const key = `results/${row.account_id}/${row.id}/model-clarification.json`;
   const result = { runtime: 'relay', state: 'needs_clarification', summary: row.error,
@@ -120,6 +126,9 @@ export async function completeOneModelClarification(env) {
   ]);
   const completed = (updated.meta?.changes ?? updated.changes) === 1;
   if (completed) await chargeRelayReply(env, row.id);
+  // The relay wrote this answer itself (no mail content), so its copy stays
+  // relay-sealed; the reply is sent now because the subject isn't stored.
+  if (completed && jobId) await deliverReply(env, row.id, { result, subject });
   return completed;
 }
 
@@ -220,17 +229,27 @@ export async function handleEmail(emailMessage, env, { fetchModel = fetch, resol
 // full access and the owner's connectors, which a participant must not reach.
 async function steerTarget(env, agent, threadId, message, fetchModel) {
   if (!threadId || !env.TYPESAFE_API_KEY || message.attachments?.length || /^Model:/im.test(message.body ?? '')) return null;
-  const running = await env.DB.prepare(`SELECT j.id, m.object_key, m.message_id, m.sender_email FROM jobs j
+  const running = await env.DB.prepare(`SELECT j.id, m.object_key, m.message_id, m.sender_email, m.seal_key_id FROM jobs j
     JOIN messages m ON m.id = j.message_id
     WHERE j.thread_id = ? AND j.state = 'running' AND j.lease_until > CURRENT_TIMESTAMP
     ORDER BY m.rowid DESC LIMIT 1`).bind(threadId).first();
   if (!running || running.sender_email !== message.from) return null;
   try {
-    const object = await env.MAIL.get(running.object_key);
-    if (!object) return null;
-    const earlier = await parseInbound(await object.arrayBuffer(), agent, {
-      verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false });
-    const choice = await routeFollowUp(`Subject: ${earlier.subject}\n${currentText(earlier.body)}`,
+    let running_context;
+    if (running.seal_key_id) {
+      // The running email is sealed; describe it from the follow-up itself:
+      // its subject and the text it quotes.
+      const quoted = String(message.body ?? '').slice(currentText(message.body).length)
+        .split(/\r?\n/).map((line) => line.replace(/^\s*>+\s?/, '')).join('\n').trim();
+      running_context = `Subject: ${String(message.subject ?? '').replace(/^(?:re|fwd?)\s*:\s*/i, '')}\n${quoted}`;
+    } else {
+      const object = await env.MAIL.get(running.object_key);
+      if (!object) return null;
+      const earlier = await parseInbound(await object.arrayBuffer(), agent, {
+        verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false });
+      running_context = `Subject: ${earlier.subject}\n${currentText(earlier.body)}`;
+    }
+    const choice = await routeFollowUp(running_context,
       currentText(message.body), { apiKey: env.TYPESAFE_API_KEY, fetcher: fetchModel });
     return choice === 'queue' ? null : { id: running.id, ack: choice === 'ack' };
   } catch { return null; }
@@ -274,15 +293,22 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
   const recipients = [...(message.to ?? []), ...(message.cc ?? [])];
   const agentAddresses = owner ? await knownAgentAddresses(env.DB, recipients) : null;
   const guests = owner ? visibleGuests(message, ownerEmail, agentAddresses) : [];
-  const objectKey = `inbound/${account.id}/${message.providerEmailId}.eml`;
-  await env.MAIL.put(objectKey, message.rawMime, { httpMetadata: { contentType: 'message/rfc822' } });
+  // With a computer that registered a sealing key, everything kept about this
+  // email is sealed to that key; the relay keeps only routing metadata.
+  const target = await sealTarget(env.DB, account.id, threadId);
+  const objectKey = `inbound/${account.id}/${message.providerEmailId}.${target ? 'sealed' : 'eml'}`;
+  if (target) await storeSealedRequest(env, target, objectKey, message, agent);
+  else await env.MAIL.put(objectKey, message.rawMime, { httpMetadata: { contentType: 'message/rfc822' } });
   const statements = [];
   const catalog = await accountModelCatalog(env.DB, account.id, threadId);
+  const subject = message.subject.slice(0, 300);
   if (!threadId) statements.push(env.DB.prepare('INSERT INTO threads (id, account_id, subject, device_id) VALUES (?, ?, ?, ?)')
-    .bind(newThreadId, account.id, await sealText(env, message.subject.slice(0, 300)), catalog.deviceId));
+    .bind(newThreadId, account.id, target ? await sealedSubject(target, subject) : await sealText(env, subject), catalog.deviceId));
   statements.push(env.DB.prepare(`INSERT INTO messages
-    (id, account_id, thread_id, provider_email_id, message_id, direction, sender_email, object_key, agent_email)
-    VALUES (?, ?, ?, ?, ?, 'inbound', ?, ?, ?)`).bind(id, account.id, newThreadId, message.providerEmailId, message.messageId, message.from, objectKey, agent));
+    (id, account_id, thread_id, provider_email_id, message_id, direction, sender_email, object_key, agent_email, seal_key_id, headers_json)
+    VALUES (?, ?, ?, ?, ?, 'inbound', ?, ?, ?, ?, ?)`).bind(id, account.id, newThreadId, message.providerEmailId, message.messageId,
+    message.from, objectKey, agent, target?.keyId ?? null,
+    target ? JSON.stringify({ to: message.to ?? [], cc: message.cc ?? [], parentIds: message.parentIds ?? [] }) : null));
   for (const guest of guests) {
     statements.push(env.DB.prepare(`INSERT INTO participants (thread_id, email) VALUES (?, ?)
       ON CONFLICT(thread_id, email) DO UPDATE SET revoked_at = NULL`).bind(newThreadId, guest));
@@ -304,9 +330,12 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
   const projects = threadUnavailable || priorWorkspace?.kind ? [] : await accountProjectCatalog(env, account.id, threadId, catalog.deviceId);
   const subjectLine = String(message.subject ?? '').replace(/[\r\n]+/g, ' ').slice(0, 300).trim();
   const requestText = `${subjectLine ? `Subject: ${subjectLine}\n` : ''}${currentText(message.body)}`.slice(0, 4000);
+  // A sealed thread keeps only the relay's own question, not the request.
   const projectState = priorWorkspace?.pending
     ? `${priorWorkspace.pending}\n\nThe agent asked which project to use. The sender replied:\n${currentText(message.body)}`
-    : requestText;
+    : typeof priorWorkspace?.asked === 'string'
+      ? `${subjectLine ? `Subject: ${subjectLine}\n` : ''}The agent asked: ${priorWorkspace.asked}\nThe sender replied:\n${currentText(message.body)}`
+      : requestText;
   const [routedModel, workspace] = await Promise.all([
     threadUnavailable ? null : routeModel(message.body, account.default_model, {
       apiKey: env.TYPESAFE_API_KEY, fetcher: fetchModel, priorModel, subject: message.subject,
@@ -323,7 +352,8 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
   let workspaceJson = workspace?.kind ? JSON.stringify(workspace) : null;
   if (workspace?.ask && model && !model.error) {
     model = { error: workspace.ask };
-    workspaceJson = JSON.stringify({ pending: await sealText(env, projectState.slice(0, 2000)) });
+    workspaceJson = JSON.stringify(target ? { asked: workspace.ask }
+      : { pending: await sealText(env, projectState.slice(0, 2000)) });
   }
   if (model?.id?.startsWith('claude-') && env.CLAUDE_ROUTE_ENABLED !== 'true') {
     model = { error: 'Claude models are not enabled in this pilot. Ask for an available OpenAI model or omit the model to use your default.' };
@@ -375,7 +405,13 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
   }
   if (threadUnavailable) {
     await chargeRelayReply(env, jobId);
+    if (target) await deliverReply(env, jobId, { result: unavailableResult, subject: message.subject });
     return Response.json({ accepted: true, duplicate: false, threadUnavailable: true });
+  }
+  // The relay's own question for sealed mail goes out now, while the subject is in memory.
+  if (target && model?.error) {
+    try { await completeOneModelClarification(env, { jobId, subject: message.subject }); }
+    catch (error) { console.error('Sealed clarification reply is delayed', error instanceof Error ? error.message : 'Unknown error'); }
   }
   if (testBillingEnabled(env)) {
     // Reserving the credit is what wakes the computers.
@@ -480,5 +516,7 @@ export default {
     }
     try { await purgeSettledOutboundBodies(env); }
     catch { console.error('Settled outbound body cleanup is delayed'); }
+    try { await tendSealedReplies(env); }
+    catch { console.error('Sealed reply upkeep is delayed'); }
   },
 };

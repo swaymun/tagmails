@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { generateDeviceKey, keyIdFor } from '../agent/device-seal.mjs';
 import { randomBytes } from 'node:crypto';
 import test from 'node:test';
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose';
@@ -151,14 +152,17 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   const { code } = await codeResponse.json();
   assert.match(code, /^tm_pair_[A-Za-z0-9_-]{27}$/);
   const token = `tm_dev_${randomBytes(32).toString('base64url')}`;
+  const deviceKey = await generateDeviceKey();
   const pairRequest = new Request('https://relay.test/api/device/pair', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code, token, name: 'Saimun Mac' }),
+    body: JSON.stringify({ code, token, name: 'Saimun Mac', publicKey: deviceKey.publicKey }),
   });
   const paired = await handleAccountRequest(pairRequest, env, options);
   assert.equal(paired.status, 201);
   const { deviceId } = await paired.json();
-  assert.equal(sqlite.prepare('SELECT name FROM devices WHERE id = ?').get(deviceId).name, 'Saimun Mac');
+  // The computer's sealing key comes with the pairing (0.2.24+).
+  assert.deepEqual({ ...sqlite.prepare('SELECT name, public_key, key_id FROM devices WHERE id = ?').get(deviceId) },
+    { name: 'Saimun Mac', public_key: deviceKey.publicKey, key_id: await keyIdFor(deviceKey.publicKey) });
   const listed = await handleAccountRequest(request('/api/account/devices', 'GET', undefined, cookie), env, options);
   assert.equal((await listed.json()).devices[0].id, deviceId);
   assert.equal((await handleAccountRequest(new Request('https://relay.test/api/device/pair', {

@@ -4,6 +4,7 @@ import { runReceiptPage } from './account-page.mjs';
 import { selectedModelDetail, selectedModelStatus } from './model-route.mjs';
 import { addressDomain, checkAddress, chooseAddress, claimInitialAddress, changesLeft } from './agent-username.mjs';
 import { openText } from './storage-crypto.mjs';
+import { keyIdFor, readStoredResult, validPublicKey } from './device-sealing.mjs';
 import { artifactForDownload, selectedRunArtifacts } from './run-artifacts.mjs';
 import { knownAgentAddresses } from './agent-addresses.mjs';
 import { accountPreferences, clearAccountPreferences, saveAccountPreferences } from './account-preferences.mjs';
@@ -201,7 +202,8 @@ async function pair(request, env) {
   try { body = await bodyJson(request); }
   catch { return json({ error: 'Invalid pairing request' }, 400); }
   if (!PAIR_CODE.test(body.code ?? '') || !DEVICE_TOKEN.test(body.token ?? '') ||
-      typeof body.name !== 'string' || !body.name.trim() || body.name.length > 80) {
+      typeof body.name !== 'string' || !body.name.trim() || body.name.length > 80 ||
+      (body.publicKey !== undefined && !validPublicKey(body.publicKey))) {
     return json({ error: 'Invalid pairing request' }, 400);
   }
   const claimed = await env.DB.prepare(`UPDATE pairing_codes SET used_at = CURRENT_TIMESTAMP
@@ -210,8 +212,13 @@ async function pair(request, env) {
     RETURNING account_id`).bind(hash(body.code)).first();
   if (!claimed) return json({ error: 'Pairing code expired or already used' }, 409);
   const deviceId = randomUUID();
-  await env.DB.prepare('INSERT INTO devices (id, account_id, token_hash, name) VALUES (?, ?, ?, ?)')
-    .bind(deviceId, claimed.account_id, hash(body.token), body.name.trim()).run();
+  // A computer from 0.2.24 on sends the public half of its sealing key; mail
+  // for it is then stored sealed to that key (services/device-sealing.mjs).
+  const publicKey = body.publicKey ?? null;
+  await env.DB.prepare(`INSERT INTO devices (id, account_id, token_hash, name, public_key, key_id, key_registered_at)
+    VALUES (?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END)`)
+    .bind(deviceId, claimed.account_id, hash(body.token), body.name.trim(), publicKey,
+      publicKey && await keyIdFor(publicKey), publicKey).run();
   return json({ paired: true, deviceId }, 201);
 }
 
@@ -434,13 +441,16 @@ async function siteAccountRequest(request, env, pathname, verifyIdentity) {
 
 async function runRow(env, runId, accountId) {
   const row = await env.DB.prepare(`SELECT j.id, j.thread_id, j.state, j.attempts, j.created_at, j.result_key, j.model_json,
-    j.workspace_json, t.subject, m.sender_email, o.state AS delivery_state, o.provider_email_id
+    j.workspace_json, j.result_meta_json, t.subject, m.sender_email, o.state AS delivery_state, o.provider_email_id
     FROM jobs j JOIN threads t ON t.id = j.thread_id JOIN messages m ON m.id = j.message_id
     LEFT JOIN outbox o ON o.job_id = j.id
     WHERE j.id = ? AND t.account_id = ? LIMIT 1`).bind(runId, accountId).first();
   if (!row) return null;
-  const saved = row.result_key ? await env.MAIL.get(row.result_key) : null;
-  const result = saved ? JSON.parse(new TextDecoder().decode(await saved.arrayBuffer())) : null;
+  // A result sealed to the owner's computer can't be read here; only its
+  // status metadata is shown.
+  const stored = await readStoredResult(env, row.result_key);
+  const sealed = stored?.sealed === true;
+  const result = sealed ? null : stored;
   const artifacts = await selectedRunArtifacts(env, accountId, runId, result?.artifactIds);
   const deliveries = row.provider_email_id ? await env.DB.prepare(`SELECT recipient_email, status FROM delivery_recipients
     WHERE job_id = ? AND provider_email_id = ? ORDER BY recipient_email`)
@@ -449,7 +459,7 @@ async function runRow(env, runId, accountId) {
   try { project = JSON.parse(row.workspace_json ?? 'null')?.name ?? null; } catch { /* Older runs have no folder. */ }
   row.subject = await openText(env, row.subject);
   return { ...row, selectedModel: selectedModelDetail(row.model_json), model: selectedModelStatus(row.model_json),
-    project, result, artifacts,
+    project, result, artifacts, sealed, resultMeta: storedMeta(row.result_meta_json),
     deliveryRecipients: deliveries.results ?? deliveries };
 }
 
@@ -462,6 +472,13 @@ async function recentThreadRuns(env, threadId, accountId) {
     .bind(threadId, accountId).all();
   return (rows.results ?? rows).reverse().map((row) => ({ id: row.id, state: row.state,
     createdAt: row.created_at, sender: row.sender_email }));
+}
+
+function storedMeta(value) {
+  try {
+    const meta = JSON.parse(value ?? 'null');
+    return meta && typeof meta === 'object' ? meta : null;
+  } catch { return null; }
 }
 
 function visibleTranscript(value) {
@@ -489,25 +506,25 @@ async function threadTranscriptPage(env, accountId, threadId, before, headers) {
     if (!cursor) return json({ error: 'Invalid cursor' }, 400, headers);
   }
   const rows = await env.DB.prepare(`SELECT j.id, j.state, j.created_at, j.result_key, j.model_json, j.workspace_json,
-    m.sender_email FROM jobs j JOIN messages m ON m.id = j.message_id
+    j.result_meta_json, m.sender_email FROM jobs j JOIN messages m ON m.id = j.message_id
     WHERE j.thread_id = ? AND (? IS NULL OR j.created_at < ? OR (j.created_at = ? AND j.id < ?))
     ORDER BY j.created_at DESC, j.id DESC LIMIT 21`)
     .bind(threadId, cursor?.created_at ?? null, cursor?.created_at ?? null,
       cursor?.created_at ?? null, cursor?.id ?? null).all();
   const page = (rows.results ?? rows).slice(0, 20);
   const runs = await Promise.all(page.map(async (row) => {
-    const saved = row.result_key ? await env.MAIL.get(row.result_key) : null;
-    let result = null;
-    if (saved) {
-      try { result = JSON.parse(new TextDecoder().decode(await saved.arrayBuffer())); }
-      catch { /* An unreadable result must not break the rest of the thread. */ }
-    }
+    // An unreadable result must not break the rest of the thread.
+    const stored = await readStoredResult(env, row.result_key).catch(() => null);
+    const sealed = stored?.sealed === true;
+    const result = sealed ? null : stored;
+    const meta = storedMeta(row.result_meta_json);
     let project = null;
     try { project = JSON.parse(row.workspace_json ?? 'null')?.name ?? null; } catch { /* Older runs have no folder. */ }
     const files = await selectedRunArtifacts(env, accountId, row.id, result?.artifactIds);
-    const session = ['codex', 'claude'].includes(result?.session?.harness) && /^[0-9a-f-]{36}$/i.test(result?.session?.id ?? '')
-      ? { harness: result.session.harness, id: result.session.id } : null;
-    return { id: row.id, state: row.state, outcome: result?.state ?? null, createdAt: row.created_at,
+    const source = result ?? meta;
+    const session = ['codex', 'claude'].includes(source?.session?.harness) && /^[0-9a-f-]{36}$/i.test(source?.session?.id ?? '')
+      ? { harness: source.session.harness, id: source.session.id } : null;
+    return { id: row.id, state: row.state, outcome: source?.state ?? null, createdAt: row.created_at, sealed,
       sender: row.sender_email, selectedModel: selectedModelDetail(row.model_json),
       model: selectedModelStatus(row.model_json), project,
       summary: typeof result?.summary === 'string' ? result.summary : null,
@@ -602,6 +619,9 @@ export async function handleAccountRequest(request, env, { verifyIdentity = veri
       deliveryRecipients: row.deliveryRecipients.filter((item) => viewer.owner || item.recipient_email === identity.email)
         .map((item) => ({ email: item.recipient_email, status: item.status })),
       result: viewer.owner ? row.result : participantResult(row.result),
+      // Sealed runs: content lives on the owner's computer; status only.
+      sealed: row.sealed, outcome: row.result?.state ?? row.resultMeta?.state ?? null,
+      ...(viewer.owner && row.resultMeta?.session ? { session: row.resultMeta.session } : {}),
       artifacts: viewer.owner ? row.artifacts.map((file) => ({ id: file.id, name: file.name,
         mimeType: file.mime_type, size: file.byte_size, expiresAt: file.expires_at })) : [] }, 200, headers);
   }
