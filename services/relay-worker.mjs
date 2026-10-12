@@ -6,7 +6,7 @@ import { currentText, routeModel } from './jev-route.mjs';
 import { accountProjectCatalog, routeProject } from './project-route.mjs';
 import { inspectResendInbound } from './resend-inbound.mjs';
 import { knownAgentAddresses } from './agent-addresses.mjs';
-import { handleDeviceRequest } from './device-jobs.mjs';
+import { failOneAbandonedJob, handleDeviceRequest } from './device-jobs.mjs';
 import { notifyDevices } from './device-push.mjs';
 export { DevicePush } from './device-push.mjs';
 import { purgeSettledOutboundBodies, reconcileOneUnknownOutbox, reconcileSentEvent, recordDeliveryOutcome, sendNextOutbox } from './outbox.mjs';
@@ -423,6 +423,11 @@ export default {
         if (!await completeOneModelClarification(env)) break;
       }
     } catch { console.error('Model clarification is delayed'); }
+    try {
+      for (let index = 0; index < 10; index += 1) {
+        if (!await failOneAbandonedJob(env)) break;
+      }
+    } catch { console.error('Abandoned run cleanup is delayed'); }
     try { await deleteExpiredInboundMime(env); }
     catch { console.error('Inbound MIME cleanup is delayed'); }
     try { await deleteExpiredRunResults(env); }

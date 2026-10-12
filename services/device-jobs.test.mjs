@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { handleDeviceRequest } from './device-jobs.mjs';
+import { failOneAbandonedJob, handleDeviceRequest, MAX_ATTEMPTS } from './device-jobs.mjs';
 import { completeOneModelClarification, handleInbound } from './relay-worker.mjs';
 import { bindings } from './bindings-fixture.mjs';
 import { handleAccountRequest } from './account-auth.mjs';
@@ -299,6 +299,28 @@ test('expired leases are reclaimed and a stale or different device cannot comple
   assert.equal((await call(env, firstDevice.token, 'complete', { jobId: second.jobId, leaseId: second.leaseId, result })).status, 200);
   assert.equal(sqlite.prepare('SELECT attempts FROM jobs').get().attempts, 2);
   assert.equal(sqlite.prepare('SELECT count(*) n FROM outbox').get().n, 1);
+});
+
+test('a run that keeps losing its lease stops after MAX_ATTEMPTS and the thread gets a failure reply', async () => {
+  const { env, sqlite } = bindings();
+  const paired = device(sqlite);
+  await inbound(env, 'poison');
+  await inbound(env, 'after-poison', 'Model: Luna\nNext turn.', ['<poison@gmail.com>']);
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    const claimed = envelope((await call(env, paired.token, 'claim')).body);
+    assert.equal(claimed.request.body.endsWith('Read the status without changing files.'), true);
+    sqlite.prepare("UPDATE jobs SET lease_until = datetime('now', '-1 second') WHERE state = 'running'").run();
+  }
+  // Not handed out a fourth time; the later turn waits until the relay fails it.
+  assert.deepEqual((await call(env, paired.token, 'claim')).body, { claimed: false });
+  assert.equal(await failOneAbandonedJob(env), true);
+  assert.equal(await failOneAbandonedJob(env), false);
+  const failed = sqlite.prepare(`SELECT j.state, j.result_key, o.job_id FROM jobs j
+    JOIN messages m ON m.id = j.message_id LEFT JOIN outbox o ON o.job_id = j.id WHERE m.provider_email_id = 'poison'`).get();
+  assert.equal(failed.state, 'failed');
+  assert.ok(failed.job_id, 'the failure is mailed back');
+  assert.match(JSON.parse(Buffer.from(await (await env.MAIL.get(failed.result_key)).arrayBuffer())).summary, /stopped retrying/);
+  assert.equal(envelope((await call(env, paired.token, 'claim')).body).request.body, 'Model: Luna\nNext turn.');
 });
 
 test('a 24 MB MIME attachment stays out of the claim and requires its active device lease', async () => {

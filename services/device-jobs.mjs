@@ -12,6 +12,10 @@ import { rateLimited, tooManyRequests } from './rate-limit.mjs';
 
 const TOKEN = /^tm_dev_[A-Za-z0-9_-]{43}$/;
 const LEASE_SECONDS = 90;
+// A run whose lease lapsed this many times (the Mac slept, restarted or the
+// adapter crashed) is not handed out again: each retry costs the owner a full
+// agent turn, and the job blocks every later turn in its thread.
+export const MAX_ATTEMPTS = 3;
 const MAX_RESULT_BYTES = 64_000;
 // The full answer for the reply email; summary/details stay as a short preview.
 const MAX_ANSWER_CHARS = 32_000;
@@ -70,7 +74,8 @@ async function claim(env, device, busy = []) {
         (SELECT 1 FROM test_email_charges c WHERE c.job_id = j.id AND c.state = 'reserved')`
     : '';
   const eligible = `(j.state = 'queued' OR
-      (j.state = 'running' AND (j.lease_until IS NULL OR j.lease_until <= CURRENT_TIMESTAMP)))
+      (j.state = 'running' AND (j.lease_until IS NULL OR j.lease_until <= CURRENT_TIMESTAMP)
+        AND j.attempts < ${MAX_ATTEMPTS}))
     ${funded}
     AND json_extract(j.model_json, '$.error') IS NULL
     AND (m.sender_email = a.owner_email OR EXISTS (
@@ -300,6 +305,33 @@ function validResult(value) {
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.session?.id ?? ''))) &&
     (value.reportedListCostUsd === undefined || (typeof value.reportedListCostUsd === 'number' &&
       Number.isFinite(value.reportedListCostUsd) && value.reportedListCostUsd >= 0 && value.reportedListCostUsd <= 1000));
+}
+
+// Fails one run that used up its attempts, with a relay reply in the thread.
+// Returns false when there is none. Called from the scheduled handler.
+export async function failOneAbandonedJob(env) {
+  const row = await env.DB.prepare(`SELECT j.id, t.account_id FROM jobs j JOIN threads t ON t.id = j.thread_id
+    WHERE j.state = 'running' AND j.attempts >= ${MAX_ATTEMPTS}
+      AND (j.lease_until IS NULL OR j.lease_until <= CURRENT_TIMESTAMP)
+    ORDER BY j.created_at, j.rowid LIMIT 1`).bind().first();
+  if (!row) return false;
+  const key = `results/${row.account_id}/${row.id}/abandoned.json`;
+  await env.MAIL.put(key, JSON.stringify({ runtime: 'relay', state: 'failed',
+    summary: `Your computer started this task ${MAX_ATTEMPTS} times and stopped responding each time (it may have slept, restarted or crashed), so TagMails stopped retrying. Reply to try again.`,
+    checks: ['The agent may have made partial changes before it stopped.'] }),
+  { httpMetadata: { contentType: 'application/json' } });
+  const [updated] = await env.DB.batch([
+    env.DB.prepare(`UPDATE jobs SET state = 'failed', result_key = ?, lease_until = NULL
+      WHERE id = ? AND state = 'running' AND attempts >= ${MAX_ATTEMPTS}
+        AND (lease_until IS NULL OR lease_until <= CURRENT_TIMESTAMP)`).bind(key, row.id),
+    env.DB.prepare(`INSERT OR IGNORE INTO outbox (job_id)
+      SELECT id FROM jobs WHERE id = ? AND state = 'failed' AND result_key = ?`).bind(row.id, key),
+    // Follow-ups that were waiting to steer it run as their own turns.
+    env.DB.prepare(`UPDATE jobs SET state = 'queued', steer_state = NULL
+      WHERE steer_of = ? AND steer_state = 'pending'
+        AND EXISTS (SELECT 1 FROM jobs WHERE id = ? AND state = 'failed' AND result_key = ?)`).bind(row.id, row.id, key),
+  ]);
+  return (updated.meta?.changes ?? updated.changes) === 1;
 }
 
 async function leasedJob(env, device, body) {
