@@ -231,7 +231,7 @@ async function steerTarget(env, agent, threadId, message, fetchModel) {
       verifiedDeliveryToAgent: true, ...RELAY_INBOUND_LIMITS, includeAttachmentData: false });
     const choice = await routeFollowUp(`Subject: ${earlier.subject}\n${currentText(earlier.body)}`,
       currentText(message.body), { apiKey: env.TYPESAFE_API_KEY, fetcher: fetchModel });
-    return choice === 'queue' ? null : running.id;
+    return choice === 'queue' ? null : { id: running.id, ack: choice === 'ack' };
   } catch { return null; }
 }
 
@@ -327,7 +327,10 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
   if (model?.id?.startsWith('claude-') && env.CLAUDE_ROUTE_ENABLED !== 'true') {
     model = { error: 'Claude models are not enabled in this pilot. Ask for an available OpenAI model or omit the model to use your default.' };
   }
-  const steerOf = threadUnavailable || model?.error ? null : await steerTarget(env, agent, threadId, message, fetchModel);
+  const followUp = threadUnavailable || model?.error ? null : await steerTarget(env, agent, threadId, message, fetchModel);
+  // A bare acknowledgement ("Thanks!") mid-run is recorded and dropped: no turn, no reply, no charge.
+  const acknowledged = Boolean(followUp?.ack);
+  const steerOf = followUp && !followUp.ack ? followUp.id : null;
   const unavailableResult = threadUnavailable ? {
     runtime: 'relay', state: 'failed',
     summary: owner
@@ -339,10 +342,15 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
   if (unavailableResult) await env.MAIL.put(resultKey, JSON.stringify(unavailableResult), {
     httpMetadata: { contentType: 'application/json' },
   });
-  statements.push(env.DB.prepare('INSERT INTO jobs (id, thread_id, message_id, state, model_json, result_key, workspace_json, steer_of, steer_state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(jobId, newThreadId, id, threadUnavailable ? 'failed' : steerOf ? 'completed' : 'queued', model && JSON.stringify(model), resultKey, workspaceJson,
-      steerOf, steerOf ? 'pending' : null));
-  if (!threadUnavailable && !model?.error && env.STATUS_REACTIONS_ENABLED === 'true' && message.from.endsWith('@gmail.com')) {
+  // A steer joins its run only if the run is still going when this commits; if
+  // it finished while Jev was classifying, the follow-up queues as its own turn.
+  const steerLive = `(?8 IS NOT NULL AND EXISTS (SELECT 1 FROM jobs WHERE id = ?8 AND state = 'running'))`;
+  statements.push(env.DB.prepare(`INSERT INTO jobs (id, thread_id, message_id, state, model_json, result_key, workspace_json, steer_of, steer_state)
+    SELECT ?1, ?2, ?3, CASE WHEN ${steerLive} THEN 'completed' ELSE ?4 END, ?5, ?6, ?7,
+      CASE WHEN ${steerLive} THEN ?8 END, CASE WHEN ${steerLive} THEN 'pending' END`)
+    .bind(jobId, newThreadId, id, threadUnavailable ? 'failed' : acknowledged ? 'completed' : 'queued',
+      model && JSON.stringify(model), resultKey, workspaceJson, steerOf));
+  if (!threadUnavailable && !acknowledged && !model?.error && env.STATUS_REACTIONS_ENABLED === 'true' && message.from.endsWith('@gmail.com')) {
     // Reactions are opt-in per account (off by default).
     statements.push(env.DB.prepare(`INSERT INTO status_reactions (job_id, status)
       SELECT ?, 'received' WHERE (SELECT status_reactions FROM accounts WHERE id = ?) = 1`).bind(jobId, account.id));
@@ -359,8 +367,11 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
     if (raced) return Response.json({ accepted: true, duplicate: true });
     throw error;
   }
+  if (acknowledged) return Response.json({ accepted: true, duplicate: false, acknowledged: true });
   // The running agent receives it on its next lease renewal; no reply or charge of its own.
-  if (steerOf) return Response.json({ accepted: true, duplicate: false, steering: true });
+  if (steerOf && (await env.DB.prepare('SELECT steer_state FROM jobs WHERE id = ?').bind(jobId).first())?.steer_state === 'pending') {
+    return Response.json({ accepted: true, duplicate: false, steering: true });
+  }
   if (threadUnavailable) {
     await chargeRelayReply(env, jobId);
     return Response.json({ accepted: true, duplicate: false, threadUnavailable: true });

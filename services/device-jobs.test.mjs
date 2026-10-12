@@ -598,6 +598,38 @@ test('a follow-up classified as steering rides the run, and queues if the run en
   assert.equal(envelope(next.body).request.body.includes('also Osaka'), true, 'the untaken follow-up runs as its own job');
 });
 
+test('a follow-up whose run finished while Jev classified it queues instead of waiting forever; a thank-you is dropped', async () => {
+  const { env, sqlite } = bindings();
+  env.TYPESAFE_API_KEY = 'test-key';
+  const paired = device(sqlite);
+  let during = async () => {};
+  const jev = (choice) => async () => {
+    await during();
+    return Response.json({ answers: { route: { type: 'choice', choice, probabilities: { [choice]: 0.95 } } } });
+  };
+  const send = async (id, body, parentIds, choice) => {
+    const messageId = `<${id}@gmail.com>`;
+    const rawMime = Buffer.from(['From: owner@gmail.com', 'To: agent@wonder.test', 'Subject: Trip',
+      `Message-ID: ${messageId}`, ...(parentIds.length ? [`References: ${parentIds.join(' ')}`] : []),
+      'Content-Type: text/plain; charset=utf-8', '', body].join('\r\n'));
+    const message = { providerEmailId: id, messageId, from: 'owner@gmail.com', agentAddress: 'agent@wonder.test',
+      to: ['agent@wonder.test'], cc: [], bcc: [], subject: 'Trip', parentIds, rawMime, body, attachments: [] };
+    return (await handleInbound(new Request('https://relay.test/webhooks/resend', { method: 'POST', body: '{}' }), env, {
+      inspect: async () => message, fetchModel: jev(choice) })).json();
+  };
+  await send('race-1', 'Write the japan guide.', [], 'queue');
+  const claimed = envelope((await call(env, paired.token, 'claim')).body);
+  assert.deepEqual(await send('race-ack', 'Thanks!', ['<race-1@gmail.com>'], 'ack'),
+    { accepted: true, duplicate: false, acknowledged: true });
+  during = () => call(env, paired.token, 'complete', { jobId: claimed.jobId, leaseId: claimed.leaseId,
+    result: { state: 'completed', summary: 'Done.' } });
+  assert.deepEqual(await send('race-2', 'make it 10 days', ['<race-1@gmail.com>'], 'steer'), { accepted: true, duplicate: false });
+  const next = envelope((await call(env, paired.token, 'claim')).body);
+  assert.equal(next.request.body, 'make it 10 days');
+  assert.equal((await call(env, paired.token, 'renew', { jobId: next.jobId, leaseId: next.leaseId })).body.steers.length, 0,
+    'the thank-you never reaches the agent');
+});
+
 test('a participant follow-up never steers the owner run; it queues as its own job', async () => {
   const { env, sqlite } = bindings();
   env.TYPESAFE_API_KEY = 'test-key';
