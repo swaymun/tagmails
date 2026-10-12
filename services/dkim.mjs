@@ -8,7 +8,7 @@ const encoder = new TextEncoder();
 
 function splitMessage(raw) {
   const text = typeof raw === 'string' ? raw : new TextDecoder('latin1').decode(raw);
-  const normalized = text.replace(/\r?\n/g, '\r\n');
+  const normalized = /(^|[^\r])\n/.test(text) ? text.replace(/\r?\n/g, '\r\n') : text;
   const index = normalized.indexOf('\r\n\r\n');
   return index < 0 ? { head: normalized, body: '' } : { head: normalized.slice(0, index + 2), body: normalized.slice(index + 4) };
 }
@@ -47,7 +47,7 @@ function canonicalBody(body, mode, length) {
   } else {
     text = text.replace(/(\r\n)*$/, '\r\n');
   }
-  const bytes = new Uint8Array([...text].map((char) => char.charCodeAt(0) & 0xff));
+  const bytes = bytesOf(text);
   return length == null ? bytes : bytes.subarray(0, length);
 }
 
@@ -59,8 +59,10 @@ function canonicalHeader(header, mode) {
   return header.raw;
 }
 
+// The text was decoded as latin1, so each character is one byte. Never spread
+// it into an array: a 25 MB email would become 25 million array slots.
 function bytesOf(text) {
-  return new Uint8Array([...text].map((char) => char.charCodeAt(0) & 0xff));
+  return Buffer.from(text, 'latin1');
 }
 
 function decodeBase64(value) {
