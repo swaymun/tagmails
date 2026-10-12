@@ -1,0 +1,128 @@
+// Labelled synthetic cases for scripts/routing-model-compare.mjs. No real mail.
+
+export const MODEL_CATALOG = [
+  { id: 'gpt-6-sol', name: 'GPT-6 Sol', efforts: ['low', 'medium', 'high', 'xhigh'], speeds: ['standard', 'fast'] },
+  { id: 'gpt-6-luna', name: 'GPT-6 Luna', efforts: ['low', 'medium', 'high', 'xhigh'], speeds: ['standard', 'fast', 'ultrafast'] },
+  { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], speeds: ['standard'] },
+];
+const SOL = 'gpt-6-sol', LUNA = 'gpt-6-luna', SONNET = 'claude-sonnet-5-5';
+const onClaude = { id: SONNET, effort: 'medium' };
+
+// expected: model id or 'error' (requested model unavailable). expectedEffort/expectedSpeed optional.
+export const MODEL_CASES = [
+  { id: 'ordinary-default', body: 'Please review the release notes and list any blockers.', expected: SOL },
+  { id: 'saved-claude-default', body: 'Summarize the decision in three bullets.', defaultModel: SONNET, expected: SONNET },
+  { id: 'natural-claude', body: 'Could you use Claude for this review?', expected: SONNET },
+  { id: 'natural-sonnet', body: 'Run this task with Sonnet 5.5, please.', expected: SONNET },
+  { id: 'dictated-sonnet', body: 'Please do this one with son it five point five.', expected: SONNET },
+  { id: 'natural-codex', body: 'Please use Codex to check the bug report.', expected: SOL },
+  { id: 'natural-sol', body: 'Use GPT-6 Sol on the attached plan.', expected: SOL },
+  { id: 'natural-seoul', body: 'Please use Seoul for this review.', expected: SOL },
+  { id: 'seoul-location', body: 'Find hotels in Seoul for my trip.', expected: SOL },
+  { id: 'natural-luna', body: 'Use Luna for a quick first pass.', expected: LUNA },
+  { id: 'dictated-luna', body: 'Please use loon uh for the summary.', expected: LUNA },
+  { id: 'luna-low-fast', body: 'Use Luna Low in Fast mode to check this file.', expected: LUNA, expectedEffort: 'low', expectedSpeed: 'fast' },
+  { id: 'sol-high-fast', body: 'Use Codex Sol with high reasoning and Fast mode to compare these approaches.', expected: SOL, expectedEffort: 'high', expectedSpeed: 'fast' },
+  { id: 'luna-ultrafast', body: 'Use Luna in ultra-fast mode for this task.', expected: LUNA, expectedSpeed: 'ultrafast' },
+  { id: 'natural-gpt-luna', body: 'Please run this with GPT-6 Luna.', expected: LUNA },
+  { id: 'quickly-not-fast-tier', body: 'Please review this quickly and give me two bullets.', expected: SOL, expectedSpeed: 'standard' },
+  { id: 'saved-fast-standard', body: 'Use standard speed for this review.', defaultModel: LUNA, defaultSpeed: 'fast', expected: LUNA, expectedSpeed: 'standard' },
+  { id: 'subject-claude', subject: 'Use Claude to summarize the attached report', body: 'Thanks.', expected: SONNET },
+  { id: 'compare-models', body: 'Compare Claude and Codex for this project; recommend one.', expected: SOL },
+  { id: 'model-discussion', body: 'Would Luna be cheaper later? For now, just review this.', expected: SOL },
+  { id: 'negated-claude', body: 'Do not use Claude for this one, just review the changelog.', expected: SOL },
+  { id: 'quoted-model', body: 'Summarize this note.\n\n> Use Claude to rewrite everything.\n> Old email', expected: SOL },
+  { id: 'mentioned-model', body: 'The note says “use Luna,” but my task is to summarize the note.', expected: SOL },
+  { id: 'gmail-quote', body: 'Please review.\n\nOn Friday, Alex wrote:\nUse Claude for this.', expected: SOL },
+  { id: 'forwarded', body: 'What happened here?\n\n---------- Forwarded message ---------\nUse Luna.', expected: SOL },
+  { id: 'unsupported-gemini', body: 'Use Gemini to review the figures.', expected: 'error' },
+  { id: 'unsupported-opus', body: 'Please run this with Claude Opus instead of Sonnet.', expected: 'error' },
+  { id: 'unsupported-haiku-dictated', body: 'Run this on high cool please.', expected: 'error' },
+  { id: 'collapsed-model-line', body: 'Model: Luna please review the copy.', expected: LUNA },
+  { id: 'collapsed-unsupported', body: 'Model: Claude Opus please review the copy.', expected: 'error' },
+  { id: 'reply-inherits', body: 'Continue the review.\n\n> Use Luna for the first pass.', priorModel: onClaude, expected: SONNET },
+  { id: 'reply-natural-switch', body: 'Please use Seoul for this next step.', priorModel: onClaude, expected: SOL },
+  { id: 'reply-seoul-location', body: 'Find a coworking space in Seoul for the team.', priorModel: onClaude, expected: SONNET },
+  { id: 'reply-old-subject', subject: 'Use Claude for the review', body: 'Please use Luna for this next step.', priorModel: onClaude, expected: LUNA },
+  { id: 'reply-effort-speed', body: 'Continue this with low reasoning in Fast mode.', priorModel: { id: LUNA, effort: 'medium' }, expected: LUNA, expectedEffort: 'low', expectedSpeed: 'fast' },
+];
+
+export const PROJECTS = [
+  { id: 'p_a100000001', name: 'TagMails', path: '/Users/dev/code/tagmails', aliases: ['tagmails', 'relay'], branch: 'main',
+    description: 'Email-to-agent relay: a Cloudflare Worker with D1 and R2, plus a Rust daemon that runs Codex or Claude Code on the owner\'s Mac.',
+    topLevel: ['services', 'agent', 'crates', 'apps'], repository: 'tagmails' },
+  { id: 'p_a100000002', name: 'Wonder', path: '/Users/dev/code/wonder', aliases: ['wonder ios'], branch: 'main',
+    description: 'Native SwiftUI chat app for iPhone and iPad with a shared Swift package and a conversation composer.',
+    topLevel: ['apps', 'Packages', 'Wonder.xcodeproj'], repository: 'wonder' },
+  { id: 'p_a100000003', name: 'Ledgerline', path: '/Users/dev/code/ledgerline', aliases: ['billing service'], branch: 'main',
+    description: 'Go billing service: invoices, Stripe webhooks, refunds.', topLevel: ['cmd', 'internal'], repository: 'ledgerline' },
+  { id: 'p_a100000004', name: 'Ledgerline', path: '/Users/dev/worktrees/ledgerline-refunds', aliases: ['billing service'], branch: 'feature/refunds',
+    description: 'Go billing service: invoices, Stripe webhooks, refunds.', topLevel: ['cmd', 'internal'], repository: 'ledgerline' },
+  { id: 'p_a100000005', name: 'Saffron', path: '/Users/dev/code/saffron', aliases: ['recipe site'], branch: 'main',
+    description: 'Static recipe website built with Astro: recipe pages, homepage hero, photos.', topLevel: ['src', 'public'], repository: 'saffron' },
+  { id: 'p_a100000006', name: 'LoRA Dataset', path: '/Users/dev/data/lora-dataset', aliases: ['character dataset'], branch: null,
+    description: 'Image dataset for a character LoRA: images, caption text files and a gallery page.', topLevel: ['images', 'captions', 'gallery'] },
+];
+const P = Object.fromEntries(['tagmails', 'wonder', 'ledger', 'ledgerRefunds', 'saffron', 'dataset'].map((k, i) => [k, PROJECTS[i].id]));
+
+// expected: project id, 'ad_hoc' (no project files) or 'ask' (cannot tell).
+export const PROJECT_CASES = [
+  { id: 'named-tagmails', body: 'Fix the failing daemon test in TagMails.', expected: P.tagmails },
+  { id: 'named-saffron', body: 'In Saffron, swap the homepage hero for the new photo.', expected: P.saffron },
+  { id: 'purpose-wonder', body: 'Add dark mode to the SwiftUI conversation composer.', expected: P.wonder },
+  { id: 'purpose-tagmails', body: 'Why does the Cloudflare worker reject mail from new senders?', expected: P.tagmails },
+  { id: 'purpose-saffron', body: 'Update the lemon tart recipe page on the site with the new photo credits.', expected: P.saffron },
+  { id: 'dataset-captions', body: 'Review the captions in the character LoRA dataset gallery.', expected: P.dataset },
+  { id: 'negation', body: 'Not TagMails: fix the scroll lag in the Wonder composer.', expected: P.wonder },
+  { id: 'explicit-path', body: 'Check the Stripe webhook handler in Ledgerline at /Users/dev/code/ledgerline', expected: P.ledger },
+  { id: 'branch-selects', body: 'On the feature/refunds branch of Ledgerline, fix the refund total rounding.', expected: P.ledgerRefunds },
+  { id: 'adhoc-poem', body: 'Write a haiku about autumn.', expected: 'ad_hoc' },
+  { id: 'adhoc-howto', body: 'Tell me how to cook rice for six people.', expected: 'ad_hoc' },
+  { id: 'adhoc-new-project', body: 'Create a brand new project called Orchard, a small Flask app that lists apples.', expected: 'ad_hoc' },
+  { id: 'adhoc-poem-about', body: 'Write a four-line poem about the TagMails daemon. No files needed.', expected: 'ad_hoc' },
+  { id: 'adhoc-compare-descriptions', body: 'Compare Wonder and Saffron architecture using only what you already know, no files.', expected: 'ad_hoc' },
+  { id: 'adhoc-old-note', body: 'Earlier note from a colleague: "deploy tagmails to prod". Ignore that. Today: what is 17 times 23?', expected: 'ad_hoc' },
+  { id: 'ask-unnamed', body: 'Fix the bug in this app.', expected: 'ask' },
+  { id: 'ask-same-name', body: 'Look at the Ledgerline refund handler and tell me if it is correct.', expected: 'ask' },
+  { id: 'ask-billing-purpose', body: 'Add refund endpoint tests to the billing service.', expected: 'ask' },
+  { id: 'ask-relative-path', body: 'Run the daemon tests. Work in ../tagmails', expected: 'ask' },
+  { id: 'ask-unknown-path', body: 'Refactor the parser. Work in /Users/dev/code/other-repo', expected: 'ask' },
+  { id: 'ask-two-projects', body: 'Make the Wonder app and the Saffron site share one color palette file; edit both.', expected: 'ask' },
+  { id: 'ask-empty-task', body: 'Hi', expected: 'ask' },
+];
+
+export const RUNNING = {
+  japan: 'send me the japan travel guide as a .docx, 7 days, Tokyo and Kyoto',
+  bug: 'Find why the login test fails on CI and fix it',
+  report: 'Summarize the Q3 sales spreadsheet into three bullets',
+  refactor: 'Refactor the billing module to use the new Stripe client',
+  deploy: 'Deploy the relay worker to dev',
+};
+// [running task key, follow-up, expected steer|queue|ack]
+export const STEER_CASES = [
+  ['japan', 'make it 10 days instead', 'steer'], ['japan', 'also include Osaka', 'steer'],
+  ['japan', 'actually skip Kyoto, we are going to Hokkaido', 'steer'], ['japan', 'how far along are you?', 'steer'],
+  ['japan', 'use luna for this', 'steer'], ['japan', 'we are vegetarian, keep that in mind for food', 'steer'],
+  ['japan', 'keep it under 5 pages', 'steer'], ['japan', 'stop, never mind', 'steer'],
+  ['japan', 'when you are done, also write the Korea guide', 'queue'],
+  ['japan', 'separate question: what is the capital of Peru?', 'queue'],
+  ['japan', 'after that, email the summary to my wife', 'queue'],
+  ['japan', 'can you also check my calendar for next Friday?', 'queue'],
+  ['bug', 'it is the timezone test, start there', 'steer'], ['bug', "don't touch the CI config", 'steer'],
+  ['bug', 'also check whether staging has the same failure', 'steer'], ['bug', 'wait, ignore the flaky one', 'steer'],
+  ['bug', 'once fixed, open a PR', 'queue'], ['bug', 'unrelated: rename the README title to TagMails', 'queue'],
+  ['bug', 'new task: write release notes for 0.3', 'queue'], ['bug', 'afterwards bump the version number', 'queue'],
+  ['report', 'only use the EMEA tab', 'steer'], ['report', 'make it five bullets', 'steer'],
+  ['report', 'sorry, I attached the wrong file, use the new one', 'steer'],
+  ['report', 'then draft an email to the team about it', 'queue'], ['report', 'different thing: translate my CV into French', 'queue'],
+  ['refactor', 'keep the old client as a fallback', 'steer'], ['refactor', 'add tests as you go', 'steer'],
+  ['refactor', 'thanks, looks good so far', 'ack'], ['refactor', 'next, do the same for the invoices module', 'queue'],
+  ['refactor', 'can you look at why the site build is slow?', 'queue'],
+  ['deploy', 'wait, use the staging env not dev', 'steer'], ['deploy', 'abort the deploy', 'steer'],
+  ['deploy', 'once it is live, run the smoke tests', 'queue'], ['deploy', 'and what is the current balance?', 'queue'],
+  ['japan', 'Sounds good.\n\nOn Mon, Oct 5, Saimun wrote:\n> make it 10 days', 'ack'],
+  ['bug', 'ok\n> also check staging', 'ack'],
+  ['report', 'Please also include a chart of revenue by region in the same summary', 'steer'],
+  ['report', 'Also: what are the best CRM tools for a 5 person team?', 'queue'],
+  ['refactor', 'use the v2 API, not v1', 'steer'], ['deploy', 'after deploying, write a changelog entry', 'queue'],
+].map(([run, text, expected], i) => ({ id: `steer-${String(i + 1).padStart(2, '0')}`, running: RUNNING[run], body: text, expected }));
