@@ -8,27 +8,40 @@ export function welcomeEmail({ env, ownerEmail, deviceName: rawName, siteOrigin 
   const deviceName = String(rawName).replace(/[\\`*_[\]()<>#!|~]/g, '').trim() || 'Your computer';
   const cents = emailPriceMillicents(env) / 1000;
   const price = `$${(cents / 100).toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
+  // $10 is 1,000 cents.
+  const replies = Math.floor(1000 / cents);
   const answer = [
-    `**${deviceName} is set up.** Email this address from ${ownerEmail} and your agent on that computer does the work; the answer comes back in the same thread. Reply to this email to try it.`,
+    'Hi there,',
     '',
-    ...(siteOrigin ? [`**Add a balance first:** emails wait until your balance covers them. Each reply costs ${price}, so $10 lasts a long time. [Top up your balance](${siteOrigin}/#billing)`, ''] : []),
-    '**Things to try**',
-    '- Ask about a project by name: "In tagmails, why does the footer wrap?" TagMails picks the folder.',
-    '- Choose a model or effort in plain words: "use Opus, high effort".',
-    '- Reply while it works to steer it: "also update the tests".',
-    '- Ask for a file: small ones (up to 3.5 MB in total) come attached.',
+    `Thanks for choosing TagMails! **${deviceName}** is connected. From now on, email this address from ${ownerEmail} and your agent on that computer will do the work and reply right here, in the same thread.`,
     '',
-    '**Settings you can change by email**',
-    '- "Make Sol my default" changes your default model.',
-    '- "From now on, put big files in my Google Drive" saves standing instructions. Replies say whenever they change.',
-    '- "Turn on reactions" adds 👀 and ✅ to your emails (off by default).',
+    siteOrigin
+      ? `**First, add a balance.** Emails wait until your balance covers them. Each reply is ${price}, so $10 covers about ${replies.toLocaleString('en-US')} replies. [Top up your balance](${siteOrigin}/#billing)`
+      : `**First, add a balance.** Emails wait until your balance covers them. Each reply is ${price}.`,
     '',
-    `**On the computer:** \`tagmails status\`, \`tagmails doctor\` (checks the setup and prints fixes), \`tagmails logs\`. Permissions and folders change only with \`tagmails start\` there.`,
+    '**Try it now:** reply to this email with something you\'d like done, for example "What changed in my projects this week?"',
     '',
-    siteOrigin ? 'This email is free.' : `Each reply costs ${price}. This email is free.`,
+    '**Things you can ask for**',
+    '- Work in a project by naming it: "In tagmails, why does the footer wrap?"',
+    '- Pick a model or effort in plain words: "Use Opus with high effort."',
+    '- Steer a run while it works by replying: "Also update the tests."',
+    '- Ask for a file. Small ones (up to 3.5 MB in total) come attached.',
+    '',
+    '**Change settings by email**',
+    '- "Make Sol my default" sets your default model.',
+    '- "From now on, put big files in my Google Drive" saves a standing instruction. Replies mention it whenever your instructions change.',
+    '- "Turn on reactions" adds 👀 and ✅ to your emails. They\'re off by default.',
+    '',
+    '**On your computer**',
+    '- `tagmails doctor` checks your setup and suggests fixes.',
+    '- `tagmails status` and `tagmails logs` show what\'s running.',
+    '- Permissions and folders change only with `tagmails start`.',
+    '',
+    'Happy emailing,',
+    'TagMails',
   ].join('\n');
   const { html, text } = renderResult({ state: 'completed', answer, brandUrl: siteOrigin });
-  return { subject: `TagMails is set up on ${deviceName}`, html, text };
+  return { subject: `Welcome to TagMails: ${deviceName} is ready`, html, text };
 }
 
 // Best effort: pairing never fails because this email couldn't be sent.

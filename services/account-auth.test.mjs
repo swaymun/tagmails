@@ -167,12 +167,14 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   const owner = sqlite.prepare('SELECT a.owner_email, a.agent_email FROM accounts a JOIN devices d ON d.account_id = a.id WHERE d.id = ?').get(deviceId);
   assert.deepEqual(welcome[0].to, [owner.owner_email]);
   assert.equal(welcome[0].from, owner.agent_email);
-  assert.equal(welcome[0].subject, 'TagMails is set up on Saimun Mac');
-  assert.match(welcome[0].text, /Reply to this email to try it/);
+  assert.equal(welcome[0].subject, 'Welcome to TagMails: Saimun Mac is ready');
+  assert.match(welcome[0].text, /^Hi there,/);
+  assert.match(welcome[0].text, /Try it now:/);
+  assert.doesNotMatch(welcome[0].text, /This email is free/);
   assert.match(welcome[0].text, /tagmails doctor/);
   assert.match(welcome[0].html, /Turn on reactions/);
   // It asks for a balance up front, since unfunded emails wait.
-  assert.match(welcome[0].text, /Add a balance first/);
+  assert.match(welcome[0].text, /First, add a balance\..*Each reply is \$0\.05, so \$10 covers about 200 replies/);
   // The computer names itself: a name can't carry a header break, or turn into a link in the welcome.
   assert.equal(welcomeEmail({ env, ownerEmail: 'o@gmail.com', deviceName: '[Verify your account](https://evil.test)' }).html.includes('href="https://evil.test'), false);
   // The computer's sealing key comes with the pairing (0.2.24+).
