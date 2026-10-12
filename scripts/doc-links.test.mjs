@@ -9,8 +9,11 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const tracked = execFileSync('git', ['ls-files', '*.md'], { cwd: root, encoding: 'utf8' }).split('\n')
-  .filter((file) => file && !file.startsWith('site/') && fs.existsSync(path.join(root, file)));
+// A link must point at a tracked file (or a folder holding one): an ignored local file would pass on
+// the author's machine and 404 on GitHub.
+const files = execFileSync('git', ['ls-files'], { cwd: root, encoding: 'utf8' }).split('\n').filter(Boolean);
+const inRepo = (relative) => files.some((file) => file === relative || file.startsWith(`${relative}/`));
+const tracked = files.filter((file) => file.endsWith('.md') && !file.startsWith('site/') && fs.existsSync(path.join(root, file)));
 
 // GitHub's heading anchors: lowercase, punctuation dropped, spaces to hyphens.
 const slug = (heading) => heading.trim().toLowerCase().replace(/[^\p{L}\p{N} _-]/gu, '').replace(/ /g, '-');
@@ -26,7 +29,7 @@ test('relative links in Markdown docs resolve', () => {
       if (/^(https?:|mailto:)/.test(target)) continue;
       const [link, anchor] = target.split('#');
       const resolved = link ? path.resolve(path.dirname(path.join(root, file)), link) : path.join(root, file);
-      if (!fs.existsSync(resolved)) broken.push(`${file}: ${target}`);
+      if (!inRepo(path.relative(root, resolved))) broken.push(`${file}: ${target}`);
       else if (anchor && resolved.endsWith('.md') && !anchors(resolved).has(anchor)) broken.push(`${file}: ${target} (no such heading)`);
     }
   }

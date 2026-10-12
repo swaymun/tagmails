@@ -9,7 +9,7 @@ Setting this up with a coding agent? Give it [setup-for-agents.md](setup-for-age
 - Node.js 22+ and this repo: `npm ci` installs Wrangler.
 - A Cloudflare account, logged in with `npx wrangler login` (or `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` exported).
 - A domain for agent addresses (`name@AGENT_DOMAIN`). Pick one mail path:
-  - **Cloudflare (default):** the domain is a zone in your Cloudflare account and nothing else receives mail there, because Email Routing takes over its MX records. Replies go out through Cloudflare Email Sending, which needs the Workers Paid plan. No third party sees message bodies.
+  - **Cloudflare (default):** the domain is a zone in your Cloudflare account and nothing else receives mail there, because Email Routing takes over its MX records. Replies go out through Cloudflare Email Sending, which needs the Workers Paid plan. Mail passes only through Cloudflare.
   - **Resend:** the domain is verified in Resend for receiving and sending. Works on the Workers free plan; Resend keeps message bodies.
 - Your personal `@gmail.com` address. Sign-in accepts personal Gmail accounts only.
 - A Google Cloud OAuth client of type **Web application**. You can create it after the first deploy, once you know the Worker URL. If its consent screen is in testing mode, add your Gmail as a test user. Sign-in asks for identity only, no Gmail scopes.
@@ -74,7 +74,7 @@ Secrets live in `.env.selfhost`; the script uploads them on every deploy. You ca
 | `PUBLIC_ORIGIN` | yes | The Worker origin, no path. Used for run links in replies. |
 | `PILOT_OWNER_EMAIL` | yes | Your Gmail. Anyone else is refused at sign-in. |
 | `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET` | Resend path only | API key with sending and receiving access; the webhook's signing secret. |
-| `STORAGE_KEY` | recommended (the script sets it) | 32 random bytes, base64. Seals stored mail, results and files with AES-256-GCM. Set it before the first mail and never change it. |
+| `STORAGE_KEY` | recommended (the script sets it) | 32 random bytes, base64. Encrypts (AES-256-GCM) what the relay keeps under its own key: its own replies, held requests and your computer's project list. Mail and results for paired computers are sealed to the computer's key either way. Set it before the first mail and never change it. |
 
 Variables (put them under `vars` in `wrangler.selfhost.jsonc`): `CLAUDE_ROUTE_ENABLED=true` (the script sets it; without it Claude model requests get a clarification), `STATUS_REACTIONS_ENABLED=true` (Gmail status reactions), `ADDRESS_DOMAIN` (lets you choose `name@domain`), `PILOT_CODEX_MODEL`, `RESEND_TEST_FROM=onboarding@resend.dev` (replies before your Resend domain verifies). The rest (`SITE_*`, `GOOGLE_CLIENT_SECRET`, `BILLING_*`, `STRIPE_*`, `PUBLIC_SIGNUP_ENABLED`) are for the hosted service; leave them unset.
 
@@ -97,6 +97,6 @@ Bindings the config defines: D1 `DB`, R2 `MAIL`, Durable Object `DEVICE_PUSH` (w
 
 ## Before relying on it
 
-- This configuration is covered by local tests (duplicate mail, account isolation, participant authorization, run links without the website) but has not been run end to end in a fresh Cloudflare account. Start with your own Gmail and a disposable folder (`tagmails start --access read --workspace ~/tagmails-scratch`).
-- Without `STORAGE_KEY`, raw mail and results sit in R2 in plaintext. See [email-privacy.md](email-privacy.md) for what the relay keeps.
+- This configuration is covered by local tests (duplicate mail, account isolation, participant authorization, run links without the website) but has not been run end to end in a fresh Cloudflare account. Start with your own Gmail and a disposable folder (`tagmails start --access read --claude-permission manual --workspace ~/tagmails-scratch`).
+- Without `STORAGE_KEY`, the relay's own replies and your project list sit in R2 and D1 in plaintext; mail for paired computers is still sealed to their keys. See [email-privacy.md](email-privacy.md) for what the relay keeps.
 - Provider costs (Cloudflare, Resend, your Codex or Claude plan) are yours.

@@ -9,13 +9,13 @@ At `tagmails pair` (or the first `tagmails start` of an older pairing) your comp
 The operator, or anyone holding the Cloudflare account, the Worker's `STORAGE_KEY` and the D1/R2 data, can't read:
 
 - The email: subject, body and attachments. The raw MIME is not stored; a parsed copy and one object per attachment are sealed instead.
-- Thread subjects.
+- Thread subjects. These are kept with the thread and don't expire.
 - The agent's result: answer, summary, details, checks, transcript and usage.
-- Files the agent attaches. They travel with the completion request and are never stored.
+- Files the agent attaches. They travel with the completion request and are not stored, except inside a sealed reply that is waiting its turn (next item).
 - A reply that has to wait for an earlier one in its thread. It is held sealed to the computer, which opens it and hands it back when its turn comes, only for the job it names and only within 7 days.
 - Earlier requests the relay answered itself, and follow-ups sent during a run, as they are passed to the computer.
 
-Each sealed request names its job, thread and Message-ID, and the SHA-256 of each attachment. The computer opens a claim only if the request is that job's own, and never reruns a job it already ran, so someone with write access to storage can't replay old sealed mail into a new job to read it back.
+Each sealed request names its job, thread and Message-ID, and the SHA-256 of each attachment. The computer opens a claim only if the request is that job's own, and refuses jobs it has recently run (it remembers the last 5,000), so someone with write access to storage can't easily replay old sealed mail into a new job to read it back.
 
 When no paired computer has a key (none paired yet, or all revoked), an email is read in memory, answered with "no computer is connected, send it again", and not stored.
 

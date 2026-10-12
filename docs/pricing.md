@@ -7,7 +7,7 @@ The agent itself runs on your own computer with your own Codex or Claude plan, s
 ## What is charged
 
 - Each email that Tagmails accepts and answers is charged once, when the reply goes out. That includes failed runs, runs waiting for approval, and questions Tagmails sends back (which project, an unavailable model, a revoked computer).
-- A question back is still sent when your balance can't cover it, up to five a day, so you're never left without an answer.
+- A question back is still sent free when your balance can't cover it, up to five a day. After that it only appears on the run page on the website.
 - A run whose computer stops responding three times is failed with a reply, charged like any other.
 
 ## What is free

@@ -15,7 +15,7 @@ Ask about a project by name. The agent works in that folder on your computer and
 
 <img src="assets/readme/ask.png" alt="A Gmail thread: Maya asks why the login page in my-app flashes white, and her agent replies two minutes later with the cause and a proposed fix." width="760">
 
-Changed your mind while it's working? Just reply. The follow-up joins the run that's already going.
+Changed your mind while it's working? Just reply. A correction joins the run that's already going; a new request waits its turn.
 
 <img src="assets/readme/steer.png" alt="A Gmail thread: Maya asks for rate limiting on /login, then two minutes later replies to make it 10 per minute and cover /signup too. The agent's reply covers both." width="760">
 
@@ -37,7 +37,7 @@ Prefer to skip the website? Tell Codex or Claude Code: "Read https://tagmails.co
 <summary>Or set it up by hand</summary>
 
 ```sh
-brew install swaymun/tagmails/tagmails             # or: curl -fsSL https://tagmails.com/install.sh | sh  (needs Node.js 20.16+)
+brew install swaymun/tagmails/tagmails             # or: curl -fsSL https://tagmails.com/install.sh | sh  (needs Node.js 20.16+ or 22.3+)
 tagmails pair                                      # prints a link; open it and continue with Google
 tagmails start --projects                          # runs in the background, picks a project folder per email
 tagmails doctor                                    # checks the setup and prints a fix for each problem
@@ -53,7 +53,7 @@ tagmails doctor                                    # checks the setup and prints
 2. The Tagmails relay checks that it really came from you (Gmail's signature has to match), seals it so only your computer can read the stored copy, and hands it to your computer.
 3. Your computer picks the model and the project folder. Name a project ("in my-app …") or a path ("work in ~/code/api"); if nothing fits, the agent works in a fresh chat folder.
 4. Codex or Claude Code runs right there, with your files, your tools and your own plan. Your Codex or Claude sessions stay on your computer, so you can open the same session later (`tagmails open`).
-5. The answer comes back in the same Gmail thread, with any files you asked for (up to 3.5 MB in total). Reply to continue the same session.
+5. The answer comes back in the same Gmail thread. Files you asked for come attached (up to five, 3.5 MB in total, common document and image types) when the thread is just you and the agent. Reply to continue the same session.
 
 If your computer is asleep, the email waits until it's back. Up to three emails run at once, one per project folder.
 
@@ -61,7 +61,7 @@ More detail: [project routing](docs/project-routing.md).
 
 ## Pricing
 
-**$0.0025 per email you send** (a quarter of a cent; $1 covers 400 emails), from a prepaid balance. The agent runs on your own Codex or Claude plan, so Tagmails never charges for model usage. Follow-ups that join a running task are free. Details: [docs/pricing.md](docs/pricing.md).
+**$0.0025 per email you send** (a quarter of a cent; $1 covers 400 emails), from a prepaid balance. The agent runs on your own Codex or Claude plan, so Tagmails never charges for model usage. Corrections that join a running task are free. Details: [docs/pricing.md](docs/pricing.md).
 
 ## Privacy
 
@@ -74,22 +74,25 @@ Exactly what is and isn't visible: [docs/email-privacy.md](docs/email-privacy.md
 
 ## Permissions
 
-What the agent may do is set on your computer, never by email or the website. The defaults for your own emails:
+What the agent may do is set on your computer with `tagmails start`. Tagmails itself never changes these from an email or the website. The defaults for your own emails:
 
-- **Codex** can edit files in the project folder, read elsewhere, and use the network (so `git push` works). Anything beyond that goes to Codex's automatic reviewer, since nobody can click "approve" in an email.
-- **Claude Code** runs in its `auto` mode, like it does in your terminal.
+- **Codex** can edit files in the project folder, read anywhere on your computer, and use the network (so `git push` works). Anything beyond that goes to Codex's automatic reviewer, since nobody can click "approve" in an email.
+- **Claude Code** runs in its `auto` mode without its OS sandbox, much like it does in your terminal: it can run commands and change files, and Claude Code's own safety checks decide what's too risky.
 
-Change them with `tagmails start`:
+So treat the agent like someone with your terminal open. If that's too much, tighten it:
 
 | Option | What it does |
 | --- | --- |
-| `--access read` | Look but don't touch: no edits. |
-| `--access write` | The default described above. |
-| `--access full` | No sandbox. Only your own emails can use it. |
-| `--claude-permission manual\|accept-edits\|auto\|bypass` | Claude Code's mode (default `auto`; `bypass` is for your own emails only). |
+| `--access read` | Codex only: look, don't touch. |
+| `--access write` | Codex default, described above. |
+| `--access full` | Codex with no sandbox at all. Only your own emails get it. |
+| `--claude-permission manual` | Claude Code only: anything that would ask for approval is declined, so in practice it can read but not edit or run commands. |
+| `--claude-permission accept-edits\|auto\|bypass` | Claude Code may edit files / runs in `auto` (default) / skips all checks (your own emails only). |
 | `--projects` / `--workspace PATH` | Pick a recent project folder for each email (default), or always use one folder. |
 
-**Other people in the thread.** Anyone you put in To or Cc can reply in that thread and ask the agent things too. Their requests run with tighter limits: no network, no shell for Claude, none of your connectors or skills, and they never see your balance.
+For a read-only setup with both agents: `tagmails start --access read --claude-permission manual`.
+
+**Other people in the thread.** Anyone you put in To or Cc can reply in that thread and ask the agent things too. With the default settings they can ask for edits in the thread's project folder, so only copy people you'd let do that. Their requests run with tighter limits: no network, no shell for Claude, none of your connectors or skills, no attached files, and they never see your balance. Only your own follow-ups can join a run that's already going.
 
 ## Settings by email
 
