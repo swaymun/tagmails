@@ -806,13 +806,18 @@ test('archives, large, expired, and different-job files are never attached to an
     (id, account_id, job_id, lease_id, object_key, name, mime_type, byte_size, expires_at)
     VALUES (?, 'account-1', ?, 'lease-1', ?, ?, 'text/plain', ?, ?)`)
     .run(id, job, `files/${id}`, name, size, expiry);
-  await env.MAIL.put('results/1.json', JSON.stringify({ state: 'completed', summary: 'Files ready.', artifactIds: rows.map(([id]) => id) }));
+  await env.MAIL.put('results/1.json', JSON.stringify({ state: 'completed', summary: 'Files ready.', artifactIds: rows.map(([id]) => id),
+    instructionsNotice: 'Your TagMails instructions changed during this run. They now read: "Use my Drive."' }));
   let sent;
   assert.equal((await sendNextOutbox(env, { sendEmail: async (payload) => { sent = payload; return { data: { id: 'large-1' } }; },
     getSentEmail: async () => ({ data: { message_id: '<large-1@tagmails.test>' } }) })).state, 'sent');
   assert.equal(sent.attachments, undefined);
   // TagMails links no hosted downloads; it names what didn't fit.
   assert.match(sent.text, /Not sent: scripts\.zip, file\.txt\. Email fits 3\.5 MB of files/);
+  // Both notices show in the HTML Gmail renders, even beside the transcript link that folds checks away.
+  assert.match(sent.html, /Transcript/);
+  assert.match(sent.html, /Not sent: scripts\.zip, file\.txt/);
+  assert.match(sent.html, /instructions changed during this run/);
   assert.doesNotMatch(sent.text, /Download/);
   assert.match(sent.text, /Transcript/);
 });

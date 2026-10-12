@@ -59,13 +59,18 @@ export function renderResult(result) {
   const bodyNotes = [...(result.checks ?? []), ...(note && result.state === 'completed' ? [note] : [])];
   const showNotes = bodyNotes.length && (result.preview || !safeLinks.length);
   const noticeStyle = 'margin:0 0 12px;color:#7a5a2c;font-size:14px';
+  // Notices the reader must see (a file that wasn't sent, changed instructions)
+  // always show; checks fold away behind the transcript link.
+  const notices = (result.notices ?? []).filter((item) => typeof item === 'string' && item.trim());
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head><body style="margin:0;padding:0"><div style="font:15px/1.55 ${FONT};color:#1d2420;max-width:640px;word-wrap:break-word">${
     result.preview ? `<p style="${noticeStyle}">Synthetic preview</p>` : ''}${renderMarkdown(answer)}${
     note && result.state !== 'completed' ? `<p style="${noticeStyle}">${escapeHtml(note)}</p>` : ''}${
+    notices.map((item) => `<p style="${noticeStyle}">${escapeHtml(item)}</p>`).join('')}${
     showNotes ? `<p style="${noticeStyle}">${escapeHtml(bodyNotes.join(' '))}</p>` : ''}${
     footerHtml ? `<footer style="margin-top:22px;padding-top:9px;border-top:1px solid #e6e8e4;color:#6f7a73;font-size:12px;line-height:1.8">${footerHtml}</footer>` : ''}</div></body></html>`;
   const text = [...(result.preview ? ['Synthetic preview', ''] : []), answer,
     ...(note && result.state !== 'completed' ? ['', note] : []),
+    ...(notices.length ? ['', ...notices] : []),
     ...(bodyNotes.length ? ['', ...bodyNotes] : []), '', '—',
     [...safeLinks.map(({ label, url }) => `${label}: ${url}`), status, ...(result.meta ?? []),
       brandUrl ? `TagMails: ${brandUrl}` : null]

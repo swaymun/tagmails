@@ -44,3 +44,10 @@ export async function updateStore(file, change, label = 'session') {
     return store;
   });
 }
+
+// Owner and participant turns on one email thread never share an agent
+// session: the owner's history holds their instructions and tool results, and a
+// participant's text must not ride into an owner turn with owner access.
+export function sessionKey(claim) {
+  return `${claim.threadId}:${claim.request?.fromOwner === true ? 'owner' : 'guest'}`;
+}

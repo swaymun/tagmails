@@ -270,9 +270,11 @@ async function prepare(env, row) {
   const attachedNames = new Set(attachments.map((file) => file.filename));
   const leftOut = [...files.filter((file) => !attachedNames.has(file.name)).map((file) => file.name),
     ...(ownerOnly && Array.isArray(result.unsentFiles) ? result.unsentFiles.map((file) => file.name) : [])];
-  if (leftOut.length) {
-    result.checks = [...(result.checks ?? []), `Not sent: ${leftOut.join(', ')}. Email fits 3.5 MB of files; ask the agent to put larger ones in your own storage, such as Google Drive.`];
-  }
+  const notices = [
+    ...(leftOut.length ? [`Not sent: ${leftOut.join(', ')}. Email fits 3.5 MB of files; ask the agent to put larger ones in your own storage, such as Google Drive.`] : []),
+    // Owner instructions changed during this run (only owner runs report it).
+    ...(ownerOnly && typeof result.instructionsNotice === 'string' ? [result.instructionsNotice] : []),
+  ];
   const balance = ownerOnly && testBillingEnabled(env)
     ? await testWalletSnapshot(env, row.account_id) : null;
   const charge = balance
@@ -304,6 +306,7 @@ async function prepare(env, row) {
       ? selectedModel.split(' · ') : []), ...(projectName ? [`in ${projectName}`] : []), ...(noChargeDetail ? [noChargeDetail] : []),
       ...(balanceDetail ? [balanceDetail] : []), ...allowanceDetail],
     checks: result.checks,
+    notices,
     links: [...(transcriptUrl && result.runtime !== 'relay' && (ownerCanOpen || participantTranscriptReady)
       ? [{ label: sharedWithParticipant && !participantTranscriptReady ? `${runLinkLabel} (owner only)` : runLinkLabel,
         url: openInApp ? `${siteOrigin}/open#${session.harness}/${session.id.toLowerCase()}` : transcriptUrl }] : [])],

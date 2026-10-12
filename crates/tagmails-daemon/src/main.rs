@@ -837,10 +837,14 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
             ) {
                 eprintln!("Status reaction could not be queued: {error}");
             }
-            let instructions = owner_instructions();
+            // Only the owner's own reply may show their instructions; a
+            // participant run never reports them, even if they changed meanwhile.
+            let owner = claim["request"]["fromOwner"] == true;
+            let instructions = owner.then(owner_instructions).flatten();
             let mut result = relay_result(&claim, base, access, claude_permission, workspace)?;
-            if let Some(note) = instructions_change_note(&instructions, &owner_instructions()) {
-                push_check(&mut result, note);
+            if let Some(note) = owner.then(|| instructions_change_note(&instructions, &owner_instructions())).flatten() {
+                // Its own field, so the reply always shows it (checks can be folded away).
+                result["instructionsNotice"] = json!(note.chars().take(300).collect::<String>());
             }
             result
         }

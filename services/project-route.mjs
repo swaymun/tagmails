@@ -1,3 +1,4 @@
+import { openText } from './storage-crypto.mjs';
 // Picks the working folder for a new email from the paired machine's project
 // list with one Jev call. The prompt is the frozen "v3" candidate from the
 // October 4 synthetic benchmark (139/142 exact, 0 wrong folders); keep the
@@ -34,16 +35,17 @@ export function cleanProjectCatalog(input) {
   });
 }
 
-// The thread's own machine, or the account's most recently refreshed one.
-export async function accountProjectCatalog(db, accountId, threadId = null) {
-  const row = await db.prepare(`SELECT d.project_catalog_json FROM devices d
+// The thread's own machine, or the account's most recently refreshed one. The
+// list is sealed at rest: its recent requests quote the owner's own prompts.
+export async function accountProjectCatalog(env, accountId, threadId = null) {
+  const row = await env.DB.prepare(`SELECT d.project_catalog_json FROM devices d
     WHERE d.account_id = ? AND d.revoked_at IS NULL AND d.project_catalog_json IS NOT NULL
       AND d.project_catalog_at >= datetime('now', '-7 days')
       AND (? IS NULL OR (SELECT device_id FROM threads WHERE id = ? AND account_id = ?) IS NULL
         OR d.id = (SELECT device_id FROM threads WHERE id = ? AND account_id = ?))
     ORDER BY d.project_catalog_at DESC LIMIT 1`)
     .bind(accountId, threadId, threadId, accountId, threadId, accountId).first();
-  try { return row ? cleanProjectCatalog(JSON.parse(row.project_catalog_json)) : []; }
+  try { return row ? cleanProjectCatalog(JSON.parse(await openText(env, row.project_catalog_json))) : []; }
   catch { return []; }
 }
 

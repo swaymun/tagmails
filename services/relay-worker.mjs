@@ -296,7 +296,7 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
     ORDER BY m.rowid DESC LIMIT 1`).bind(threadId).first() : null;
   const priorWorkspace = previousWorkspace ? JSON.parse(previousWorkspace.workspace_json) : null;
   if (priorWorkspace?.pending) priorWorkspace.pending = await openText(env, priorWorkspace.pending);
-  const projects = threadUnavailable || priorWorkspace?.kind ? [] : await accountProjectCatalog(env.DB, account.id, threadId);
+  const projects = threadUnavailable || priorWorkspace?.kind ? [] : await accountProjectCatalog(env, account.id, threadId);
   const subjectLine = String(message.subject ?? '').replace(/[\r\n]+/g, ' ').slice(0, 300).trim();
   const requestText = `${subjectLine ? `Subject: ${subjectLine}\n` : ''}${currentText(message.body)}`.slice(0, 4000);
   const projectState = priorWorkspace?.pending

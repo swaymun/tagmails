@@ -19,7 +19,7 @@ const BATCH = 25;
 function holds(days) {
   return `(j.state IN ('queued', 'running') OR j.steer_state = 'pending'
     OR o.state IN ('queued', 'sending')
-    OR (o.state IN ('sent', 'blocked') AND o.updated_at > datetime('now', '-${days} days'))
+    OR (o.state IN ('sent', 'blocked', 'accepted', 'uncertain') AND o.updated_at > datetime('now', '-${days} days'))
     OR j.created_at > datetime('now', '-${days} days'))`;
 }
 

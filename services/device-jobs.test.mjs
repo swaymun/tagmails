@@ -635,4 +635,10 @@ test('a participant request the relay answered itself is not handed to a later o
   assert.equal(owner.request.fromOwner, true);
   // The owner turn may have full access and the owner's connectors.
   assert.doesNotMatch(owner.request.body, /\.ssh/);
+  // Finishing the owner's turn doesn't mark the guest's unrun request as handed over.
+  await call(env, paired.token, 'complete', { jobId: owner.jobId, leaseId: owner.leaseId,
+    result: { runtime: 'codex', state: 'completed', summary: 'Shorter.' } });
+  const guestJob = sqlite.prepare(`SELECT j.handed_to_agent_at FROM jobs j JOIN messages m ON m.id = j.message_id
+    WHERE m.message_id = ?`).get(messageId);
+  assert.equal(guestJob.handed_to_agent_at, null);
 });

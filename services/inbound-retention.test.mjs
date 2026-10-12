@@ -67,8 +67,8 @@ test('raw mail expires seven days after its job ends, with or without a reply', 
     // Deleted: no reply was sent, or the reply no longer needs the source.
     steer: [8, { steerState: 'delivered' }],
     refused: [8, { state: 'failed' }],
-    uncertain: [8, { outbox: 'uncertain', outboxDays: 0 }],
-    accepted: [8, { outbox: 'accepted', outboxDays: 0 }],
+    uncertain: [9, { outbox: 'uncertain', outboxDays: 8 }],
+    accepted: [9, { outbox: 'accepted', outboxDays: 8 }],
     askedProject: [8, { outbox: 'sent', workspace: JSON.stringify({ pending: 'sealed request' }) }],
     // Kept: recent, still in use, or finished less than seven days ago.
     recent: [6, { outbox: 'sent' }],
@@ -76,6 +76,8 @@ test('raw mail expires seven days after its job ends, with or without a reply', 
     queued: [8, { state: 'queued' }],
     unsentReply: [8, { outbox: 'queued' }],
     recentlySent: [9, { outbox: 'sent', outboxDays: 3 }],
+    // A job that arrived long ago but whose reply the provider only just accepted finished now.
+    lateFinish: [40, { outbox: 'accepted', outboxDays: 0 }],
   };
   for (const [id, [days, options]] of Object.entries(cases)) {
     addJob(sqlite, id, days, options);
@@ -83,7 +85,7 @@ test('raw mail expires seven days after its job ends, with or without a reply', 
   }
   await deleteExpiredInboundMime(env);
   const kept = Object.keys(cases).filter((id) => objects.has(`inbound/${id}.eml`));
-  assert.deepEqual(kept, ['recent', 'pendingSteer', 'queued', 'unsentReply', 'recentlySent']);
+  assert.deepEqual(kept, ['recent', 'pendingSteer', 'queued', 'unsentReply', 'recentlySent', 'lateFinish']);
   const marked = sqlite.prepare('SELECT id FROM messages WHERE raw_deleted_at IS NOT NULL ORDER BY id').all().map((row) => row.id);
   assert.deepEqual(marked, ['accepted', 'askedProject', 'refused', 'steer', 'uncertain']);
   assert.equal(sqlite.prepare('SELECT workspace_json FROM jobs WHERE id = ?').get('job-askedProject').workspace_json, null);

@@ -5,6 +5,7 @@ import { ATTACHABLE_BYTES, testBillingEnabled } from './email-charges.mjs';
 import { ARTIFACT_ID, EMAIL_SAFE_FILE, selectedRunArtifacts, uploadRunArtifact } from './run-artifacts.mjs';
 import { catalogFromDevice, deviceDefaults, deviceLimits } from './model-catalog.mjs';
 import { cleanProjectCatalog } from './project-route.mjs';
+import { sealText } from './storage-crypto.mjs';
 import { currentText } from './jev-route.mjs';
 import { openDevicePush } from './device-push.mjs';
 import { rateLimited, tooManyRequests } from './rate-limit.mjs';
@@ -275,6 +276,8 @@ function validResult(value) {
         typeof event.text === 'string' && event.text.length > 0 &&
         event.text.length <= (index === transcript.events.length - 1 && event.kind === 'assistant' &&
           event.phase !== 'commentary' ? 8000 : 800)))) &&
+    (value.instructionsNotice === undefined || (typeof value.instructionsNotice === 'string' &&
+      value.instructionsNotice.length > 0 && value.instructionsNotice.length <= 300)) &&
     // Daemon 0.2.19 may still report Drive files; they're ignored.
     (value.driveFileIds === undefined || (Array.isArray(value.driveFileIds) && value.driveFileIds.length <= 5)) &&
     (value.unsentFiles === undefined || (Array.isArray(value.unsentFiles) && value.unsentFiles.length <= 5 &&
@@ -370,8 +373,10 @@ async function complete(env, device, body) {
     statements.push(env.DB.prepare(`UPDATE jobs SET handed_to_agent_at = CURRENT_TIMESTAMP
       WHERE thread_id = (SELECT thread_id FROM jobs WHERE id = ? AND device_id = ? AND lease_id = ? AND result_hash = ? AND state = 'completed')
         AND handed_to_agent_at IS NULL AND json_type(model_json, '$.error') = 'text'
-        AND (created_at, rowid) < (SELECT created_at, rowid FROM jobs WHERE id = ?)`)
-      .bind(body.jobId, device.id, body.leaseId, resultHash, body.jobId));
+        AND (created_at, rowid) < (SELECT created_at, rowid FROM jobs WHERE id = ?)
+        AND (SELECT sender_email FROM messages WHERE id = jobs.message_id)
+          = (SELECT m.sender_email FROM jobs cj JOIN messages m ON m.id = cj.message_id WHERE cj.id = ?)`)
+      .bind(body.jobId, device.id, body.leaseId, resultHash, body.jobId, body.jobId));
   }
   // Every reply is charged whatever its outcome; the charge was reserved
   // when the email arrived.
@@ -433,7 +438,7 @@ export async function handleDeviceRequest(request, env) {
     catch { return json({ error: 'Invalid project list' }, 400); }
     await env.DB.prepare(`UPDATE devices SET project_catalog_json = ?, project_catalog_at = CURRENT_TIMESTAMP
       WHERE id = ? AND account_id = ? AND revoked_at IS NULL`)
-      .bind(projects.length ? JSON.stringify(projects) : null, device.id, device.account_id).run();
+      .bind(projects.length ? await sealText(env, JSON.stringify(projects)) : null, device.id, device.account_id).run();
     return json({ saved: true, count: projects.length });
   }
   if (url.pathname === '/api/device/renew') return renew(env, device, body);

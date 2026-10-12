@@ -4,7 +4,7 @@ import test from 'node:test';
 import { handleDeviceRequest } from './device-jobs.mjs';
 import { handleInbound } from './relay-worker.mjs';
 import { bindings } from './bindings-fixture.mjs';
-import { acceptSelection, buildProjectPrompt, cleanProjectCatalog, explicitWorkspace, routeProject } from './project-route.mjs';
+import { acceptSelection, accountProjectCatalog, buildProjectPrompt, cleanProjectCatalog, explicitWorkspace, routeProject } from './project-route.mjs';
 
 const PROJECTS = [
   { id: 'p_0000000001', name: 'TagMails', path: '/Users/me/code/tagmails', aliases: ['WonderEmail'], description: 'Email agent relay.', branch: 'main' },
@@ -167,4 +167,19 @@ test('routing uses the explicit path without calling Jev', async () => {
   assert.deepEqual(await routeProject('Work in /Users/me/code/pupcal.', projects, { apiKey: 'k', fetcher: fail }),
     { kind: 'project', id: 'p_0000000002', name: 'PupCal', path: '/Users/me/code/pupcal' });
   assert.match((await routeProject('Work in /tmp/elsewhere and fix it.', projects, { apiKey: 'k', fetcher: fail })).ask, /Which project/);
+});
+
+test('a machine project list is sealed at rest, since recent requests quote the owner', async () => {
+  const { env, sqlite } = bindings();
+  env.STORAGE_KEY = randomBytes(32).toString('base64');
+  const token = device(sqlite);
+  const projects = [{ ...PROJECTS[0], recentRequests: ['Draft the private offer letter for Dana'] }];
+  assert.deepEqual((await call(env, token, 'projects', { projects })).body, { saved: true, count: 1 });
+  const stored = sqlite.prepare('SELECT project_catalog_json FROM devices').get().project_catalog_json;
+  assert.match(stored, /^enc:v1:/);
+  assert.doesNotMatch(stored, /Dana|offer letter/);
+  assert.deepEqual((await accountProjectCatalog(env, 'account-1'))[0].recentRequests, ['Draft the private offer letter for Dana']);
+  // A list saved before sealing still reads until the machine republishes.
+  sqlite.prepare('UPDATE devices SET project_catalog_json = ?').run(JSON.stringify(projects));
+  assert.equal((await accountProjectCatalog(env, 'account-1'))[0].path, PROJECTS[0].path);
 });

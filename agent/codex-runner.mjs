@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
-import { readStore, updateStore } from './session-store.mjs';
+import { readStore, updateStore, sessionKey } from './session-store.mjs';
 import { stageAgentAttachments } from './agent-attachments.mjs';
 import { formatAgentAnswer } from './answer-result.mjs';
 import { CONNECTED_APPS, ownerInstructions, ownerToolsFor, TAGMAILS_EMAIL, tagmailsConfigDir } from './email-context.mjs';
@@ -403,7 +403,7 @@ export async function runClaim(claim, { write = false, full = false } = {}) {
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const store = await readStore(storeFile, 'Codex session');
   if (Object.hasOwn(store.jobs, claim.jobId)) return store.jobs[claim.jobId];
-  const existing = Object.hasOwn(store.threads, claim.threadId) ? store.threads[claim.threadId] : null;
+  const existing = Object.hasOwn(store.threads, sessionKey(claim)) ? store.threads[sessionKey(claim)] : null;
   if (existing && existing.workspace !== workspace) return fail('This email thread was paired with a different workspace.', write, full);
   const staged = await stageAgentAttachments(claim.request.attachments, workspace);
   try {
@@ -415,7 +415,7 @@ export async function runClaim(claim, { write = false, full = false } = {}) {
     if (owner && SESSION_ID.test(threadId || '')) result.session = { harness: 'codex', id: threadId };
     if (['completed', 'needs_approval'].includes(result.state)) {
       await updateStore(storeFile, (saved) => {
-        saved.threads[claim.threadId] = { sessionId: threadId, workspace };
+        saved.threads[sessionKey(claim)] = { sessionId: threadId, workspace };
         saved.jobs[claim.jobId] = result;
       }, 'Codex session');
     } else if (write) {

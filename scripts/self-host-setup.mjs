@@ -111,6 +111,8 @@ async function main() {
     config.d1_databases[0].database_name = worker;
     config.r2_buckets[0].bucket_name = `${worker}-mail`;
     config.vars = { CLAUDE_ROUTE_ENABLED: 'true' };
+    // Received mail over Resend is off unless the relay opts in (Cloudflare checks senders itself).
+    if (provider === 'resend') config.vars.RESEND_INBOUND_ENABLED = 'true';
     if (provider === 'cloudflare') {
       config.send_email = [{ name: 'EMAIL' }];
       config.secrets = { required: ['GOOGLE_CLIENT_ID', 'AGENT_DOMAIN', 'PUBLIC_ORIGIN', 'PILOT_OWNER_EMAIL'] };

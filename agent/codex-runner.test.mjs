@@ -173,8 +173,9 @@ test('Codex app-server resumes the restricted thread, reads an attachment, and c
     { kind: 'assistant', phase: 'final_answer', text: 'First turn.' },
   ]);
   assert.doesNotMatch(JSON.stringify(first.transcript), /SECRET_REASONING|SECRET_FILE|secret\.txt/);
-  assert.deepEqual(await runClaim(claim('job-1', 'thread-1')), first);
-  const second = await runClaim(claim('job-2', 'thread-1', 'Continue the summary.'));
+  const owned = (jobId, body) => { const next = claim(jobId, 'thread-1', body); next.request.fromOwner = true; return next; };
+  assert.deepEqual(await runClaim(owned('job-1')), first);
+  const second = await runClaim(owned('job-2', 'Continue the summary.'));
   assert.match(second.summary, /second turn/);
 
   const events = fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse);
@@ -194,7 +195,14 @@ test('Codex app-server resumes the restricted thread, reads an attachment, and c
   assert.equal(fs.realpathSync(path.join(home, 'auth.json')), fs.realpathSync(auth));
   assert.match(fs.readFileSync(path.join(home, 'config.toml'), 'utf8'), /":root" = "deny"/);
   const store = JSON.parse(fs.readFileSync(path.join(root, 'sessions.json'), 'utf8'));
-  assert.equal(store.threads['thread-1'].sessionId, '11111111-1111-4111-8111-111111111111');
+  assert.equal(store.threads['thread-1:owner'].sessionId, '11111111-1111-4111-8111-111111111111');
+  // A participant on the same email thread never resumes the owner's session.
+  const guest = claim('job-3', 'thread-1', 'What did the owner ask before?');
+  guest.request.fromOwner = false;
+  await runClaim(guest);
+  const guestStart = fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse)
+    .filter((item) => item.method === 'thread/start' || item.method === 'thread/resume').at(-1);
+  assert.equal(guestStart.method, 'thread/start');
   assert.equal(Object.keys(store.jobs).length, 2);
 });
 
