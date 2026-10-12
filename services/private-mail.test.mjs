@@ -83,6 +83,11 @@ test('a valid owner signature must also cover the Cc, Message-ID and Content-Typ
   const reencoded = signed(original, { privateKey }).replace('Content-Type: text/plain; charset=utf-8',
     'Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64');
   assert.deepEqual(await deliver(reencoded), { accepted: false, reason: 'sender authentication failed' });
+  // Prepending a second one to a message whose own encoding header is signed: DKIM reads the last, the parser the first.
+  const withEncoding = original.replace('Content-Type: text/plain; charset=utf-8', 'Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 7bit');
+  const prepended = signed(withEncoding, { privateKey, names: ['from', 'to', 'subject', 'message-id', 'content-type', 'content-transfer-encoding'] })
+    .replace('From: Owner', 'Content-Transfer-Encoding: base64\r\nFrom: Owner');
+  assert.deepEqual(await deliver(prepended), { accepted: false, reason: 'sender authentication failed' });
   // Each relied-on header left out of h= fails, though the signature itself verifies.
   for (const name of ['message-id', 'content-type', 'subject']) {
     const names = ['from', 'to', 'subject', 'message-id', 'content-type'].filter((item) => item !== name);

@@ -142,8 +142,10 @@ export async function verifyDkim(raw, fromAddress, { resolveTxt = (name) => dohT
   const fromDomain = String(fromAddress ?? '').split('@').pop().toLowerCase();
   // Two From headers make "who signed" and "who it's from" ambiguous between
   // parsers; the same goes for To and Cc, which decide who the mail was for.
+  // Same for every header the relay acts on: with two, DKIM covers one and the
+  // MIME parser may read the other (e.g. a prepended Content-Transfer-Encoding).
   if (headers.filter((header) => header.name === 'from').length !== 1 ||
-      ['to', 'cc'].some((name) => headers.filter((header) => header.name === name).length > 1)) return { pass: false, results: [] };
+      MUST_SIGN.some((name) => headers.filter((header) => header.name === name).length > 1)) return { pass: false, results: [] };
   const signatures = headers.filter((header) => header.name === 'dkim-signature').slice(0, 5);
   const results = [];
   for (const signature of signatures) {

@@ -141,26 +141,29 @@ export async function reconcileOneUnknownOutbox(env, {
   // when it refuses a message. After 30 minutes an uncertain reply is given up:
   // blocked, its charge released and its stored copy deleted, so later replies
   // in the thread can go. It is never re-sent (it may have been delivered).
-  if (env.EMAIL) {
-    const row = await env.DB.prepare(`UPDATE outbox SET state = 'blocked', updated_at = CURRENT_TIMESTAMP
-      WHERE job_id = (SELECT job_id FROM outbox WHERE state = 'uncertain'
-        AND updated_at <= datetime('now', '-30 minutes') ORDER BY updated_at, job_id LIMIT 1)
-      AND state = 'uncertain' RETURNING job_id`).bind().first();
-    if (!row) return { state: 'idle' };
-    console.error('Uncertain reply given up after 30 minutes', row.job_id);
-    await releaseTestEmail(env, row.job_id);
-    await deleteOutboundCopy(env, row.job_id);
-    return { state: 'blocked', jobId: row.job_id };
+  // Its stored copy is deleted by sweepBlockedCopies (retried until it's gone).
+  const givenUp = await env.DB.prepare(`UPDATE outbox SET state = 'blocked', updated_at = CURRENT_TIMESTAMP
+    WHERE job_id = (SELECT job_id FROM outbox WHERE state = 'uncertain'
+      AND json_extract(payload_json, '$.provider') = 'cloudflare'
+      AND updated_at <= datetime('now', '-30 minutes') ORDER BY updated_at, job_id LIMIT 1)
+    AND state = 'uncertain' RETURNING job_id`).bind().first();
+  if (givenUp) {
+    console.error('Uncertain reply given up after 30 minutes', givenUp.job_id);
+    await releaseTestEmail(env, givenUp.job_id);
+    return { state: 'blocked', jobId: givenUp.job_id };
   }
-  if (!env.RESEND_API_KEY) throw new Error('Outbound reconciliation bindings are incomplete');
+  // Other uncertain sends went through Resend, which can be asked.
+  if (!env.RESEND_API_KEY) return { state: 'idle' };
   // A provider lookup is read-only. Scan one held reply at most once every
   // 15 minutes, and never infer acceptance from recipients or subject alone.
   // checked_at, not updated_at: retention reads updated_at as the finish time.
   const row = await env.DB.prepare(`UPDATE outbox SET checked_at = CURRENT_TIMESTAMP
     WHERE job_id = (SELECT job_id FROM outbox WHERE state = 'uncertain' AND payload_json IS NOT NULL
+      AND json_extract(payload_json, '$.provider') IS NOT 'cloudflare'
       AND COALESCE(checked_at, updated_at) <= datetime('now', '-15 minutes')
       ORDER BY COALESCE(checked_at, updated_at), job_id LIMIT 1)
-    AND state = 'uncertain' RETURNING job_id, payload_json`).bind().first();
+    AND state = 'uncertain' AND json_extract(payload_json, '$.provider') IS NOT 'cloudflare'
+    RETURNING job_id, payload_json`).bind().first();
   if (!row) return { state: 'idle' };
   let payload;
   try { payload = JSON.parse(row.payload_json); }
@@ -410,7 +413,8 @@ async function finalize(env, row, getSentEmail) {
     } catch { /* Provider lookup can recover on a later scheduled run. */ }
   }
   if (!messageId) {
-    await env.DB.prepare("UPDATE outbox SET updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'accepted'")
+    // checked_at, not updated_at: retention reads updated_at as the finish time.
+    await env.DB.prepare("UPDATE outbox SET checked_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'accepted'")
       .bind(row.job_id).run();
     return { state: 'accepted', jobId: row.job_id };
   }
@@ -466,6 +470,7 @@ export async function purgeSettledOutboundBodies(env) {
 // directly; Resend needs a lookup.
 export function senders(env, { sendEmail, getSentEmail } = {}) {
   return {
+    provider: env.EMAIL ? 'cloudflare' : 'resend',
     sendEmail: sendEmail ?? (env.EMAIL ? (payload) => sendWithCloudflare(env, payload)
       : (payload, options) => new Resend(env.RESEND_API_KEY).emails.send(
         { ...payload, from: `${senderName(payload)} <${payload.from}>` }, options)),
@@ -501,6 +506,19 @@ function heldKeyOf(payloadJson) {
   try { return JSON.parse(payloadJson ?? 'null')?.heldKey ?? null; } catch { return null; }
 }
 
+// Stored copies of blocked replies (a relay-key copy, or a held reply sealed
+// to the computer) are deleted, retrying until storage agrees; payload_json is
+// cleared only once the copy is gone. Runs with the scheduled upkeep.
+async function sweepBlockedCopies(env) {
+  const rows = await env.DB.prepare(`SELECT o.job_id FROM outbox o WHERE o.state = 'blocked'
+    AND (${HELD_FOR} IS NOT NULL OR json_extract(o.payload_json, '$.bodyStored') = 1) LIMIT 10`).bind().all();
+  for (const row of rows.results ?? rows) {
+    if (await deleteOutboundCopy(env, row.job_id)) {
+      await env.DB.prepare("UPDATE outbox SET payload_json = NULL WHERE job_id = ? AND state = 'blocked'").bind(row.job_id).run();
+    }
+  }
+}
+
 // Errors a retry can't fix: a failed authenticated decryption, a renderer or
 // parser bug. Anything else (a storage or network hiccup) is retried later.
 const PERMANENT_ERRORS = new Set(['OperationError', 'RangeError', 'SyntaxError', 'TypeError']);
@@ -526,16 +544,17 @@ async function rendered(env, row, material) {
 // until the send settles; a reply for sealed mail keeps nothing but routing
 // metadata and a salted subject hash (a held reply's sealed copy is removed
 // once the send settles).
-async function sendPrepared(env, row, payload, { sendEmail, getSentEmail }, { sealed = false, heldKey = null } = {}) {
+async function sendPrepared(env, row, payload, { sendEmail, getSentEmail, provider }, { sealed = false, heldKey = null } = {}) {
   if (payload.from !== (testSenderFor(env, row.agent_email) ?? row.agent_email.toLowerCase())) {
     throw new Error('Outbox sender does not match its account');
   }
   const { html: _html, text: _text, attachments, ...metadata } = payload;
   const files = attachments ? { attachments: attachments.map(({ filename, contentType }) => ({ filename, contentType })) } : {};
   // Sealed replies keep no file names either; a held one keeps where its sealed copy is, for cleanup.
+  // `provider` lets reconciliation of an uncertain send ask the right service.
   const savedPayload = sealed
-    ? { ...metadata, subject: undefined, subjectHash: subjectHash(row.job_id, payload.subject), ...(heldKey ? { bodyStored: true, heldKey } : {}) }
-    : { ...metadata, subject: await sealText(env, payload.subject), bodyStored: true, ...files };
+    ? { ...metadata, subject: undefined, subjectHash: subjectHash(row.job_id, payload.subject), ...(heldKey ? { bodyStored: true, heldKey } : {}), provider }
+    : { ...metadata, subject: await sealText(env, payload.subject), bodyStored: true, ...files, provider };
   const claimed = await env.DB.prepare(`UPDATE outbox SET state = 'sending', payload_json = ?, updated_at = CURRENT_TIMESTAMP
     WHERE job_id = ? AND state = 'queued' RETURNING job_id`).bind(JSON.stringify(savedPayload), row.job_id).first();
   if (!claimed) return { state: 'contended' };
@@ -546,8 +565,8 @@ async function sendPrepared(env, row, payload, { sendEmail, getSentEmail }, { se
     try {
       await env.MAIL.put(objectKey, JSON.stringify(payload), { httpMetadata: { contentType: 'application/json' } });
     } catch (error) {
-      await env.DB.prepare("UPDATE outbox SET state = 'queued', payload_json = NULL WHERE job_id = ? AND state = 'sending'")
-        .bind(row.job_id).run();
+      await env.DB.prepare(`UPDATE outbox SET state = 'queued', payload_json = NULL, retry_after = datetime('now', '+10 minutes')
+        WHERE job_id = ? AND state = 'sending'`).bind(row.job_id).run();
       throw error;
     }
   }
@@ -586,7 +605,8 @@ async function sendPrepared(env, row, payload, { sendEmail, getSentEmail }, { se
 }
 
 export async function sendNextOutbox(env, options = {}) {
-  const { sendEmail, getSentEmail } = senders(env, options);
+  const outbound = senders(env, options);
+  const { sendEmail, getSentEmail } = outbound;
   if (!env.DB || !env.MAIL || (!env.RESEND_API_KEY && !env.EMAIL)) throw new Error('Outbound bindings are incomplete');
   // Scheduled invocations cannot run beyond 15 minutes. A send still marked
   // in progress after 20 minutes might already have reached the provider.
@@ -602,10 +622,10 @@ export async function sendNextOutbox(env, options = {}) {
     FROM outbox o JOIN jobs j ON j.id = o.job_id
     JOIN threads t ON t.id = j.thread_id JOIN accounts a ON a.id = t.account_id
     WHERE o.state = 'accepted' AND a.active = 1
-      AND (o.updated_at <= datetime('now', '-1 minute') OR EXISTS (
+      AND (COALESCE(o.checked_at, o.updated_at) <= datetime('now', '-1 minute') OR EXISTS (
         SELECT 1 FROM messages m WHERE m.thread_id = j.thread_id
           AND m.provider_email_id = o.provider_email_id AND m.direction = 'outbound'))
-    ORDER BY o.updated_at, o.job_id LIMIT 1`).bind().first();
+    ORDER BY COALESCE(o.checked_at, o.updated_at), o.job_id LIMIT 1`).bind().first();
   if (accepted) return finalize(env, accepted, getSentEmail);
 
   // Replies for sealed mail are sent from memory (deliverReply) or by their
@@ -628,7 +648,7 @@ export async function sendNextOutbox(env, options = {}) {
     throw error;
   }
   if (!payload) return blockRow(env, row.job_id);
-  return sendPrepared(env, row, payload, { sendEmail, getSentEmail });
+  return sendPrepared(env, row, payload, outbound);
 }
 
 // Sends the reply for a sealed job while its plaintext is in memory: right
@@ -712,15 +732,7 @@ export async function tendSealedReplies(env) {
     console.error('Sealed reply can no longer be sent', row.job_id);
     await blockRow(env, row.job_id);
   }
-  // Held copies of blocked replies are deleted, retrying until storage agrees;
-  // payload_json is cleared only once the copy is gone.
-  const unheld = await env.DB.prepare(`SELECT o.job_id FROM outbox o
-    WHERE o.state = 'blocked' AND ${HELD_FOR} IS NOT NULL LIMIT 10`).bind().all();
-  for (const row of unheld.results ?? unheld) {
-    if (await deleteOutboundCopy(env, row.job_id)) {
-      await env.DB.prepare("UPDATE outbox SET payload_json = NULL WHERE job_id = ? AND state = 'blocked'").bind(row.job_id).run();
-    }
-  }
+  await sweepBlockedCopies(env);
   // A job nobody can claim (queued, or running on a lapsed lease) whose key is gone.
   const orphaned = `j.created_at <= datetime('now', '-15 minutes') AND m.seal_key_id IS NOT NULL
       AND (j.state = 'queued' OR (j.state = 'running' AND (j.lease_until IS NULL OR j.lease_until <= CURRENT_TIMESTAMP)))

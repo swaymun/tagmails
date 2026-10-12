@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { bindings } from './bindings-fixture.mjs';
-import { purgeSettledOutboundBodies, reconcileOneUnknownOutbox, reconcileSentEvent, recordDeliveryOutcome, sendNextOutbox } from './outbox.mjs';
+import { purgeSettledOutboundBodies, reconcileOneUnknownOutbox, reconcileSentEvent, recordDeliveryOutcome, sendNextOutbox, tendSealedReplies } from './outbox.mjs';
 import { handleInbound } from './relay-worker.mjs';
 
 function queuedTurn({ env, sqlite }, { number, from, to, cc = [], inReplyTo = null, references = [], accountId = 'account-1', threadId = 'thread-1', jobId = `job-${number}`, model = null, receivedAgent = null }) {
@@ -257,7 +257,37 @@ test('a reply that cannot be rendered is blocked, and a Cloudflare send failure 
   assert.equal((await reconcileOneUnknownOutbox(env)).state, 'idle', 'not before 30 minutes');
   sqlite.prepare("UPDATE outbox SET updated_at = datetime('now', '-31 minutes') WHERE job_id = 'job-3'").run();
   assert.deepEqual(await reconcileOneUnknownOutbox(env), { state: 'blocked', jobId: 'job-3' });
+  await tendSealedReplies(env);
+  assert.equal(fixture.objects.has('outbound/account-1/job-3.json'), false, 'its stored copy is deleted');
+  assert.equal(sqlite.prepare("SELECT payload_json FROM outbox WHERE job_id = 'job-3'").get().payload_json, null);
   assert.equal((await sendNextOutbox(env, provider)).jobId, 'job-4', 'the next reply in its thread can go');
+
+  // A send that went out through Resend before the switch is still looked up, never given up blind.
+  await queuedTurn(fixture, { number: 5, from: 'owner@gmail.com', to: ['agent@wonder.test'], threadId: 'thread-5' });
+  delete env.EMAIL;
+  assert.equal((await sendNextOutbox(env, { sendEmail: async () => { throw new Error('dropped'); } })).state, 'uncertain');
+  env.EMAIL = { send: async () => ({}) };
+  sqlite.prepare("UPDATE outbox SET updated_at = datetime('now', '-31 minutes') WHERE job_id = 'job-5'").run();
+  let looked = 0;
+  assert.equal((await reconcileOneUnknownOutbox(env, { listSentEmails: async () => { looked += 1; return { data: { data: [] } }; } })).state, 'uncertain');
+  assert.equal(looked, 1);
+});
+
+test('a failed copy to storage sets that reply aside, and Message-ID polling never moves the retention clock', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  await queuedTurn(fixture, { number: 2, from: 'owner@gmail.com', to: ['agent@wonder.test'], threadId: 'thread-2' });
+  const put = env.MAIL.put;
+  env.MAIL.put = async (key, ...rest) => { if (key.startsWith('outbound/')) throw new Error('R2 write failed'); return put(key, ...rest); };
+  await assert.rejects(sendNextOutbox(env), /R2 write failed/);
+  env.MAIL.put = put;
+  let sends = 0;
+  const provider = { sendEmail: async () => ({ data: { id: `sent-${++sends}` } }), getSentEmail: async () => ({ error: { message: 'later' } }) };
+  assert.deepEqual(await sendNextOutbox(env, provider), { state: 'accepted', jobId: 'job-2' }, 'the other thread goes first');
+  sqlite.prepare("UPDATE outbox SET updated_at = datetime('now', '-40 days'), checked_at = datetime('now', '-2 minutes') WHERE job_id = 'job-2'").run();
+  assert.equal((await sendNextOutbox(env, provider)).state, 'accepted');
+  assert.equal(sqlite.prepare("SELECT updated_at <= datetime('now', '-39 days') AS old FROM outbox WHERE job_id = 'job-2'").get().old, 1);
 });
 
 test('the result email names the model recorded at receipt, including an explicit override', async () => {
@@ -354,7 +384,7 @@ test('an uncertain send is not retried; an accepted send can finish Message-ID l
     getSentEmail: async () => ({ error: { message: 'Temporarily unavailable' } }),
   });
   assert.deepEqual(first, { state: 'accepted', jobId: 'job-2' });
-  sqlite.prepare("UPDATE outbox SET updated_at = datetime('now', '-2 minutes') WHERE job_id = ?")
+  sqlite.prepare("UPDATE outbox SET checked_at = datetime('now', '-2 minutes') WHERE job_id = ?")
     .run('job-2');
   assert.deepEqual(await sendNextOutbox(env, {
     sendEmail: async () => { throw new Error('Must not send again'); },
@@ -389,12 +419,12 @@ test('accepted lookup delays one thread while other threads send and reply order
   });
   assert.deepEqual(sent, ['z-first', 'm-independent']);
   assert.equal((await sendNextOutbox(env, provider)).state, 'idle');
-  sqlite.prepare("UPDATE outbox SET updated_at = datetime('now', '-2 minutes') WHERE job_id = ?")
+  sqlite.prepare("UPDATE outbox SET checked_at = datetime('now', '-2 minutes') WHERE job_id = ?")
     .run('z-first');
   assert.deepEqual(await sendNextOutbox(env, provider), { state: 'accepted', jobId: 'z-first' });
   assert.deepEqual(await sendNextOutbox(env, provider), { state: 'idle' });
   assert.deepEqual(sent, ['z-first', 'm-independent']);
-  sqlite.prepare("UPDATE outbox SET updated_at = datetime('now', '-2 minutes') WHERE job_id = ?")
+  sqlite.prepare("UPDATE outbox SET checked_at = datetime('now', '-2 minutes') WHERE job_id = ?")
     .run('z-first');
   provider.getSentEmail = async (id) => ({ data: { message_id: `<${id}@tagmails.test>` } });
   assert.deepEqual(await sendNextOutbox(env, provider), {
