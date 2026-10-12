@@ -1034,6 +1034,10 @@ fn claim_next(client: &Client, settings: &Settings, busy: &[String]) -> Result<O
     }
 }
 
+/// Set when a claimed job went back to the queue (its folder is busy), so the claim loop asks again
+/// at once instead of waiting for a push: another job may be ready to run.
+static JOB_RELEASED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 const CLAUDE_NOT_ENABLED: &str = "Claude models are not enabled in this pilot. Ask for an available OpenAI model or omit the model to use your default.";
 
 /// Routes a claimed owner email on this machine (agent/local-router.mjs): which model
@@ -1045,7 +1049,7 @@ const CLAUDE_NOT_ENABLED: &str = "Claude models are not enabled in this pilot. A
 /// project?" question) is carried in `routingReply`; None means the job went back
 /// to the queue because its folder is busy.
 fn route_claim(client: &Client, settings: &Settings, mut claim: Value, busy: &[String]) -> Result<Option<Value>, Box<dyn Error>> {
-    if claim["request"]["fromOwner"] != true || claim["model"]["source"] == "explicit" {
+    if claim["request"]["fromOwner"] != true {
         return Ok(Some(claim));
     }
     let projects = if settings.workspace.is_some() || claim["workspace"]["kind"].is_string() {
@@ -1088,7 +1092,11 @@ fn route_claim(client: &Client, settings: &Settings, mut claim: Value, busy: &[S
         out["runner"].as_str().map_or(String::new(), |runner| format!(" ({runner})"))
     );
     if let Some(error) = out["model"]["error"].as_str().or_else(|| out["ask"].as_str()) {
-        claim["routingReply"] = json!(error);
+        // Answered instead of run: recorded like the relay's own answers, so the thread's next turn carries this request.
+        let reply: String = error.chars().take(500).collect();
+        let _ = relay_post(client, &settings.relay, "/api/device/route", &settings.token,
+            json!({"jobId": claim["jobId"], "leaseId": claim["leaseId"], "answered": reply}));
+        claim["routingReply"] = json!(reply);
         return Ok(Some(claim));
     }
     let mut report = json!({"jobId": claim["jobId"], "leaseId": claim["leaseId"]});
@@ -1130,6 +1138,7 @@ fn route_claim(client: &Client, settings: &Settings, mut claim: Value, busy: &[S
             let _ = relay_post(client, &settings.relay, "/api/device/release", &settings.token,
                 json!({"jobId": claim["jobId"], "leaseId": claim["leaseId"]}));
             println!("{}: {folder} is busy; queued until it is free", claim["jobId"].as_str().unwrap_or(""));
+            JOB_RELEASED.store(true, std::sync::atomic::Ordering::SeqCst);
             return Ok(None);
         }
     }
@@ -1581,7 +1590,7 @@ fn run_relay(settings: &Settings, once: bool, reload: bool) -> Result<(), Box<dy
                         }
                     });
                 }
-                Ok(None) => {}
+                Ok(None) => claimed = JOB_RELEASED.swap(false, std::sync::atomic::Ordering::SeqCst),
                 Err(error) => eprintln!("Relay unavailable: {error}"),
             }
         }

@@ -32,12 +32,14 @@ export async function renewClaim(claim) {
 
 // Decides on this computer what a follow-up to the running email is: 'steer' (adjust the
 // run), 'queue' (its own task afterwards) or 'ack' (thanks only). A failure queues it.
-export async function localFollowUp(claim, steer) {
+export async function localFollowUp(claim, steer, { signal } = {}) {
+  // Only the owner's own text reaches the owner's CLI; anyone else's follow-up waits as its own task.
+  if (claim.request?.fromOwner !== true) return 'queue';
   const { routeFollowUpLocally } = await import('./local-router.mjs');
   const running = `Subject: ${claim.request?.subject ?? ''}\n${String(claim.request?.body ?? '').slice(0, 2000)}`;
   const { choice } = await routeFollowUpLocally({ running, followUp: steer.text,
     preferred: String(claim.model?.id ?? '').startsWith('claude-') ? 'claude' : 'codex',
-    dataDir: process.env.TAGMAILS_DATA_DIR || null });
+    dataDir: process.env.TAGMAILS_DATA_DIR || null, signal });
   return choice;
 }
 
@@ -106,6 +108,7 @@ export function keepClaim(claim, onLost, { every = Number(process.env.TAGMAILS_C
   // a renewal that overlaps a slow delivery waits on it instead of delivering again.
   const handled = new Map();
   let inflight = Promise.resolve();
+  const abort = new AbortController();
   const timer = setInterval(async () => {
     if (lost) return;
     try {
@@ -122,7 +125,7 @@ export function keepClaim(claim, onLost, { every = Number(process.env.TAGMAILS_C
           // With a classifier (relay mode) the computer decides: queue hands the follow-up back as
           // its own job, ack is delivered with nothing injected (no turn, reply or charge).
           const deliver = async () => {
-            const verdict = classify ? await classify(claim, steer) : 'steer';
+            const verdict = classify ? await classify(claim, steer, { signal: abort.signal }) : 'steer';
             return verdict === 'queue' ? false : verdict === 'ack' ? true : onSteer(steer);
           };
           handled.set(steer.id, sameSender ? deliver().then(async (delivered) => {
@@ -138,7 +141,8 @@ export function keepClaim(claim, onLost, { every = Number(process.env.TAGMAILS_C
     }
   }, every);
   // stop.settled() resolves once a renewal still in flight has been handled.
-  const stop = () => clearInterval(timer);
+  // Stopping also cancels a follow-up still being classified, so the run's end never waits on it.
+  const stop = () => { clearInterval(timer); abort.abort(); };
   stop.settled = async () => { await inflight; await new Promise((resolve) => setImmediate(resolve)); };
   return stop;
 }

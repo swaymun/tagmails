@@ -65,10 +65,15 @@ test('an unclear folder asks once, and the reply is routed with the question it 
   assert.equal(JSON.parse(await fs.readFile(path.join(dataDir, 'routing-pending.json'), 'utf8'))['thread-1'], undefined, 'asked once');
 }));
 
-test('a participant, an explicit Model line and a thread that has its folder are not re-routed', quiet(async () => {
+test('a participant and a thread that has its folder are not re-routed; an explicit Model line still routes the folder', quiet(async () => {
   const never = async () => { throw new Error('must not classify'); };
   assert.deepEqual(await routeClaim({ claim: owner('Use Luna', { request: { fromOwner: false, subject: 'x', body: 'Use Luna' } }), catalog, projects, classifyWith: never }), {});
-  assert.deepEqual(await routeClaim({ claim: owner('x', { model: { id: 'gpt-6-luna', effort: 'medium', source: 'explicit' } }), catalog, projects, classifyWith: never }), {});
+  // `Model: Luna` settles the model only; which project is still the Mac's to choose.
+  const explicit = [];
+  const picked = await routeClaim({ claim: owner('Model: Luna\nFix the footer in TagMails.', { model: { id: 'gpt-6-luna', effort: 'medium', source: 'explicit' } }), catalog, projects,
+    classifyWith: answering({ folder: 'p_a100000001' }, explicit) });
+  assert.equal(picked.workspace.path, '/Users/me/tagmails');
+  assert.deepEqual(explicit.map((request) => Object.keys(request.questions)), [['folder']], 'no model question is asked');
   const seen = [];
   const out = await routeClaim({ claim: owner('Fix it.', { workspace: { kind: 'project', path: '/Users/me/tagmails' } }), catalog, projects,
     classifyWith: answering({ route: 'none', requestedEffort: 'unrequested', effort: 'medium', speed: 'none' }, seen) });

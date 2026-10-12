@@ -42,11 +42,13 @@ export function classifierPrompt(request) {
     `Return one JSON object mapping each question name to the chosen criteria key, for example {"${Object.keys(request.questions)[0]}":"<key>"}.`;
 }
 
-function run(bin, argv, stdin, cwd) {
+function run(bin, argv, stdin, cwd, { timeoutMs = CLI_TIMEOUT_MS, signal } = {}) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new Error('routing cancelled')); return; }
     const child = spawn(bin, argv, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     let out = '', err = '';
-    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`${bin} timed out`)); }, CLI_TIMEOUT_MS);
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`${bin} timed out`)); }, timeoutMs);
+    signal?.addEventListener('abort', () => { clearTimeout(timer); child.kill('SIGKILL'); reject(new Error('routing cancelled')); }, { once: true });
     child.stdout.on('data', (chunk) => { out += chunk; });
     child.stderr.on('data', (chunk) => { err += chunk; });
     child.on('error', (error) => { clearTimeout(timer); reject(error); });
@@ -61,17 +63,18 @@ export function parseAnswer(text) {
   return JSON.parse(text.slice(start, end + 1));
 }
 
-async function askClaude(prompt, cwd) {
+async function askClaude(prompt, cwd, options) {
   const out = JSON.parse(await run(RUNNERS.claude.bin, ['-p', '--model', 'claude-haiku-5-5', '--effort', 'medium', '--tools', '',
     '--no-session-persistence', '--setting-sources', '', '--disable-slash-commands', '--strict-mcp-config',
-    '--system-prompt', SYSTEM, '--output-format', 'json'], prompt, cwd));
+    '--system-prompt', SYSTEM, '--output-format', 'json'], prompt, cwd, options));
   if (out.is_error) throw new Error('claude returned an error');
   return out.result;
 }
 
-async function askCodex(prompt, cwd) {
+async function askCodex(prompt, cwd, options) {
+  // No user config (MCP servers, plugins, standing instructions) and no rules: only the read-only sandbox.
   const out = await run(RUNNERS.codex.bin, ['exec', '-m', 'gpt-6-luna', '-c', 'model_reasoning_effort="medium"', '-s', 'read-only',
-    '--skip-git-repo-check', '--ephemeral', '--json', '-C', cwd, '-'], `${SYSTEM}\n\n${prompt}`, cwd);
+    '--ignore-user-config', '--ignore-rules', '--skip-git-repo-check', '--ephemeral', '--json', '-C', cwd, '-'], `${SYSTEM}\n\n${prompt}`, cwd, options);
   let text = null;
   for (const line of out.split('\n')) {
     let event; try { event = JSON.parse(line); } catch { continue; }
@@ -84,7 +87,7 @@ async function askCodex(prompt, cwd) {
 // Answers `request.questions` with the preferred CLI, then the other. Each answer is a
 // Jev-shaped choice with probability 1 (the CLI models do not hedge; wrong-but-sure answers
 // are what the v2 rules and the local pre-checks guard against).
-export async function classify(request, preferred, { ask = { claude: askClaude, codex: askCodex } } = {}) {
+export async function classify(request, preferred, { ask = { claude: askClaude, codex: askCodex }, timeoutMs, signal } = {}) {
   const order = preferred === 'claude' ? ['claude', 'codex'] : ['codex', 'claude'];
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'tagmails-router-'));
   const failures = [];
@@ -92,7 +95,7 @@ export async function classify(request, preferred, { ask = { claude: askClaude, 
     for (const runner of order) {
       const started = performance.now();
       try {
-        const chosen = parseAnswer(await ask[runner](classifierPrompt(request), cwd));
+        const chosen = parseAnswer(await ask[runner](classifierPrompt(request), cwd, { timeoutMs, signal }));
         const answers = {};
         for (const [name, question] of Object.entries(request.questions)) {
           const choice = chosen[name];
@@ -146,7 +149,7 @@ export async function routeClaim({ claim, catalog, projects, dataDir, classifyWi
   const request = claim.request ?? {};
   // A participant never starts a thread or reaches the owner's project list; they
   // continue the thread's model and folder.
-  if (request.fromOwner !== true || claim.model?.source === 'explicit') return {};
+  if (request.fromOwner !== true) return {};
   const models = catalog ? catalogFromDevice(catalog) : null;
   const subject = String(request.subject ?? '');
   const body = String(request.body ?? '');
@@ -189,10 +192,12 @@ export async function routeClaim({ claim, catalog, projects, dataDir, classifyWi
   return out;
 }
 
-export async function routeFollowUpLocally({ running, followUp, preferred, dataDir, classifyWith = classify }) {
+// A follow-up is decided while the run holds its lease, so each CLI gets 20 seconds and the run's
+// end cancels it (`signal`); a follow-up that cannot be classified waits as its own task.
+export async function routeFollowUpLocally({ running, followUp, preferred, dataDir, signal, classifyWith = classify }) {
   const plan = prepareFollowUp(running, currentText(followUp));
   try {
-    const result = await classifyWith(plan.request, preferred ?? 'claude');
+    const result = await classifyWith(plan.request, preferred ?? 'claude', { timeoutMs: 20_000, signal });
     await logStep(dataDir, { step: 'followup', runner: result.runner, ms: result.ms, ok: true });
     return { choice: plan.finish(result.answers), runner: result.runner, ms: result.ms };
   } catch (error) {

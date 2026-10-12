@@ -82,8 +82,6 @@ async function claim(env, device, { busy = [], local = false } = {}) {
   await env.DB.prepare(`UPDATE devices SET last_seen_at = CURRENT_TIMESTAMP
     WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < datetime('now', '-2 minutes'))`)
     .bind(device.id).run();
-  if (local) await env.DB.prepare(`UPDATE devices SET local_routing_at = CURRENT_TIMESTAMP
-    WHERE id = ? AND (local_routing_at IS NULL OR local_routing_at < datetime('now', '-5 minutes'))`).bind(device.id).run();
   const leaseId = randomUUID();
   const funded = testBillingEnabled(env)
     ? `AND EXISTS
@@ -110,7 +108,7 @@ async function claim(env, device, { busy = [], local = false } = {}) {
     ORDER BY j.created_at, j.rowid LIMIT 1
   ) AND device_id IS NULL`).bind(device.id, device.account_id, device.key_id ?? '', JSON.stringify(busy)).run();
   const row = await env.DB.prepare(`UPDATE jobs SET
-    state = 'running', device_id = ?, lease_id = ?,
+    state = 'running', device_id = ?, lease_id = ?, local_routing = ?,
     lease_until = datetime('now', '+${LEASE_SECONDS} seconds'), attempts = attempts + 1
     WHERE id = (
       SELECT j.id FROM jobs j JOIN threads t ON t.id = j.thread_id
@@ -118,7 +116,7 @@ async function claim(env, device, { busy = [], local = false } = {}) {
       WHERE t.account_id = ? AND t.device_id = ? AND ${eligible}
       ORDER BY j.created_at, j.rowid LIMIT 1
     ) RETURNING id, thread_id, message_id, lease_until, model_json, workspace_json`)
-    .bind(device.id, leaseId, device.account_id, device.id, device.key_id ?? '', JSON.stringify(busy)).first();
+    .bind(device.id, leaseId, local ? 1 : 0, device.account_id, device.id, device.key_id ?? '', JSON.stringify(busy)).first();
   if (!row) return json({ claimed: false, ...await heldNotice(env, device) });
   // Files an expired lease uploaded can never be sent; let the cleanup delete them
   // so retries don't pile up storage.
@@ -338,12 +336,27 @@ async function routed(env, device, body) {
     return json({ error: 'Claude models are not enabled in this pilot. Ask for an available OpenAI model or omit the model to use your default.' }, 422);
   }
   const stored = model && { id: model.id, effort: model.effort, ...(model.speed && model.speed !== 'standard' ? { speed: model.speed } : {}), source: 'classified' };
-  const row = await env.DB.prepare(`UPDATE jobs SET model_json = COALESCE(?, model_json), workspace_json = COALESCE(?, workspace_json)
+  const storedWorkspace = workspace ? JSON.stringify(workspace.kind === 'project' ? { kind: 'project', path: workspace.path } : { kind: 'scratch' }) : null;
+  // The Mac answered instead of running (an unavailable model, a "which project?" question):
+  // stored like the relay's own answers, so the thread's next turn carries this request.
+  const answered = typeof body.answered === 'string' && body.answered.trim() && body.answered.length <= 500
+    ? JSON.stringify({ error: body.answered }) : null;
+  const row = await env.DB.prepare(`UPDATE jobs SET model_json = COALESCE(?, ?, model_json), workspace_json = COALESCE(?, workspace_json)
     WHERE id = ? AND device_id = ? AND lease_id = ? AND state = 'running' AND lease_until > CURRENT_TIMESTAMP
-      AND EXISTS (SELECT 1 FROM threads t WHERE t.id = jobs.thread_id AND t.account_id = ?) RETURNING id`)
-    .bind(stored ? JSON.stringify(stored) : null, workspace ? JSON.stringify(workspace.kind === 'project' ? { kind: 'project', path: workspace.path } : { kind: 'scratch' }) : null,
+      AND EXISTS (SELECT 1 FROM threads t WHERE t.id = jobs.thread_id AND t.account_id = ?) RETURNING id, thread_id, rowid AS position`)
+    .bind(answered, stored ? JSON.stringify(stored) : null, storedWorkspace,
       body.jobId, device.id, body.leaseId, device.account_id).first();
-  return row ? json({ routed: true }) : json({ error: 'Lease expired or replaced' }, 409);
+  if (!row) return json({ error: 'Lease expired or replaced' }, 409);
+  // Emails that arrived before this report took the thread's provisional state at intake. Those
+  // still waiting continue with what the Mac chose (an explicit choice of their own is kept).
+  if (!answered) {
+    if (stored) await env.DB.prepare(`UPDATE jobs SET model_json = ? WHERE thread_id = ? AND rowid > ? AND state = 'queued' AND steer_of IS NULL
+      AND json_extract(model_json, '$.source') IN ('default', 'thread', 'pilot')`)
+      .bind(JSON.stringify({ ...stored, source: 'thread' }), row.thread_id, row.position).run();
+    if (storedWorkspace) await env.DB.prepare(`UPDATE jobs SET workspace_json = ? WHERE thread_id = ? AND rowid > ? AND state = 'queued' AND steer_of IS NULL
+      AND workspace_json IS NULL`).bind(storedWorkspace, row.thread_id, row.position).run();
+  }
+  return json({ routed: true });
 }
 
 // A routed job whose folder this computer is already using waits in the queue

@@ -578,13 +578,13 @@ test('a turn carries the three newest unrun requests, and the oldest waits for t
 
 // Posts an email to the pilot agent as `from`, in the thread of `parentIds`.
 function sender(env, subject = 'Trip') {
-  return async (id, from, body, parentIds = []) => {
+  return async (id, from, body, parentIds = [], extra = {}) => {
     const messageId = `<${id}@gmail.com>`;
     const rawMime = Buffer.from([`From: ${from}`, 'To: agent@wonder.test', `Subject: ${subject}`,
       `Message-ID: ${messageId}`, ...(parentIds.length ? [`References: ${parentIds.join(' ')}`] : []),
       'Content-Type: text/plain; charset=utf-8', '', body].join('\r\n'));
     const message = { providerEmailId: id, messageId, from, agentAddress: 'agent@wonder.test',
-      to: ['agent@wonder.test'], cc: [], bcc: [], subject, parentIds, rawMime, body, attachments: [] };
+      to: ['agent@wonder.test'], cc: [], bcc: [], subject, parentIds, rawMime, body, attachments: [], ...extra };
     return (await handleInbound(new Request('https://relay.test/webhooks/resend', { method: 'POST', body: '{}' }), env, {
       inspect: async () => message })).json();
   };
@@ -735,4 +735,53 @@ test('a participant request the relay answered itself is not handed to a later o
   const guestJob = sqlite.prepare(`SELECT j.handed_to_agent_at FROM jobs j JOIN messages m ON m.id = j.message_id
     WHERE m.message_id = ?`).get(messageId);
   assert.equal(guestJob.handed_to_agent_at, null);
+});
+
+test('local routing is a property of the lease: a later claim without it is never offered a follow-up', async () => {
+  const { env, sqlite } = bindings();
+  const paired = device(sqlite);
+  const send = sender(env);
+  await send('lease-1', 'owner@gmail.com', 'Write the japan guide.');
+  const claimed = envelope((await call(env, paired.token, 'claim', { routing: 'local' })).body);
+  await call(env, paired.token, 'complete', { jobId: claimed.jobId, leaseId: claimed.leaseId, result: { state: 'completed', summary: 'Done.' } });
+  // The Mac was downgraded: a new thread is claimed with no routing flag.
+  const other = sender(env, 'Other');
+  await other('lease-2', 'owner@gmail.com', 'Write the korea guide.');
+  const legacy = envelope((await call(env, paired.token, 'claim', {})).body);
+  assert.equal(sqlite.prepare('SELECT local_routing FROM jobs WHERE id = ?').get(legacy.jobId).local_routing, 0);
+  assert.deepEqual(await other('lease-3', 'owner@gmail.com', 'make it 5 days', ['<lease-2@gmail.com>']), { accepted: true, duplicate: false });
+});
+
+test('emails that arrive before the Mac reports its routing continue with what it chose; an acknowledgement is not a source of truth', async () => {
+  const { env, sqlite } = bindings();
+  const paired = device(sqlite);
+  const send = sender(env);
+  await send('early-1', 'owner@gmail.com', 'Use Claude on the footer in TagMails.');
+  const claimed = envelope((await call(env, paired.token, 'claim', { routing: 'local' })).body);
+  // While the Mac is still classifying, a thank-you (offered to the run) and a follow-up
+  // that cannot steer (it has an attachment, so it waits as its own job) arrive.
+  await send('early-2', 'owner@gmail.com', 'Thanks!', ['<early-1@gmail.com>']);
+  await send('early-3', 'owner@gmail.com', 'Continue with this file.', ['<early-2@gmail.com>'],
+    { attachments: [{ filename: 'a.txt', contentType: 'text/plain', size: 1 }] });
+  await call(env, paired.token, 'route', { jobId: claimed.jobId, leaseId: claimed.leaseId,
+    model: { id: 'gpt-6-luna', effort: 'low' }, workspace: { kind: 'project', path: '/Users/me/code/tagmails' } });
+  const queued = sqlite.prepare("SELECT model_json, workspace_json FROM jobs WHERE state = 'queued'").all();
+  assert.equal(queued.length, 1);
+  assert.deepEqual(JSON.parse(queued[0].model_json), { id: 'gpt-6-luna', effort: 'low', source: 'thread' });
+  assert.deepEqual(JSON.parse(queued[0].workspace_json), { kind: 'project', path: '/Users/me/code/tagmails' });
+});
+
+test('a request the Mac answered instead of running is carried into the thread\'s next turn', async () => {
+  const { env, sqlite } = bindings();
+  const paired = device(sqlite);
+  const send = sender(env);
+  await send('ans-1', 'owner@gmail.com', 'Use Gemini to fix the footer.');
+  const claimed = envelope((await call(env, paired.token, 'claim', { routing: 'local' })).body);
+  assert.deepEqual((await call(env, paired.token, 'route', { jobId: claimed.jobId, leaseId: claimed.leaseId,
+    answered: 'That model is unavailable for this agent.' })).body, { routed: true });
+  await call(env, paired.token, 'complete', { jobId: claimed.jobId, leaseId: claimed.leaseId,
+    result: { runtime: 'tagmails-router', state: 'needs_clarification', summary: 'That model is unavailable for this agent.' } });
+  await send('ans-2', 'owner@gmail.com', 'Use Luna instead.', ['<ans-1@gmail.com>']);
+  const next = envelope((await call(env, paired.token, 'claim', { routing: 'local' })).body);
+  assert.match(next.request.body, /Use Gemini to fix the footer\.[\s\S]*The current message:\nUse Luna instead\./);
 });

@@ -231,9 +231,9 @@ export async function handleEmail(emailMessage, env, { fetchModel = fetch, resol
 async function steerTarget(env, threadId, message) {
   if (!threadId || message.attachments?.length || /^Model:/im.test(message.body ?? '')) return null;
   const running = await env.DB.prepare(`SELECT j.id, m.sender_email FROM jobs j
-    JOIN messages m ON m.id = j.message_id JOIN devices d ON d.id = j.device_id
+    JOIN messages m ON m.id = j.message_id
     WHERE j.thread_id = ? AND j.state = 'running' AND j.lease_until > CURRENT_TIMESTAMP
-      AND d.local_routing_at > datetime('now', '-1 hour')
+      AND j.local_routing = 1
     ORDER BY m.rowid DESC LIMIT 1`).bind(threadId).first();
   return running && running.sender_email === message.from ? { id: running.id } : null;
 }
@@ -311,14 +311,14 @@ async function acceptMessage(env, message) {
   }
   const previousJob = threadId && !stopped ? await env.DB.prepare(`SELECT j.model_json FROM jobs j
     JOIN messages m ON m.id = j.message_id
-    WHERE j.thread_id = ? AND json_extract(j.model_json, '$.id') IS NOT NULL
+    WHERE j.thread_id = ? AND json_extract(j.model_json, '$.id') IS NOT NULL AND j.steer_of IS NULL
     ORDER BY m.rowid DESC LIMIT 1`).bind(threadId).first() : null;
   const priorModel = previousJob?.model_json ? JSON.parse(previousJob.model_json) : null;
   // Project routing: replies stay in the thread's folder. A reply to "which
   // project?" is routed together with the request that prompted the question.
   const previousWorkspace = threadId && !stopped ? await env.DB.prepare(`SELECT j.workspace_json FROM jobs j
     JOIN messages m ON m.id = j.message_id
-    WHERE j.thread_id = ? AND j.workspace_json IS NOT NULL
+    WHERE j.thread_id = ? AND j.workspace_json IS NOT NULL AND j.steer_of IS NULL
     ORDER BY m.rowid DESC LIMIT 1`).bind(threadId).first() : null;
   const priorWorkspace = previousWorkspace ? JSON.parse(previousWorkspace.workspace_json) : null;
   if (priorWorkspace?.pending) priorWorkspace.pending = await openText(env, priorWorkspace.pending);
