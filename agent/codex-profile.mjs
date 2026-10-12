@@ -103,6 +103,12 @@ function gitDir(workspace) {
 }
 
 
+export function deviceTokenFiles(env = process.env) {
+  const files = [path.join(tagmailsConfigDir(env), 'device-token')];
+  if (env.TAGMAILS_DEVICE_TOKEN_FILE && path.isAbsolute(env.TAGMAILS_DEVICE_TOKEN_FILE)) files.push(env.TAGMAILS_DEVICE_TOKEN_FILE);
+  return [...new Set(files)];
+}
+
 function profileOverride(profile, access, workspace) {
   if (access === 'write') {
     const git = workspace ? gitDir(workspace) : null;
@@ -110,7 +116,11 @@ function profileOverride(profile, access, workspace) {
     // An email may change TagMails' model defaults (`tagmails set`), which live in
     // their own folder; permissions and folders in config.json stay read-only.
     const settings = `,${JSON.stringify(path.join(tagmailsConfigDir(), 'email'))}="write"`;
-    return `permissions.${profile}={extends=":read-only",filesystem={":root"="read",":tmpdir"="write",":slash_tmp"="write",":workspace_roots"={"."="write",".git"="write"}${repository}${settings}},network={enabled=true}}`;
+    // The run reads the whole Mac and has network, but never this computer's
+    // TagMails credential: with it a prompt-injected run could claim the
+    // owner's future mail from anywhere.
+    const token = deviceTokenFiles().map((file) => `,${JSON.stringify(file)}="deny"`).join('');
+    return `permissions.${profile}={extends=":read-only",filesystem={":root"="read",":tmpdir"="write",":slash_tmp"="write",":workspace_roots"={"."="write",".git"="write"}${repository}${settings}${token}},network={enabled=true}}`;
   }
   return `permissions.${profile}={extends=":read-only",filesystem={":root"="deny",":minimal"="read",":tmpdir"="deny",":slash_tmp"="deny",":workspace_roots"={"."="${access}"}},network={enabled=false}}`;
 }
