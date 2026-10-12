@@ -693,26 +693,33 @@ fn upload_id(lease_id: &str, index: usize) -> String {
 /// Most file bytes one reply can carry: the relay sends files in the email itself.
 const EMAIL_FILE_BYTES: u64 = 3_500_000;
 
-/// A non-empty file inside the workspace and its size.
-fn workspace_file(workspace: &Path, name: &str) -> Result<(PathBuf, u64), Box<dyn Error>> {
+/// A non-empty regular file inside the workspace, opened now, and its size.
+/// It is opened before the relay is asked where it goes, and read later from
+/// this handle, so a process in the workspace can't swap in a symlink to a
+/// file outside it (or a FIFO) after the check.
+fn workspace_file(workspace: &Path, name: &str) -> Result<(fs::File, u64), Box<dyn Error>> {
     let root = workspace.canonicalize()?;
     let source = root.join(name).canonicalize()?;
     if !source.starts_with(&root) || !source.is_file() {
         return Err("Requested file is outside the selected workspace or is not a file".into());
     }
-    let size = fs::metadata(&source)?.len();
-    if size == 0 {
+    let file = fs::File::open(&source)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || source.canonicalize()? != source {
+        return Err("Requested file changed while it was being checked".into());
+    }
+    if metadata.len() == 0 {
         return Err("Requested file is empty".into());
     }
-    Ok((source, size))
+    Ok((file, metadata.len()))
 }
 
-fn read_capped(path: &Path, size: u64) -> Result<Vec<u8>, Box<dyn Error>> {
+fn read_capped(file: &fs::File, size: u64) -> Result<Vec<u8>, Box<dyn Error>> {
     if size > EMAIL_FILE_BYTES {
         return Err("File exceeds 3.5 MB".into());
     }
     let mut bytes = Vec::new();
-    fs::File::open(path)?.take(EMAIL_FILE_BYTES + 1).read_to_end(&mut bytes)?;
+    file.take(EMAIL_FILE_BYTES + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 != size {
         return Err("File changed while it was being sent".into());
     }
@@ -923,9 +930,9 @@ fn run_claim(client: &Client, settings: &Settings, mut claim: Value) -> Result<(
                         unsent.push(json!({"name": filename, "reason": reason}));
                         if required { Err(format!("not sent ({reason})").into()) } else { Ok(()) }
                     }
-                    (Ok((path, size)), _) => {
+                    (Ok((file, size)), _) => {
                         let id = upload_id(&lease_id, ids.len());
-                        read_capped(&path, size)
+                        read_capped(&file, size)
                             .and_then(|bytes| upload_file(client, base, token, &job_id, &lease_id, &id, &filename, mime_type, bytes))
                             .map(|()| ids.push(id))
                     }
@@ -1467,6 +1474,12 @@ mod tests {
         fs::write(workspace.join("inside.txt"), b"safe").unwrap();
         fs::write(root.join("outside.txt"), b"private").unwrap();
         let (inside, size) = workspace_file(&workspace, "inside.txt").unwrap();
+        // Swapped for a link to a private file after the check: the opened file is still what's sent.
+        #[cfg(unix)]
+        {
+            fs::remove_file(workspace.join("inside.txt")).unwrap();
+            std::os::unix::fs::symlink(root.join("outside.txt"), workspace.join("inside.txt")).unwrap();
+        }
         assert_eq!(read_capped(&inside, size).unwrap(), b"safe");
         assert!(workspace_file(&workspace, "../outside.txt").is_err());
         #[cfg(unix)]
