@@ -68,7 +68,7 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   const { env, sqlite } = bindings();
   env.GOOGLE_CLIENT_ID = clientId;
   env.AGENT_DOMAIN = 'tagmails.test';
-  env.SITE_ORIGIN = 'https://tagmails.chatgpt.site';
+  env.SITE_ORIGIN = 'https://site.tagmails.test';
   env.SITE_ALLOWED_ORIGINS = 'https://tagmails.com,https://www.tagmails.com';
   const identity = { sub: 'google-user-2', email: 'new.owner@gmail.com' };
   const options = { verifyIdentity: async (credential) => {
@@ -156,7 +156,7 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   const deviceKey = await generateDeviceKey();
   const pairRequest = new Request('https://relay.test/api/device/pair', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code, token, name: 'Saimun Mac', publicKey: deviceKey.publicKey }),
+    body: JSON.stringify({ code, token, name: 'Robin Mac', publicKey: deviceKey.publicKey }),
   });
   const welcome = [];
   const paired = await handleAccountRequest(pairRequest, env, { ...options, sendEmail: async (mail) => { welcome.push(mail); } });
@@ -167,7 +167,7 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   const owner = sqlite.prepare('SELECT a.owner_email, a.agent_email FROM accounts a JOIN devices d ON d.account_id = a.id WHERE d.id = ?').get(deviceId);
   assert.deepEqual(welcome[0].to, [owner.owner_email]);
   assert.equal(welcome[0].from, owner.agent_email);
-  assert.equal(welcome[0].subject, 'Welcome to Tagmails: Saimun Mac is ready');
+  assert.equal(welcome[0].subject, 'Welcome to Tagmails: Robin Mac is ready');
   assert.match(welcome[0].text, /^Hi there,/);
   assert.match(welcome[0].text, /Try it now:/);
   assert.doesNotMatch(welcome[0].text, /This email is free/);
@@ -179,7 +179,7 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.equal(welcomeEmail({ env, ownerEmail: 'o@gmail.com', deviceName: '[Verify your account](https://evil.test)' }).html.includes('href="https://evil.test'), false);
   // The computer's sealing key comes with the pairing (0.2.24+).
   assert.deepEqual({ ...sqlite.prepare('SELECT name, public_key, key_id FROM devices WHERE id = ?').get(deviceId) },
-    { name: 'Saimun Mac', public_key: deviceKey.publicKey, key_id: await keyIdFor(deviceKey.publicKey) });
+    { name: 'Robin Mac', public_key: deviceKey.publicKey, key_id: await keyIdFor(deviceKey.publicKey) });
   const listed = await handleAccountRequest(request('/api/account/devices', 'GET', undefined, cookie), env, options);
   assert.equal((await listed.json()).devices[0].id, deviceId);
   assert.equal((await handleAccountRequest(new Request('https://relay.test/api/device/pair', {
@@ -342,7 +342,7 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
 test('the owner can page through one email thread without exposing private result fields', async () => {
   const { env, sqlite } = bindings();
   env.GOOGLE_CLIENT_ID = clientId;
-  env.SITE_ORIGIN = 'https://tagmails.chatgpt.site';
+  env.SITE_ORIGIN = 'https://site.tagmails.test';
   const threadId = '11111111-1111-4111-8111-111111111111';
   sqlite.prepare('INSERT INTO threads (id, account_id, subject) VALUES (?, ?, ?)')
     .run(threadId, 'account-1', 'Multi-turn review');
@@ -388,7 +388,7 @@ test('the owner can page through one email thread without exposing private resul
 test('pairing codes stop working at sign-out and are limited per hour', async () => {
   const { env, sqlite } = bindings();
   env.GOOGLE_CLIENT_ID = clientId;
-  env.SITE_ORIGIN = 'https://tagmails.chatgpt.site';
+  env.SITE_ORIGIN = 'https://site.tagmails.test';
   const options = { verifyIdentity: async () => ({ sub: 'google-sub-1', email: 'owner@gmail.com' }) };
   const site = (path, method = 'GET') => new Request(`https://relay.test${path}`, { method,
     headers: { Origin: env.SITE_ORIGIN, Authorization: 'Bearer owner-token' } });
@@ -415,7 +415,7 @@ test('pairing codes stop working at sign-out and are limited per hour', async ()
 test('the private Site can show the owner account and manage only its paired devices', async () => {
   const { env, sqlite } = bindings();
   env.GOOGLE_CLIENT_ID = clientId;
-  env.SITE_ORIGIN = 'https://tagmails.chatgpt.site';
+  env.SITE_ORIGIN = 'https://site.tagmails.test';
   const options = { verifyIdentity: async (credential) => {
     if (credential !== 'owner-token') throw new Error('Invalid credential');
     return { sub: 'google-sub-1', email: 'owner@gmail.com' };
@@ -475,7 +475,7 @@ test('the private Site can show the owner account and manage only its paired dev
 test('the private Site lets only the Gmail owner manage reply access on an existing thread', async () => {
   const { env, sqlite } = bindings();
   env.GOOGLE_CLIENT_ID = clientId;
-  env.SITE_ORIGIN = 'https://tagmails.chatgpt.site';
+  env.SITE_ORIGIN = 'https://site.tagmails.test';
   const threadId = '11111111-1111-4111-8111-111111111111';
   sqlite.prepare('INSERT INTO threads (id, account_id, subject) VALUES (?, ?, ?)')
     .run(threadId, 'account-1', 'Shared <review>');

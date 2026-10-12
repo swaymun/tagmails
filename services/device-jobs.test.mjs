@@ -400,7 +400,7 @@ test('a 24 MB MIME attachment stays out of the claim and requires its active dev
 
 test('a run file is uploaded under its lease, privately downloaded, and deleted after seven days', async () => {
   const { env, sqlite, objects } = bindings();
-  env.SITE_ORIGIN = 'https://tagmails.chatgpt.site';
+  env.SITE_ORIGIN = 'https://site.tagmails.test';
   const paired = device(sqlite);
   await inbound(env);
   const lease = envelope((await call(env, paired.token, 'claim')).body);

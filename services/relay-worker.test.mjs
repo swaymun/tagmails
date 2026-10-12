@@ -116,7 +116,7 @@ test('old and new agent addresses keep one email thread after a domain move', as
 test('a malformed model request gets a relay clarification without a paired Mac', async () => {
   const { env, sqlite } = bindings();
   env.RESEND_TEST_FROM = 'onboarding@resend.dev';
-  env.SITE_ORIGIN = 'https://tagmails.chatgpt.site';
+  env.SITE_ORIGIN = 'https://site.tagmails.test';
   const body = 'Model: Luna please review this';
   const message = mail('invalid-model', 'owner@gmail.com', { body,
     rawMime: Buffer.from(['From: owner@gmail.com', 'To: agent@wonder.test',

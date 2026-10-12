@@ -40,7 +40,7 @@ test('stored objects and fields are sealed and open again; older plaintext still
 
 test('DKIM passes only for an untouched message signed by the sender domain', async () => {
   const { privateKey, resolveTxt } = keyRecord();
-  const raw = signed(MESSAGE('owner@gmail.com', 'saimun@tagmails.com'), { privateKey });
+  const raw = signed(MESSAGE('owner@gmail.com', 'robin@tagmails.com'), { privateKey });
   assert.equal((await verifyDkim(raw, 'owner@gmail.com', { resolveTxt })).pass, true);
   assert.equal((await verifyDkim(raw.replace('fix the footer', 'delete everything'), 'owner@gmail.com', { resolveTxt })).pass, false);
   assert.equal((await verifyDkim(raw.replace('Subject: Footer', 'Subject: Payroll'), 'owner@gmail.com', { resolveTxt })).pass, false);
@@ -150,13 +150,13 @@ test('Cloudflare mail runs only when the agent is in a signed To or Cc', async (
 test('replies go out through the EMAIL binding with threading headers and attachments', async () => {
   const sent = [];
   const env = { EMAIL: { send: async (message) => { sent.push(message); return { messageId: '<cf-1@tagmails.com>' }; } } };
-  const result = await sendWithCloudflare(env, { from: 'saimun@tagmails.com', to: ['owner@gmail.com'], cc: [],
+  const result = await sendWithCloudflare(env, { from: 'robin@tagmails.com', to: ['owner@gmail.com'], cc: [],
     subject: 'Re: Footer', html: '<p>Done</p>', text: 'Done',
     headers: { 'In-Reply-To': '<m-1@gmail.com>', References: '<m-1@gmail.com>', 'Not-Allowed': 'x' },
     tags: [{ name: 'tagmails_job', value: 'job-1' }],
     attachments: [{ filename: 'a.txt', contentType: 'text/plain', content: 'ZGF0YQ==' }] });
   assert.deepEqual(result, { data: { id: '<cf-1@tagmails.com>' } });
-  assert.deepEqual(sent[0].from, { email: 'saimun@tagmails.com', name: 'saimun' });
+  assert.deepEqual(sent[0].from, { email: 'robin@tagmails.com', name: 'robin' });
   assert.deepEqual(sent[0].headers, { 'In-Reply-To': '<m-1@gmail.com>', References: '<m-1@gmail.com>', 'X-TagMails-tagmails-job': 'job-1' });
   assert.equal(sent[0].attachments[0].type, 'text/plain');
   assert.equal(sent[0].cc, undefined);

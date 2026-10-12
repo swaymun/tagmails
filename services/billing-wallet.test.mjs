@@ -132,7 +132,7 @@ test('a dispute withdraws its amount from spendable credit once, and a reinstate
 
 test('the private Site shows only its Gmail owner test credits and returns from test Checkout', async () => {
   const { env, sqlite } = fixture();
-  env.SITE_ORIGIN = 'https://tagmails.chatgpt.site';
+  env.SITE_ORIGIN = 'https://site.tagmails.test';
   env.SITE_ALLOWED_ORIGINS = 'https://tagmails.com,https://www.tagmails.com';
   env.GOOGLE_CLIENT_ID = 'test-google-client';
   const site = (path, method = 'GET', bearer = 'owner-token', siteOrigin = env.SITE_ORIGIN) =>
@@ -162,7 +162,7 @@ test('the private Site shows only its Gmail owner test credits and returns from 
   assert.equal(balance.headers.get('access-control-allow-origin'), env.SITE_ORIGIN);
   assert.deepEqual(await balance.json(), { balanceCents: 0, waitingEmails: 0,
     currency: 'usd', testMode: true, checkoutEnabled: true });
-  assert.equal((await call(site('/api/site/billing', 'GET', 'owner-token', 'http://tagmails.chatgpt.site'))).status, 403);
+  assert.equal((await call(site('/api/site/billing', 'GET', 'owner-token', 'http://site.tagmails.test'))).status, 403);
   assert.equal((await handleTestWalletRequest(site('/api/site/billing'), env, {
     verifyIdentity: async () => ({ sub: 'other-sub', email: 'other@gmail.com' }),
   })).status, 404);

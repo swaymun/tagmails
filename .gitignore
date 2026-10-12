@@ -7,3 +7,5 @@ target/
 .wrangler/
 wrangler.selfhost.jsonc
 calls.jsonl
+.claude/launch.json
+.DS_Store

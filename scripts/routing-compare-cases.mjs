@@ -120,7 +120,7 @@ export const STEER_CASES = [
   ['refactor', 'can you look at why the site build is slow?', 'queue'],
   ['deploy', 'wait, use the staging env not dev', 'steer'], ['deploy', 'abort the deploy', 'steer'],
   ['deploy', 'once it is live, run the smoke tests', 'queue'], ['deploy', 'and what is the current balance?', 'queue'],
-  ['japan', 'Sounds good.\n\nOn Mon, Oct 5, Saimun wrote:\n> make it 10 days', 'ack'],
+  ['japan', 'Sounds good.\n\nOn Mon, Oct 5, Robin wrote:\n> make it 10 days', 'ack'],
   ['bug', 'ok\n> also check staging', 'ack'],
   ['report', 'Please also include a chart of revenue by region in the same summary', 'steer'],
   ['report', 'Also: what are the best CRM tools for a 5 person team?', 'queue'],
