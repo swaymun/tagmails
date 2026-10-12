@@ -204,7 +204,7 @@ async function pair(request, env, sendEmail) {
   try { body = await bodyJson(request); }
   catch { return json({ error: 'Invalid pairing request' }, 400); }
   if (!PAIR_CODE.test(body.code ?? '') || !DEVICE_TOKEN.test(body.token ?? '') ||
-      typeof body.name !== 'string' || !body.name.trim() || body.name.length > 80 ||
+      typeof body.name !== 'string' || !body.name.trim() || body.name.length > 80 || /[\p{Cc}\p{Cf}]/u.test(body.name) ||
       (body.publicKey !== undefined && !validPublicKey(body.publicKey))) {
     return json({ error: 'Invalid pairing request' }, 400);
   }

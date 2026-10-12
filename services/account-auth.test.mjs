@@ -4,6 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import test from 'node:test';
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { bindings } from './bindings-fixture.mjs';
+import { welcomeEmail } from './welcome-mail.mjs';
 import { handleAccountRequest, PAIRING_CODES_PER_HOUR, verifyGoogleCredential } from './account-auth.mjs';
 import { handleDeviceRequest } from './device-jobs.mjs';
 import { handleInbound } from './relay-worker.mjs';
@@ -172,6 +173,8 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.match(welcome[0].html, /Turn on reactions/);
   // It asks for a balance up front, since unfunded emails wait.
   assert.match(welcome[0].text, /Add a balance first/);
+  // The computer names itself: a name can't carry a header break, or turn into a link in the welcome.
+  assert.equal(welcomeEmail({ env, ownerEmail: 'o@gmail.com', deviceName: '[Verify your account](https://evil.test)' }).html.includes('href="https://evil.test'), false);
   // The computer's sealing key comes with the pairing (0.2.24+).
   assert.deepEqual({ ...sqlite.prepare('SELECT name, public_key, key_id FROM devices WHERE id = ?').get(deviceId) },
     { name: 'Saimun Mac', public_key: deviceKey.publicKey, key_id: await keyIdFor(deviceKey.publicKey) });
@@ -180,6 +183,9 @@ test('a Gmail owner signs in, pairs one device, revokes it, and signs out', asyn
   assert.equal((await handleAccountRequest(new Request('https://relay.test/api/device/pair', {
     method: 'POST', body: JSON.stringify({ code, token: `tm_dev_${randomBytes(32).toString('base64url')}`, name: 'Other' }),
   }), env, options)).status, 409);
+  assert.equal((await handleAccountRequest(new Request('https://relay.test/api/device/pair', {
+    method: 'POST', body: JSON.stringify({ code, token: `tm_dev_${randomBytes(32).toString('base64url')}`, name: 'Mac\r\nBcc: x@evil.test' }),
+  }), env, options)).status, 400);
   const claim = await handleDeviceRequest(new Request('https://relay.test/api/device/claim', {
     method: 'POST', headers: { Authorization: `Bearer ${token}` },
   }), env);

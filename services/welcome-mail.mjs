@@ -3,7 +3,9 @@
 import { renderResult } from '../apps/mock-inbox/mail.mjs';
 import { emailPriceMillicents } from './email-charges.mjs';
 
-export function welcomeEmail({ env, ownerEmail, deviceName, siteOrigin }) {
+export function welcomeEmail({ env, ownerEmail, deviceName: rawName, siteOrigin }) {
+  // The paired computer chose this name; it must not become Markdown (a link) in TagMails' own email.
+  const deviceName = String(rawName).replace(/[\\`*_[\]()<>#!|~]/g, '').trim() || 'Your computer';
   const cents = emailPriceMillicents(env) / 1000;
   const price = `$${(cents / 100).toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
   const answer = [
