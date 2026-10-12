@@ -523,8 +523,11 @@ export default {
         if (['idle', 'disabled', 'contended', 'uncertain'].includes(reaction.state)) break;
       }
     } catch { console.error('Status reaction send is delayed'); }
+    // A reply that throws is set aside (retry_after), so the next pass moves on.
     for (let index = 0; index < 10; index += 1) {
-      const result = await sendNextOutbox(env);
+      let result;
+      try { result = await sendNextOutbox(env); }
+      catch { console.error('Outbound send is delayed'); continue; }
       if (['idle', 'contended'].includes(result.state)) break;
     }
     try { await purgeSettledOutboundBodies(env); }

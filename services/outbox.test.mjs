@@ -228,10 +228,36 @@ test('a transient storage read leaves the outbox queued for retry', async () => 
   await assert.rejects(sendNextOutbox(env), /Temporary R2 error/);
   assert.equal(sqlite.prepare('SELECT state FROM outbox WHERE job_id = ?').get('job-1').state, 'queued');
   env.MAIL.get = get;
+  // Set aside for ten minutes so other replies go first, then retried.
+  assert.equal((await sendNextOutbox(env)).state, 'idle');
+  sqlite.prepare("UPDATE outbox SET retry_after = datetime('now', '-1 second')").run();
   assert.equal((await sendNextOutbox(env, {
     sendEmail: async () => ({ data: { id: 'sent-after-retry' } }),
     getSentEmail: async () => ({ data: { message_id: '<sent-after-retry@tagmails.test>' } }),
   })).state, 'sent');
+});
+
+test('a reply that cannot be rendered is blocked, and a Cloudflare send failure gives up after 30 minutes, so neither holds up the queue', async () => {
+  const fixture = bindings();
+  const { env, sqlite } = fixture;
+  await queuedTurn(fixture, { number: 1, from: 'owner@gmail.com', to: ['agent@wonder.test'] });
+  await queuedTurn(fixture, { number: 2, from: 'owner@gmail.com', to: ['agent@wonder.test'], threadId: 'thread-2' });
+  await env.MAIL.put('results/1.json', '{not json');
+  let sends = 0;
+  const provider = { sendEmail: async () => ({ data: { id: `sent-${++sends}` } }),
+    getSentEmail: async (id) => ({ data: { message_id: `<${id}@tagmails.test>` } }) };
+  assert.deepEqual(await sendNextOutbox(env, provider), { state: 'blocked', jobId: 'job-1' });
+  assert.equal((await sendNextOutbox(env, provider)).state, 'sent', 'the other account\'s reply is not stuck behind it');
+
+  // Cloudflare's binding throws when it refuses a message, and has no lookup to recover one.
+  env.EMAIL = { send: async () => { throw new Error('E_RATE_LIMIT_EXCEEDED'); } };
+  await queuedTurn(fixture, { number: 3, from: 'owner@gmail.com', to: ['agent@wonder.test'], threadId: 'thread-3' });
+  await queuedTurn(fixture, { number: 4, from: 'owner@gmail.com', to: ['agent@wonder.test'], threadId: 'thread-3' });
+  assert.equal((await sendNextOutbox(env, { sendEmail: env.EMAIL.send })).state, 'uncertain');
+  assert.equal((await reconcileOneUnknownOutbox(env)).state, 'idle', 'not before 30 minutes');
+  sqlite.prepare("UPDATE outbox SET updated_at = datetime('now', '-31 minutes') WHERE job_id = 'job-3'").run();
+  assert.deepEqual(await reconcileOneUnknownOutbox(env), { state: 'blocked', jobId: 'job-3' });
+  assert.equal((await sendNextOutbox(env, provider)).jobId, 'job-4', 'the next reply in its thread can go');
 });
 
 test('the result email names the model recorded at receipt, including an explicit override', async () => {
@@ -479,7 +505,9 @@ test('provider lookup reconciles only an exactly tagged uncertain reply', async 
   assert.equal(sqlite.prepare('SELECT state FROM outbox WHERE job_id = ?').get(jobId).state, 'uncertain');
   assert.equal((await reconcileOneUnknownOutbox(env, provider)).state, 'idle');
   assert.equal(lists, 1);
-  sqlite.prepare("UPDATE outbox SET updated_at = datetime('now', '-20 minutes') WHERE job_id = ?").run(jobId);
+  // Lookups rotate on checked_at; updated_at, which retention reads as the finish time, stays put.
+  assert.equal(sqlite.prepare("SELECT updated_at <= datetime('now', '-19 minutes') AS old FROM outbox WHERE job_id = ?").get(jobId).old, 1);
+  sqlite.prepare("UPDATE outbox SET checked_at = datetime('now', '-20 minutes') WHERE job_id = ?").run(jobId);
   tag = jobId;
   assert.deepEqual(await reconcileOneUnknownOutbox(env, provider), { state: 'accepted', jobId });
   assert.equal(sqlite.prepare('SELECT provider_email_id FROM outbox WHERE job_id = ?').get(jobId).provider_email_id,

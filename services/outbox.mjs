@@ -136,12 +136,30 @@ export async function reconcileOneUnknownOutbox(env, {
   listSentEmails = (options) => new Resend(env.RESEND_API_KEY).emails.list(options),
   getSentEmail = (id) => new Resend(env.RESEND_API_KEY).emails.get(id),
 } = {}) {
-  if (!env.DB || !env.RESEND_API_KEY) throw new Error('Outbound reconciliation bindings are incomplete');
+  if (!env.DB) throw new Error('Outbound reconciliation bindings are incomplete');
+  // Cloudflare Email Sending has no sent-mail lookup, and its binding throws
+  // when it refuses a message. After 30 minutes an uncertain reply is given up:
+  // blocked, its charge released and its stored copy deleted, so later replies
+  // in the thread can go. It is never re-sent (it may have been delivered).
+  if (env.EMAIL) {
+    const row = await env.DB.prepare(`UPDATE outbox SET state = 'blocked', updated_at = CURRENT_TIMESTAMP
+      WHERE job_id = (SELECT job_id FROM outbox WHERE state = 'uncertain'
+        AND updated_at <= datetime('now', '-30 minutes') ORDER BY updated_at, job_id LIMIT 1)
+      AND state = 'uncertain' RETURNING job_id`).bind().first();
+    if (!row) return { state: 'idle' };
+    console.error('Uncertain reply given up after 30 minutes', row.job_id);
+    await releaseTestEmail(env, row.job_id);
+    await deleteOutboundCopy(env, row.job_id);
+    return { state: 'blocked', jobId: row.job_id };
+  }
+  if (!env.RESEND_API_KEY) throw new Error('Outbound reconciliation bindings are incomplete');
   // A provider lookup is read-only. Scan one held reply at most once every
   // 15 minutes, and never infer acceptance from recipients or subject alone.
-  const row = await env.DB.prepare(`UPDATE outbox SET updated_at = CURRENT_TIMESTAMP
+  // checked_at, not updated_at: retention reads updated_at as the finish time.
+  const row = await env.DB.prepare(`UPDATE outbox SET checked_at = CURRENT_TIMESTAMP
     WHERE job_id = (SELECT job_id FROM outbox WHERE state = 'uncertain' AND payload_json IS NOT NULL
-      AND updated_at <= datetime('now', '-15 minutes') ORDER BY updated_at, job_id LIMIT 1)
+      AND COALESCE(checked_at, updated_at) <= datetime('now', '-15 minutes')
+      ORDER BY COALESCE(checked_at, updated_at), job_id LIMIT 1)
     AND state = 'uncertain' RETURNING job_id, payload_json`).bind().first();
   if (!row) return { state: 'idle' };
   let payload;
@@ -466,6 +484,20 @@ const IN_ORDER = `NOT EXISTS (SELECT 1 FROM jobs earlier
         WHERE earlier.thread_id = j.thread_id AND earlier.rowid < j.rowid
           AND prior.state IN ('queued', 'sending', 'uncertain', 'accepted'))`;
 
+// The stored copy of a reply that will never be sent (relay-key copy or a
+// held reply sealed to the computer). Returns whether it is gone.
+async function deleteOutboundCopy(env, jobId) {
+  const row = await env.DB.prepare(`SELECT t.account_id FROM jobs j JOIN threads t ON t.id = j.thread_id WHERE j.id = ?`)
+    .bind(jobId).first();
+  if (!row) return true;
+  try { await env.MAIL.delete(`outbound/${row.account_id}/${jobId}.json`); return true; }
+  catch { console.error('Outbound copy deletion is delayed', jobId); return false; }
+}
+
+// Errors a retry can't fix: a failed authenticated decryption, a renderer or
+// parser bug. Anything else (a storage or network hiccup) is retried later.
+const PERMANENT_ERRORS = new Set(['OperationError', 'RangeError', 'SyntaxError', 'TypeError']);
+
 async function blockRow(env, jobId) {
   const blocked = await env.DB.prepare("UPDATE outbox SET state = 'blocked', updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND state = 'queued' RETURNING job_id")
     .bind(jobId).first();
@@ -571,9 +603,22 @@ export async function sendNextOutbox(env, options = {}) {
   // Replies for sealed mail are sent from memory (deliverReply) or by their
   // computer (sendHeldReply), never from here.
   const row = await env.DB.prepare(`${QUEUED_ROW} AND m.seal_key_id IS NULL AND ${IN_ORDER}
+      AND (o.retry_after IS NULL OR o.retry_after <= CURRENT_TIMESTAMP)
     ORDER BY j.created_at, j.rowid LIMIT 1`).bind().first();
   if (!row) return { state: 'idle' };
-  const { payload } = await rendered(env, row, null);
+  // One reply that can't be rendered must not hold up everyone else's: it is
+  // blocked if retrying can't help, or else set aside for ten minutes.
+  let payload;
+  try { ({ payload } = await rendered(env, row, null)); }
+  catch (error) {
+    if (PERMANENT_ERRORS.has(error?.name)) {
+      console.error('Outbox reply cannot be rendered', row.job_id, error.name);
+      return blockRow(env, row.job_id);
+    }
+    await env.DB.prepare(`UPDATE outbox SET retry_after = datetime('now', '+10 minutes')
+      WHERE job_id = ? AND state = 'queued'`).bind(row.job_id).run();
+    throw error;
+  }
   if (!payload) return blockRow(env, row.job_id);
   return sendPrepared(env, row, payload, { sendEmail, getSentEmail });
 }
@@ -654,8 +699,15 @@ export async function tendSealedReplies(env) {
     LIMIT 10`).bind().all();
   for (const row of stranded.results ?? stranded) {
     console.error('Sealed reply can no longer be sent', row.job_id);
-    if ((await blockRow(env, row.job_id)).state === 'blocked' && row.held) {
-      await env.MAIL.delete(`outbound/${row.account_id}/${row.job_id}.json`);
+    await blockRow(env, row.job_id);
+  }
+  // Held copies of blocked replies are deleted, retrying until storage agrees;
+  // payload_json is cleared only once the copy is gone.
+  const unheld = await env.DB.prepare(`SELECT o.job_id FROM outbox o
+    WHERE o.state = 'blocked' AND ${HELD_FOR} IS NOT NULL LIMIT 10`).bind().all();
+  for (const row of unheld.results ?? unheld) {
+    if (await deleteOutboundCopy(env, row.job_id)) {
+      await env.DB.prepare("UPDATE outbox SET payload_json = NULL WHERE job_id = ? AND state = 'blocked'").bind(row.job_id).run();
     }
   }
   // A job nobody can claim (queued, or running on a lapsed lease) whose key is gone.

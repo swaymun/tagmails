@@ -535,9 +535,16 @@ test('a held reply its computer can no longer open is dropped so the thread move
   assert.equal(relay.sqlite.prepare('SELECT state FROM outbox WHERE job_id = ?').get(opened.jobId).state, 'queued');
   // The computer refuses held replies older than a week; the relay gives up on them too.
   relay.sqlite.prepare("UPDATE outbox SET updated_at = datetime('now', '-8 days') WHERE job_id = ?").run(opened.jobId);
+  // Storage refuses the first deletion; the sealed copy is still deleted on a later pass.
+  const remove = relay.env.MAIL.delete;
+  relay.env.MAIL.delete = async () => { throw new Error('R2 unavailable'); };
   await tendSealedReplies(relay.env);
   assert.equal(relay.sqlite.prepare('SELECT state FROM outbox WHERE job_id = ?').get(opened.jobId).state, 'blocked');
+  assert.equal(relay.objects.has(`outbound/account-1/${opened.jobId}.json`), true);
+  relay.env.MAIL.delete = remove;
+  await tendSealedReplies(relay.env);
   assert.equal(relay.objects.has(`outbound/account-1/${opened.jobId}.json`), false);
+  assert.equal(relay.sqlite.prepare('SELECT payload_json FROM outbox WHERE job_id = ?').get(opened.jobId).payload_json, null);
 });
 
 test('mail is sealed to the computer it is routed to, or kept for an older computer that can run it', async () => {
