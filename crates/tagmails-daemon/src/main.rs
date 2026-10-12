@@ -1579,7 +1579,7 @@ when you ask by email); permissions and folders change only with `tagmails start
 terminal. --instructions are standing instructions every one of your emails follows
 (for example where to put files too large for email); a reply says when they change.
 
-Pairing codes come from https://tagmails.com/setup. By default TagMails picks one of
+Pairing codes come from your relay's site (https://tagmails.com for the hosted service). By default TagMails picks one of
 your recent Codex or Claude project folders for each new email (--projects). Use
 --workspace to pin every email to one folder instead. To pick the folder, TagMails
 shares each project's name, README excerpt, top-level files and, with the default

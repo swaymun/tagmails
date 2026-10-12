@@ -136,7 +136,7 @@ async function signIn(request, env, verifyIdentity, exchangeCode) {
   } catch { return json({ error: 'Google sign-in failed' }, 401, headers); }
   if (env.PUBLIC_SIGNUP_ENABLED !== 'true' &&
       identity.email !== String(env.PILOT_OWNER_EMAIL ?? '').trim().toLowerCase()) {
-    return json({ error: 'TagMails signup is closed during the private pilot' }, 403, headers);
+    return json({ error: 'This TagMails relay accepts sign-in only from its owner' }, 403, headers);
   }
   const existing = await env.DB.prepare('SELECT id, active FROM accounts WHERE google_sub = ?')
     .bind(identity.sub).first();
