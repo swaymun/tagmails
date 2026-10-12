@@ -164,6 +164,31 @@ async function refundedCheckout(env, refund) {
   return json({ received: true });
 }
 
+// A dispute takes the money back like a refund until Stripe reinstates it.
+// The ledger has no dispute kinds (its CHECK can't change in place), so the
+// dispute's own du_ id is recorded as a refund and its restoration.
+async function disputedCheckout(env, type, dispute) {
+  if (!/^du_[A-Za-z0-9_]+$/.test(dispute?.id ?? '') || !/^pi_[A-Za-z0-9_]+$/.test(dispute?.payment_intent ?? '') ||
+      dispute.currency !== 'usd' || !Number.isInteger(dispute.amount) || dispute.amount <= 0 || dispute.amount > TOP_UP_CENTS) {
+    return json({ error: 'Dispute does not match a top-up' }, 422);
+  }
+  const row = await env.DB.prepare('SELECT id, account_id FROM billing_checkouts WHERE stripe_payment_intent = ?')
+    .bind(dispute.payment_intent).first();
+  if (!row) return json({ error: 'Unknown payment; retry later' }, 409);
+  const credited = await env.DB.prepare("SELECT id FROM credit_ledger WHERE checkout_id = ? AND kind = 'test_top_up'")
+    .bind(row.id).first();
+  if (!credited) return json({ error: 'Top-up has not been credited; retry later' }, 409);
+  await env.DB.prepare(type === 'charge.dispute.funds_withdrawn'
+    ? `INSERT INTO credit_ledger (id, account_id, checkout_id, amount_cents, kind, source_id)
+      VALUES (?1, ?2, ?3, ?4, 'test_refund', ?5) ON CONFLICT(kind, source_id) DO NOTHING`
+    : `INSERT INTO credit_ledger (id, account_id, checkout_id, amount_cents, kind, source_id)
+      SELECT ?1, account_id, checkout_id, -amount_cents, 'test_refund_restored', source_id
+      FROM credit_ledger WHERE kind = 'test_refund' AND source_id = ?5 AND checkout_id = ?3
+      ON CONFLICT(kind, source_id) DO NOTHING`)
+    .bind(randomUUID(), row.account_id, row.id, -dispute.amount, dispute.id).run();
+  return json({ received: true });
+}
+
 async function reconcileRefund(env, refundId, stripeFetch) {
   const notification = await env.DB.prepare('SELECT payment_intent FROM refund_notifications WHERE refund_id = ?')
     .bind(refundId).first();
@@ -230,6 +255,9 @@ async function stripeWebhook(request, env, now, stripeFetch) {
       next_check_at = CURRENT_TIMESTAMP, resolved_at = NULL
       WHERE payment_intent = excluded.payment_intent`).bind(id, paymentIntent).run();
     return reconcileRefund(env, id, stripeFetch);
+  }
+  if (['charge.dispute.funds_withdrawn', 'charge.dispute.funds_reinstated'].includes(event.type)) {
+    return disputedCheckout(env, event.type, event.data?.object);
   }
   return json({ received: true, ignored: true });
 }

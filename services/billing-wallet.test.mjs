@@ -105,6 +105,25 @@ test('test Checkout credits once after a signed paid event and reverses a succes
   assert.equal(sqlite.prepare("SELECT count(*) n FROM credit_ledger WHERE kind = 'test_refund_restored'").get().n, 1);
 });
 
+test('a dispute withdraws its amount from spendable credit once, and a reinstatement restores it once', async () => {
+  const { env, sqlite } = fixture();
+  const call = (req) => handleTestWalletRequest(req, env, { stripeFetch: async () => Response.json({}) });
+  sqlite.prepare("INSERT INTO billing_checkouts (id, account_id, amount_cents, stripe_payment_intent) VALUES ('checkout-d', 'account-1', 1000, 'pi_dispute')").run();
+  sqlite.prepare(`INSERT INTO credit_ledger (id, account_id, checkout_id, amount_cents, kind, source_id)
+    VALUES ('ledger-d', 'account-1', 'checkout-d', 1000, 'test_top_up', 'cs_dispute')`).run();
+  const balance = async () => (await (await call(request('/api/billing'))).json()).balanceCents;
+  const dispute = { id: 'du_test_1', object: 'dispute', payment_intent: 'pi_dispute', currency: 'usd', amount: 1000 };
+  const event = (type, id) => signedEvent({ id, livemode: false, type, data: { object: dispute } });
+  assert.equal((await call(event('charge.dispute.funds_withdrawn', 'evt_d1'))).status, 200);
+  assert.equal((await call(event('charge.dispute.funds_withdrawn', 'evt_d1_replay'))).status, 200);
+  assert.equal(await balance(), 0);
+  assert.equal((await call(event('charge.dispute.funds_reinstated', 'evt_d2'))).status, 200);
+  assert.equal((await call(event('charge.dispute.funds_reinstated', 'evt_d2_replay'))).status, 200);
+  assert.equal(await balance(), 1000);
+  assert.equal((await call(signedEvent({ id: 'evt_d3', livemode: false, type: 'charge.dispute.funds_withdrawn',
+    data: { object: { ...dispute, id: 'du_other', payment_intent: 'pi_unknown' } } }))).status, 409);
+});
+
 test('the private Site shows only its Gmail owner test credits and returns from test Checkout', async () => {
   const { env, sqlite } = fixture();
   env.SITE_ORIGIN = 'https://tagmails.chatgpt.site';
