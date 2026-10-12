@@ -7,7 +7,7 @@ import { handleDeviceRequest } from './device-jobs.mjs';
 import { handleAccountRequest } from './account-auth.mjs';
 import { recordDeliveryOutcome, sendNextOutbox } from './outbox.mjs';
 import { handleTestWalletRequest } from './billing-wallet.mjs';
-import { reconcileTestEmailCharges, reservePendingTestEmails, testWalletSnapshot } from './email-charges.mjs';
+import { FREE_RELAY_REPLIES_PER_DAY, reconcileTestEmailCharges, reservePendingTestEmails, testWalletSnapshot } from './email-charges.mjs';
 
 function pilot() {
   const fixture = bindings();
@@ -298,6 +298,22 @@ test('a question back is charged when the balance covers it, and still sent free
   assert.equal(await completeOneModelClarification(env), true);
   assert.deepEqual(sqlite.prepare('SELECT state, amount_millicents FROM test_email_charges').all().map((row) => ({ ...row })),
     [{ state: 'reserved', amount_millicents: 5000 }]);
+});
+
+test('an account with no balance gets a few free relay replies a day, then none, so Cc\'d strangers can\'t be spammed', async () => {
+  const { env, sqlite } = pilot();
+  const outbox = () => sqlite.prepare('SELECT COUNT(*) n FROM outbox').get().n;
+  for (let index = 0; index < FREE_RELAY_REPLIES_PER_DAY + 2; index += 1) {
+    await deliver(env, `spam-${index}`, 'owner@gmail.com', { body: 'Model: nonexistent\nHi.', cc: ['victim@example.com'] });
+    assert.equal(await completeOneModelClarification(env), true);
+  }
+  assert.equal(outbox(), FREE_RELAY_REPLIES_PER_DAY);
+  // The question is still answered on the run page, and a paying account is never capped.
+  assert.equal(sqlite.prepare("SELECT COUNT(*) n FROM jobs WHERE state = 'completed' AND result_key IS NOT NULL").get().n, FREE_RELAY_REPLIES_PER_DAY + 2);
+  credit(sqlite, 'account-1', 5, 'cap');
+  await deliver(env, 'paid-question', 'owner@gmail.com', { body: 'Model: nonexistent\nHi.' });
+  assert.equal(await completeOneModelClarification(env), true);
+  assert.equal(outbox(), FREE_RELAY_REPLIES_PER_DAY + 1);
 });
 
 test('an email costs a quarter of a cent by default, so a dollar funds 400 emails', async () => {

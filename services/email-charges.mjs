@@ -96,8 +96,30 @@ export async function testWalletSnapshot(env, accountId) {
   return { balanceCents: Math.floor(balanceMillicents / 1000), waitingEmails: row.waiting };
 }
 
+// Unpaid relay replies an account may send per day. Without a cap, an account
+// with no balance could mail 'Model: nonexistent' with a Cc again and again and
+// have TagMails send each Cc'd stranger a free reply.
+export const FREE_RELAY_REPLIES_PER_DAY = 5;
+
+// Whether TagMails may write this account a reply of its own now: always when
+// the balance covers it, otherwise within the daily free allowance.
+export async function relayReplyAllowed(env, accountId) {
+  if (!testBillingEnabled(env)) return true;
+  const row = await env.DB.prepare(`SELECT
+    (SELECT COALESCE(SUM(amount_cents), 0) * 1000 FROM credit_ledger WHERE account_id = ?)
+      - (SELECT COALESCE(SUM(amount_millicents), 0) FROM test_email_charges
+         WHERE account_id = ? AND state != 'released') AS balance,
+    (SELECT COUNT(*) FROM jobs j JOIN threads t ON t.id = j.thread_id JOIN outbox o ON o.job_id = j.id
+      WHERE t.account_id = ? AND j.created_at > datetime('now', '-1 day')
+        AND j.lease_id IS NULL -- written by the relay; no computer ever claimed it
+        AND NOT EXISTS (SELECT 1 FROM test_email_charges c WHERE c.job_id = j.id)) AS free`)
+    .bind(accountId, accountId, accountId).first();
+  return row.balance >= emailPriceMillicents(env) || row.free < FREE_RELAY_REPLIES_PER_DAY;
+}
+
 // Replies TagMails writes itself (a question back, a revoked computer) are
-// charged when the balance covers them, and still sent free when it doesn't.
+// charged when the balance covers them, and still sent free when it doesn't
+// (up to FREE_RELAY_REPLIES_PER_DAY).
 export async function chargeRelayReply(env, jobId) {
   if (!testBillingEnabled(env)) return;
   await env.DB.prepare(`INSERT OR IGNORE INTO test_email_charges (job_id, account_id, amount_millicents, state)

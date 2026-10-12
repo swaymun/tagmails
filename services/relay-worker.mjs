@@ -15,7 +15,7 @@ import { accountPage } from './account-page.mjs';
 import { handleTestWalletRequest, reconcileDueRefunds } from './billing-wallet.mjs';
 import { deleteExpiredMcpRows, handleOAuthRequest } from './mcp-oauth.mjs';
 import { handleMcpRequest } from './mcp-server.mjs';
-import { chargeRelayReply, fundPendingTestEmails, reconcileTestEmailCharges, reservePendingTestEmails,
+import { chargeRelayReply, fundPendingTestEmails, reconcileTestEmailCharges, relayReplyAllowed, reservePendingTestEmails,
   testBillingEnabled } from './email-charges.mjs';
 import { deleteExpiredRunArtifacts } from './run-artifacts.mjs';
 import { deleteExpiredInboundMime, deleteExpiredRunResults } from './inbound-retention.mjs';
@@ -108,13 +108,15 @@ export async function completeOneModelClarification(env) {
   const result = { runtime: 'relay', state: 'needs_clarification', summary: row.error,
     checks: ['No local agent ran.'] };
   await env.MAIL.put(key, JSON.stringify(result), { httpMetadata: { contentType: 'application/json' } });
+  // Past the free allowance, the answer stays on the run page and is not mailed.
+  const reply = await relayReplyAllowed(env, row.account_id);
   const [updated] = await env.DB.batch([
     env.DB.prepare(`UPDATE jobs SET state = 'completed', result_key = ?
       WHERE id = ? AND state = 'queued' AND json_extract(model_json, '$.error') = ?`)
       .bind(key, row.id, row.error),
-    env.DB.prepare(`INSERT OR IGNORE INTO outbox (job_id)
+    ...(reply ? [env.DB.prepare(`INSERT OR IGNORE INTO outbox (job_id)
       SELECT id FROM jobs WHERE id = ? AND state = 'completed' AND result_key = ?`)
-      .bind(row.id, key),
+      .bind(row.id, key)] : []),
   ]);
   const completed = (updated.meta?.changes ?? updated.changes) === 1;
   if (completed) await chargeRelayReply(env, row.id);
@@ -345,7 +347,9 @@ async function acceptMessage(env, message, { fetchModel = fetch } = {}) {
     statements.push(env.DB.prepare(`INSERT INTO status_reactions (job_id, status)
       SELECT ?, 'received' WHERE (SELECT status_reactions FROM accounts WHERE id = ?) = 1`).bind(jobId, account.id));
   }
-  if (threadUnavailable) statements.push(env.DB.prepare('INSERT INTO outbox (job_id) VALUES (?)').bind(jobId));
+  if (threadUnavailable && await relayReplyAllowed(env, account.id)) {
+    statements.push(env.DB.prepare('INSERT INTO outbox (job_id) VALUES (?)').bind(jobId));
+  }
   try {
     await env.DB.batch(statements);
   } catch (error) {
