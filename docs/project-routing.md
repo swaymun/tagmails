@@ -1,40 +1,23 @@
 # Project routing
 
-A new email thread runs in one of the paired machine's project folders or, when none clearly fits, in a chat folder: `~/Documents/Codex/<date>/<subject>` for Codex (where the Codex app keeps chats without a project) and `~/.tagmails/chats/<date>/<subject>` for Claude Code or when that folder is missing. Only an explicit folder the machine doesn't have gets a "which project?" reply. Replies stay in the thread's folder. Code: `agent/project-inventory.mjs` (what the machine shares), `services/project-route.mjs` (the decision).
+A new email thread runs in one of your computer's project folders or, when none clearly fits, in a chat folder: `~/Documents/Codex/<date>/<subject>` for Codex (where the Codex app keeps chats without a project) and `~/.tagmails/chats/<date>/<subject>` for Claude Code or when that folder is missing. Replies stay in the thread's folder. Code: `agent/project-inventory.mjs` (what the computer lists), `agent/local-router.mjs` (the choice), `services/project-route.mjs` (what the relay settles itself).
 
 ## How a folder is chosen
 
-1. **Explicit path.** If the sender writes "work in /path" (or "project at: ~/path", "cd …"), the relay picks the deepest published folder containing it, or asks when none does. No model call. Quoted lines and quoted strings are ignored, so a forwarded "work in …" can't redirect the agent.
-2. **The Mac.** Otherwise the claiming Mac chooses (since 0.2.27, `agent/local-router.mjs`): Claude Haiku 5.5 medium for Claude users, GPT-6 Luna medium for Codex users (the other CLI if one is missing or fails), on the owner's own subscription. One call answers a folder ID, `ad_hoc` (scratch) or `ask`, with the October 4 decision rules plus the v2 rules, one-line candidate descriptions (160 characters) and the local evidence below. The relay never sees the choice before the Mac reports it (`/api/device/route`). A failed or unavailable classifier means a chat folder, never a stuck job. A folder another job of that Mac is using sends the job back to the queue (`/api/device/release`) until it is free. The October 12 comparison (`.local/routing-compare-2026-10-12/SUMMARY.md`) found Haiku 5.5 medium level with the old hosted classifier on real history (49/54 vs 50/54, no wrong folder); Luna medium was weaker on folders (44–47/54, a wrong folder every run), so a Luna user may see more "which project?" questions.
-3. **Guards.** The agent only runs in a folder it published itself (checked locally), and a pinned `--workspace` always wins.
+1. **An explicit path.** If the email says "work in /path" (or "project at ~/path", "cd …"), the relay picks the deepest listed folder containing it, or replies asking which project when none does. Quoted lines and quoted strings are ignored, so a forwarded "work in …" can't redirect the agent.
+2. **Your computer.** Otherwise the computer that claims the email decides, with Claude Haiku for Claude Code users or GPT-6 Luna for Codex users (the other CLI if one is missing or fails), on your own subscription. It answers a folder, a chat folder, or "ask", and reports the choice to the relay. If it can't decide, the email runs in a chat folder; it never gets stuck. If another email is already running in that folder, this one waits its turn.
+3. **Guards.** The agent only runs in a folder the computer listed itself, and a pinned `tagmails start --workspace PATH` always wins.
 
-## What the machine shares
+A new project folder becomes routable once a Codex project or Claude Code session exists there. The list refreshes every 15 minutes, or on a service restart.
 
-| Field | Source | Sent with |
+## What the computer lists
+
+| Field | Source | When |
 | --- | --- | --- |
-| name, aliases, path, branch | Codex `project/list`, Claude session folders, git | always |
-| README excerpt (900 chars) | README/AGENTS/CLAUDE.md or package.json | always |
-| repository name, top-level entries (30) | `git remote`, directory listing | always |
-| `recentRequests`: first line (160 chars) of the last 3 sessions | Codex `thread/list`, Claude session files; emails, keys and the home path are redacted | `--routing-context full` (default) |
-| `lastActiveDaysAgo` | session timestamps | always |
+| name, aliases, path, branch | Codex projects, Claude Code session folders, git | always |
+| README excerpt (900 characters) | README, AGENTS.md, CLAUDE.md or package.json | always |
+| repository name, top-level entries (30) | `git remote`, the folder listing | always |
+| the first line (160 characters) of your last 3 sessions there | Codex and Claude Code session history; emails, keys and your home path are redacted | `--routing-context full` (the default) |
+| days since last active | session timestamps | always |
 
-`tagmails start --routing-context files` keeps session history on the machine.
-
-## October 5 context study
-
-132 real requests: the first message of Codex and Claude sessions from the owner's history, each labeled with the folder it actually ran in. Each request only saw context from before it was written, never its own session. 14 candidate folders. Data and scripts: `.local/routing-context-study-2026-10-05/` (private).
-
-| Context given to the classifier (Jev, October 5) | Correct folder | Wrong folder | Scratch | Asked |
-| --- | ---: | ---: | ---: | ---: |
-| Names and paths only | 36 | 0 | 35 | 61 |
-| + README excerpt (previous production) | 39 | 0 | 30 | 63 |
-| + top-level files and repository | 41 | 0 | 28 | 63 |
-| Recent session requests only | 57 | 0 | 20 | 55 |
-| README + files + recent requests | 69 | 0 | 15 | 48 |
-| Same, threshold 0.80 + path guard (**shipped**) | **73** | **0** | 16 | 43 |
-
-- Recent session requests are by far the strongest signal; README excerpts add little once they're present.
-- Nothing produced a wrong folder on this set. The remaining "asks" are mostly requests that only make sense inside the folder ("fix the lag on the chat page"); for those, a question is the right answer from email.
-- On the frozen synthetic test (142 cases built to catch wrong folders) the shipped setup scores 140/142 with no wrong folders (v3 alone: 139/142). Without the path guard, the new evidence rule let one "work in an unknown path" case through, which is why the guard exists.
-
-Limits: one person's history, 14 folders, coding prompts rather than emails, and a sample weighted toward folders with many sessions. Rerun `evaluate.mjs` with new history before changing the rules or threshold.
+The list is also sent to the relay, encrypted with the relay's own key (see [email-privacy.md](email-privacy.md#what-the-operator-can-read)). `tagmails start --routing-context files` keeps session history on the computer; `--workspace PATH` lists nothing.

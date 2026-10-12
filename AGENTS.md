@@ -1,6 +1,6 @@
 # Tagmails
 
-Email-to-agent relay: a Cloudflare Worker (`services/`, `apps/mock-inbox/`, D1 + R2) hands mail to a Rust daemon on the owner's Mac (`crates/tagmails-daemon/`) that runs Codex or Claude Code through the Node adapters in `agent/`. Site lives in the private `site` submodule. Pilot is owner-only on `tagmails-relay-dev`.
+Email-to-agent relay: a Cloudflare Worker (`services/`, `apps/mock-inbox/`, D1 + R2) hands mail to a Rust daemon on the owner's Mac (`crates/tagmails-daemon/`) that runs Codex or Claude Code through the Node adapters in `agent/`. The website lives in the private `site` submodule. The hosted relay is the `tagmails-relay-dev` Worker. User docs: README.md and docs/; report vulnerabilities as SECURITY.md says.
 
 ## Checks
 

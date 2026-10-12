@@ -6,7 +6,7 @@ Setting this up with a coding agent? Give it [setup-for-agents.md](setup-for-age
 
 ## What you need
 
-- Node.js 20.19+ and this repo: `npm ci` installs Wrangler.
+- Node.js 22+ and this repo: `npm ci` installs Wrangler.
 - A Cloudflare account, logged in with `npx wrangler login` (or `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` exported).
 - A domain for agent addresses (`name@AGENT_DOMAIN`). Pick one mail path:
   - **Cloudflare (default):** the domain is a zone in your Cloudflare account and nothing else receives mail there, because Email Routing takes over its MX records. Replies go out through Cloudflare Email Sending, which needs the Workers Paid plan. No third party sees message bodies.
@@ -72,7 +72,7 @@ Secrets live in `.env.selfhost`; the script uploads them on every deploy. You ca
 | `GOOGLE_CLIENT_ID` | yes | `….apps.googleusercontent.com`. Without it sign-in returns 503. |
 | `AGENT_DOMAIN` | yes | The mail domain. New accounts get `u-…@AGENT_DOMAIN`. |
 | `PUBLIC_ORIGIN` | yes | The Worker origin, no path. Used for run links in replies. |
-| `PILOT_OWNER_EMAIL` | yes | Your Gmail. Anyone else gets "signup is closed". |
+| `PILOT_OWNER_EMAIL` | yes | Your Gmail. Anyone else is refused at sign-in. |
 | `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET` | Resend path only | API key with sending and receiving access; the webhook's signing secret. |
 | `STORAGE_KEY` | recommended (the script sets it) | 32 random bytes, base64. Seals stored mail, results and files with AES-256-GCM. Set it before the first mail and never change it. |
 
@@ -84,7 +84,7 @@ Bindings the config defines: D1 `DB`, R2 `MAIL`, Durable Object `DEVICE_PUSH` (w
 
 | Symptom | Cause |
 | --- | --- |
-| "Tagmails signup is closed during the private pilot" | You signed in with an address other than `PILOT_OWNER_EMAIL`. |
+| "This Tagmails relay accepts sign-in only from its owner" | You signed in with an address other than `PILOT_OWNER_EMAIL`. |
 | Google button missing or sign-in fails | `GOOGLE_CLIENT_ID` is still `pending` (rerun the script with the real ID), or `AGENT_DOMAIN` isn't a plain domain. |
 | Google popup error `origin_mismatch` | The Worker origin isn't an authorized JavaScript origin. |
 | Deploy fails on a rate limit | `namespace_id` 1001 or 1002 is taken in your account. Change it in `wrangler.selfhost.jsonc`. |
