@@ -144,16 +144,23 @@ async function claim(env, device, busy = []) {
 // answer. Hand the agent those earlier requests, newest last.
 // Only the claiming sender's own earlier requests: a participant's text must
 // never ride into the owner's turn (owner access and tools), nor the reverse.
+// The earlier relay-answered jobs a claim of job ?1 carries (newest three).
+// Completion marks exactly these as handed over, so an older one the claim
+// left out is still offered to the next turn.
+const EARLIER_REQUESTS = `SELECT j.id FROM jobs j JOIN messages m ON m.id = j.message_id
+  WHERE j.thread_id = (SELECT thread_id FROM jobs WHERE id = ?1) AND j.id != ?1
+    AND json_type(j.model_json, '$.error') = 'text'
+    AND (j.created_at, j.rowid) < (SELECT created_at, rowid FROM jobs WHERE id = ?1)
+    AND j.handed_to_agent_at IS NULL
+    AND m.sender_email = (SELECT cm.sender_email FROM jobs cj JOIN messages cm ON cm.id = cj.message_id WHERE cj.id = ?1)
+  ORDER BY j.created_at DESC, j.rowid DESC LIMIT 3`;
+
 async function unrunEarlierRequests(env, device, row, agentEmail) {
   const { results = [] } = await env.DB.prepare(`SELECT m.object_key, m.message_id, m.sender_email FROM jobs j
     JOIN messages m ON m.id = j.message_id JOIN threads t ON t.id = j.thread_id
-    WHERE j.thread_id = ? AND t.account_id = ? AND j.id != ?
-      AND json_type(j.model_json, '$.error') = 'text'
-      AND (j.created_at, j.rowid) < (SELECT created_at, rowid FROM jobs WHERE id = ?)
-      AND j.handed_to_agent_at IS NULL
-      AND m.sender_email = (SELECT cm.sender_email FROM jobs cj JOIN messages cm ON cm.id = cj.message_id WHERE cj.id = ?)
-    ORDER BY j.created_at DESC, j.rowid DESC LIMIT 3`)
-    .bind(row.thread_id, device.account_id, row.id, row.id, row.id).all();
+    WHERE j.id IN (${EARLIER_REQUESTS}) AND t.account_id = ?2
+    ORDER BY j.created_at DESC, j.rowid DESC`)
+    .bind(row.id, device.account_id).all();
   const earlier = [];
   for (const item of results.reverse()) {
     const object = await env.MAIL.get(item.object_key);
@@ -407,12 +414,9 @@ async function complete(env, device, body) {
     // The agent finished a turn that carried the thread's earlier unrun
     // requests; later turns no longer need them.
     statements.push(env.DB.prepare(`UPDATE jobs SET handed_to_agent_at = CURRENT_TIMESTAMP
-      WHERE thread_id = (SELECT thread_id FROM jobs WHERE id = ? AND device_id = ? AND lease_id = ? AND result_hash = ? AND state = 'completed')
-        AND handed_to_agent_at IS NULL AND json_type(model_json, '$.error') = 'text'
-        AND (created_at, rowid) < (SELECT created_at, rowid FROM jobs WHERE id = ?)
-        AND (SELECT sender_email FROM messages WHERE id = jobs.message_id)
-          = (SELECT m.sender_email FROM jobs cj JOIN messages m ON m.id = cj.message_id WHERE cj.id = ?)`)
-      .bind(body.jobId, device.id, body.leaseId, resultHash, body.jobId, body.jobId));
+      WHERE id IN (${EARLIER_REQUESTS})
+        AND EXISTS (SELECT 1 FROM jobs WHERE id = ?1 AND device_id = ?2 AND lease_id = ?3 AND result_hash = ?4 AND state = 'completed')`)
+      .bind(body.jobId, device.id, body.leaseId, resultHash));
   }
   // Every reply is charged whatever its outcome; the charge was reserved
   // when the email arrived.

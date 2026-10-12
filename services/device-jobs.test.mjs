@@ -546,6 +546,23 @@ test('a reply after a relay-only answer also hands the agent the original reques
   assert.equal(next.request.body, 'Now do Tokyo too.');
 });
 
+test('a turn carries the three newest unrun requests, and the oldest waits for the next turn', async () => {
+  const { env, sqlite } = bindings();
+  const paired = device(sqlite);
+  const thread = ['<many-1@gmail.com>'];
+  for (let index = 1; index <= 4; index += 1) {
+    await inbound(env, `many-${index}`, `Model: Gemini Ultra\nRequest ${index}.`, index === 1 ? [] : thread);
+    assert.equal(await completeOneModelClarification(env), true);
+  }
+  await inbound(env, 'many-5', 'try again', thread);
+  const first = envelope((await call(env, paired.token, 'claim')).body);
+  assert.deepEqual([...first.request.body.matchAll(/Request (\d)/g)].map((match) => match[1]), ['2', '3', '4']);
+  await call(env, paired.token, 'complete', { jobId: first.jobId, leaseId: first.leaseId, result: { state: 'completed', summary: 'Done.' } });
+  await inbound(env, 'many-6', 'and the rest', thread);
+  const second = envelope((await call(env, paired.token, 'claim')).body);
+  assert.deepEqual([...second.request.body.matchAll(/Request (\d)/g)].map((match) => match[1]), ['1']);
+});
+
 test('a follow-up classified as steering rides the run, and queues if the run ends first', async () => {
   const { env, sqlite } = bindings();
   env.TYPESAFE_API_KEY = 'test-key';
