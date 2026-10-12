@@ -666,10 +666,14 @@ export async function tendSealedReplies(env) {
   const orphans = await env.DB.prepare(`SELECT j.id FROM jobs j JOIN messages m ON m.id = j.message_id
     WHERE ${orphaned} LIMIT 10`).bind().all();
   for (const row of orphans.results ?? orphans) {
-    const failed = await env.DB.prepare(`UPDATE jobs SET state = 'failed', lease_until = NULL WHERE id = ?
-      AND id IN (SELECT j.id FROM jobs j JOIN messages m ON m.id = j.message_id WHERE ${orphaned}) RETURNING id`)
-      .bind(row.id).first();
-    if (failed) await releaseTestEmail(env, row.id);
+    const [failed] = await env.DB.batch([
+      env.DB.prepare(`UPDATE jobs SET state = 'failed', lease_until = NULL WHERE id = ?
+        AND id IN (SELECT j.id FROM jobs j JOIN messages m ON m.id = j.message_id WHERE ${orphaned})`).bind(row.id),
+      // Follow-ups waiting to steer it become ordinary queued jobs, as when a run ends.
+      env.DB.prepare(`UPDATE jobs SET state = 'queued', steer_state = NULL WHERE steer_of = ? AND steer_state = 'pending'
+        AND EXISTS (SELECT 1 FROM jobs WHERE id = ? AND state = 'failed')`).bind(row.id, row.id),
+    ]);
+    if ((failed.meta?.changes ?? failed.changes) === 1) await releaseTestEmail(env, row.id);
   }
   const waiting = await env.DB.prepare(`SELECT DISTINCT t.account_id FROM outbox o JOIN jobs j ON j.id = o.job_id
     JOIN threads t ON t.id = j.thread_id

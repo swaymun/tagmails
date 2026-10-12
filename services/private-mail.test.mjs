@@ -500,10 +500,14 @@ test('mail sealed to a key no paired computer holds fails instead of waiting for
   await relay.email({ body: 'Another ZEBRA task.' });
   const { claim } = await relay.claim();
   assert.ok(claim);
+  await relay.email({ body: 'A ZEBRA follow-up.' });
+  relay.sqlite.prepare(`UPDATE jobs SET state = 'completed', steer_of = ?, steer_state = 'pending'
+    WHERE id = (SELECT id FROM jobs ORDER BY rowid DESC LIMIT 1)`).run(claim.jobId);
   relay.sqlite.prepare("UPDATE devices SET key_id = 'replaced', public_key = NULL").run();
   relay.sqlite.prepare("UPDATE jobs SET created_at = datetime('now', '-1 hour'), lease_until = datetime('now', '-1 minute') WHERE id = ?").run(claim.jobId);
   await tendSealedReplies(relay.env);
   assert.equal(relay.sqlite.prepare('SELECT state FROM jobs WHERE id = ?').get(claim.jobId).state, 'failed');
+  assert.equal(relay.sqlite.prepare('SELECT state FROM jobs WHERE steer_of = ?').get(claim.jobId).state, 'queued', 'its follow-up is not stranded');
 });
 
 test('a held reply its computer can no longer open is dropped so the thread moves on', async () => {
