@@ -18,7 +18,7 @@
     "resend": "6.32.0"
   },
   "devDependencies": {
-    "wrangler": "^4.147.0"
+    "wrangler": "^4.156.0"
   },
   "overrides": {
     "sharp": "^0.35.5"
